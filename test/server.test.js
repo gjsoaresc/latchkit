@@ -115,13 +115,18 @@ test('acceptance API cancellation stops its owned command and returns partial ev
       },
     }),
   });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const cancelled = await fetch(`${origin}/api/acceptance/cancel`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ taskId: task.id }),
-  });
-  assert.equal((await cancelled.json()).cancelled, true);
+  let cancellation;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const cancelled = await fetch(`${origin}/api/acceptance/cancel`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ taskId: task.id }),
+    });
+    cancellation = await cancelled.json();
+    if (cancellation.cancelled) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(cancellation.cancelled, true);
   const result = await (await pending).json();
   assert.equal(result.results[0].outcome, 'cancelled');
   assert.match(result.results[0].artifact.location, /acceptance-evidence/);
