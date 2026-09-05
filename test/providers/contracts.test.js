@@ -67,10 +67,23 @@ test('registry preserves existing provider fields and reports only evidenced sup
     assert.equal(provider.capabilities.skills.state, 'supported');
     assert.equal(
       provider.capabilities.invocation.state,
-      ['claude', 'cursor-cli'].includes(provider.id) ? 'supported' : 'unknown',
+      ['claude', 'cursor-cli'].includes(provider.id)
+        ? 'supported'
+        : provider.id === 'cursor'
+          ? 'unsupported'
+          : 'unknown',
     );
     assert.equal(provider.verification.endToEnd, 'unverified');
   }
+  assert.equal(
+    PROVIDERS.find((provider) => provider.id === 'cursor-cli').capabilities.hooks.sessionStart
+      .state,
+    'unknown',
+  );
+  assert.equal(
+    PROVIDERS.find((provider) => provider.id === 'cursor').capabilities.hooks.sessionStart.state,
+    'supported',
+  );
 });
 
 test('fake adapter requires every planning and translation operation without executing a command', () => {

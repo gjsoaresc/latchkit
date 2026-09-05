@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "workspaceOpen",
+  "cursor_version": "3.9.0",
+  "workspace_roots": ["C:/work/project"],
+  "user_email": "must-not-be-exported@example.test"
+}
