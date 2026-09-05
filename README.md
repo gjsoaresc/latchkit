@@ -18,7 +18,7 @@ Open-source skills and a local configuration console for the coding tools you al
 
 Latchkit gives your coding agents a shared set of development workflows, with a browser console to configure them. It runs locally, uses your existing provider accounts, and keeps its configuration in your project.
 
-**This is an early working foundation, not full Pilot Shell feature parity.** Skill installation and configuration work today. Claude Code has a version-aware, project-local hook adapter; enforced quality gates, persistent memory services, and session orchestration remain outside this release.
+**This is an early working foundation, not full Pilot Shell feature parity.** Skill installation, durable task state, local project memory, capability-aware gates, and acceptance verification work today. Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
 
 ## Install and try it
 
@@ -59,6 +59,7 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 | Safe removal             | Removes unchanged owned files/sections; keeps user text and config                                        |
 | Host diagnostics         | Detects native vs WSL and executables on PATH                                                             |
 | Resumable workflow state | Versioned local tasks, atomic checkpoints, evidence binding, and stale-writer protection                  |
+| Acceptance verification  | Bounded CLI, HTTP, and optional Playwright checks with revision-bound sanitized artifacts                 |
 | Local project memory     | Explicit, inspectable decisions and discoveries with bounded, capability-aware recovery                   |
 | Cross-platform checks    | Release-gating Node 22/24 installed-artifact smoke on native Windows, Linux, and macOS, plus WSL evidence |
 
@@ -90,6 +91,7 @@ latchkit remove
 latchkit memory add --title "Why snapshots" --text "Keep memory locally inspectable."
 latchkit memory search --text "snapshots"
 latchkit memory recover --provider codex --budget 2000
+latchkit acceptance verify --task task_... --file acceptance.json --host-local-authorized
 ```
 
 Sync preview includes the exact generated project-instruction sections, their provenance, declared command argument arrays, and provider discovery warnings. Latchkit never runs a discovered project command. It adds narrow owned sections to shared `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` files, or separately owned Claude/Cursor rule files, while preserving human-authored text and line endings. See [project instructions](docs/project-instructions.md).

@@ -47,7 +47,7 @@ const event = (decisionMode = 'blocking') => ({
 
 async function taskFixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-gates-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   await fs.writeFile(path.join(root, 'source.txt'), 'source\n');
   let task = await createTask(root, {
     title: 'Gate task',
@@ -221,4 +221,38 @@ test('unsupported blocking enforcement records unsupported evidence and duplicat
   assert.equal((await dispatch(normalized)).status, 'handled');
   assert.equal((await dispatch(normalized)).status, 'duplicate');
   assert.equal(handled, 1);
+});
+
+test('typed acceptance checks extend the quality-gate interface and share task evidence', async (t) => {
+  const { root, task } = await taskFixture(t);
+  const result = await executeQualityGates({
+    root,
+    task,
+    event: event('advisory'),
+    provider: provider(),
+    checks: [
+      {
+        id: 'runtime-cli',
+        criterionId: task.criteria[0].id,
+        label: 'runtime CLI',
+        type: 'cli',
+        plan: { executable: process.execPath, args: ['--version'] },
+        watchPaths: ['src'],
+      },
+    ],
+    changedPaths: ['src/runtime.js'],
+    isExecutionAuthorized: () => true,
+    run: async () => ({
+      status: 'exited',
+      exitCode: 0,
+      stdout: process.version,
+      stderr: '',
+      outputBytes: process.version.length,
+    }),
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.results[0].outcome, 'passed');
+  const artifact = JSON.parse(result.task.evidence.at(-1).artifact);
+  assert.equal(artifact.type, 'cli');
+  assert.match(artifact.location, /acceptance-evidence/);
 });

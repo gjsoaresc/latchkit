@@ -19,6 +19,7 @@ import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
 import { createTaskController } from './runtime/task-controller.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
+import { createAcceptanceVerifier } from './acceptance/service.js';
 import { listTasks } from './task-state/service.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -55,6 +56,25 @@ function authenticated(req, token) {
   const actual = Buffer.from(supplied.slice(7));
   const expected = Buffer.from(token);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+async function listTasksForConsole(root, taskController) {
+  try {
+    const listed = await listTasks(root);
+    const inspected = await Promise.all(
+      listed.tasks.map((task) => taskController.inspect(task.id)),
+    );
+    return {
+      ...listed,
+      tasks: inspected.map((item) => ({
+        ...item.task,
+        reconciliation: item.reconciliation,
+      })),
+    };
+  } catch (error) {
+    if (error.code !== 'TASK_STATE_NOT_FOUND') throw error;
+    return { schemaVersion: 1, revision: 0, tasks: [] };
+  }
 }
 
 async function readJson(req) {
@@ -101,6 +121,7 @@ export async function startServer(root, { port = 0 } = {}) {
   let pendingMutation = Promise.resolve();
   const taskController = createTaskController({ root });
   const reviewOrchestrator = createReviewOrchestrator({ root });
+  const acceptanceVerifier = createAcceptanceVerifier({ root });
   const serialize = (operation) => {
     const result = pendingMutation.then(operation);
     pendingMutation = result.catch(() => {});
@@ -182,7 +203,13 @@ export async function startServer(root, { port = 0 } = {}) {
         } else if (pathname === '/api/tasks' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('task');
-          respond(res, 200, taskId ? await taskController.inspect(taskId) : await listTasks(root));
+          respond(
+            res,
+            200,
+            taskId
+              ? await taskController.inspect(taskId)
+              : await listTasksForConsole(root, taskController),
+          );
         } else if (pathname === '/api/tasks/start' && req.method === 'POST') {
           const body = await readJson(req);
           respond(res, 200, await serialize(() => taskController.start(body)));
@@ -201,6 +228,20 @@ export async function startServer(root, { port = 0 } = {}) {
         } else if (pathname === '/api/reviews/cancel' && req.method === 'POST') {
           const body = await readJson(req);
           respond(res, 200, await serialize(() => reviewOrchestrator.cancel(body)));
+        } else if (pathname === '/api/acceptance/verify' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(
+            res,
+            200,
+            await acceptanceVerifier.verify({
+              taskId: body.taskId,
+              document: body.document,
+              executionAuthorized: body.executionAuthorized === true,
+            }),
+          );
+        } else if (pathname === '/api/acceptance/cancel' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, acceptanceVerifier.cancel(body.taskId));
         } else {
           throw fail(404, 'API route or method not found.');
         }

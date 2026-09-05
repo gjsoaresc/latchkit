@@ -265,6 +265,54 @@ function renderPlan(nextPlan) {
   updateActions();
 }
 
+function artifactLocation(evidence) {
+  try {
+    const artifact = JSON.parse(evidence.artifact || '{}');
+    return typeof artifact.location === 'string' &&
+      artifact.location.startsWith('.latchkit/tasks/acceptance-evidence/')
+      ? artifact.location
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameSource(left, right) {
+  return left?.revision === right?.revision && left?.dirtyFingerprint === right?.dirtyFingerprint;
+}
+
+function renderAcceptance(tasks = []) {
+  const container = $('acceptance-evidence');
+  container.replaceChildren();
+  const rows = [];
+  for (const task of tasks) {
+    for (const criterion of task.criteria || []) {
+      const evidence = [...(task.evidence || [])]
+        .reverse()
+        .find(
+          (item) =>
+            item.criterionId === criterion.id && item.criterionRevision === criterion.revision,
+        );
+      if (!evidence) continue;
+      const location = artifactLocation(evidence);
+      const outcome = sameSource(evidence.source, task.reconciliation?.currentSource)
+        ? evidence.outcome
+        : 'stale';
+      const row = el('article', 'evidence-row');
+      const summary = el('div', 'evidence-summary');
+      summary.append(
+        el('strong', '', criterion.description),
+        el('span', `evidence-outcome outcome-${outcome}`, outcome),
+      );
+      row.append(summary);
+      if (location) row.append(el('code', 'evidence-location', location));
+      rows.push(row);
+    }
+  }
+  if (rows.length) container.append(...rows);
+  else container.append(el('p', 'section-note', 'No task evidence has been recorded.'));
+}
+
 async function action(operation) {
   if (busy) return;
   busy = true;
@@ -331,6 +379,12 @@ async function reloadState(options = {}) {
   savedConfig = state.config;
   configRevision = state.configRevision;
   renderState(options);
+  try {
+    renderAcceptance((await api('tasks')).tasks || []);
+  } catch (error) {
+    if (error.code === 'TASK_STATE_NOT_FOUND') renderAcceptance([]);
+    else throw error;
+  }
 }
 
 window.addEventListener('beforeunload', (event) => {

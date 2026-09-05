@@ -6,6 +6,8 @@ import {
 } from '../providers/contracts.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../runtime/process-runner.js';
 import { recordEvidence } from '../task-state/service.js';
+import { validateAcceptanceDocument } from '../acceptance/contracts.js';
+import { createAcceptanceVerifier } from '../acceptance/service.js';
 
 const CHECK_OUTCOMES = new Set([
   'passed',
@@ -51,7 +53,10 @@ function validateCheck(check, index) {
     if (typeof check[field] !== 'string' || !check[field].trim())
       throw new TypeError(`Declared check ${index}.${field} must be a non-empty string.`);
   }
-  validateCommandPlan(check.plan);
+  let normalized = check;
+  if (check.type) {
+    normalized = validateAcceptanceDocument({ schemaVersion: 1, checks: [check] }).checks[0];
+  } else validateCommandPlan(check.plan);
   if (check.timeoutMs !== undefined && (!Number.isInteger(check.timeoutMs) || check.timeoutMs <= 0))
     throw new TypeError(`Declared check ${index}.timeoutMs must be a positive integer.`);
   if (
@@ -59,7 +64,7 @@ function validateCheck(check, index) {
     (!Array.isArray(check.watchPaths) || check.watchPaths.some((p) => typeof p !== 'string' || !p))
   )
     throw new TypeError(`Declared check ${index}.watchPaths must be string paths.`);
-  return check;
+  return { ...normalized, ...(check.watchPaths ? { watchPaths: check.watchPaths } : {}) };
 }
 
 /** Pure selection: discussion and maintenance events do nothing unless an adapter
@@ -151,6 +156,23 @@ export async function executeQualityGates({
         reason: 'Execution was not authorized.',
       };
       results.push(result);
+      continue;
+    }
+    if (check.type) {
+      const acceptance = await createAcceptanceVerifier({ root, launch: run }).verify({
+        taskId: current.id,
+        document: { schemaVersion: 1, checks: [check] },
+        executionAuthorized: true,
+        signal,
+      });
+      const [accepted] = acceptance.results;
+      current = acceptance.task;
+      results.push({
+        checkId: check.id,
+        outcome: accepted.outcome,
+        process: accepted.status,
+        artifact: accepted.artifact,
+      });
       continue;
     }
     const processResult = await run({

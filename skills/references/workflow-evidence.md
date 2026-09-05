@@ -24,3 +24,5 @@ Use this compact note shape when a task-state service is unavailable or when a h
 ```
 
 Use repository-relative paths and redact credentials, tokens, private transcripts, and full environment dumps. A command result is evidence only for the boundary and environment where it actually ran.
+
+When Latchkit task state and the acceptance verifier are available, prefer their criterion/revision-bound records for CLI, HTTP, and browser behavior. Treat this Markdown table as a readable companion, not a competing completion record. Do not treat screenshots or manual/device observations as automated assertion passes.

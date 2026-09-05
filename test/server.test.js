@@ -8,6 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { initProject, readConfig } from '../src/core.js';
 import { startServer } from '../src/server.js';
+import { createTask, resumeTask } from '../src/task-state/service.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -20,7 +21,7 @@ async function fixture(t) {
       server.close(resolve);
       server.closeAllConnections();
     });
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const origin = new URL(url).origin;
   const headers = {
@@ -45,6 +46,85 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
+});
+
+test('acceptance API runs declared checks and exposes only safe evidence locations to task consumers', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  await writeFile(path.join(root, 'source.txt'), 'source\n');
+  let task = await createTask(root, {
+    title: 'API acceptance',
+    authorization: { source: 'user', scope: 'acceptance', reference: 'api test' },
+    criteria: [{ description: 'CLI works' }],
+  });
+  task = await resumeTask(root, { taskId: task.id, expectedRevision: task.revision });
+  const response = await fetch(`${origin}/api/acceptance/verify`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: task.id,
+      executionAuthorized: true,
+      document: {
+        schemaVersion: 1,
+        checks: [
+          {
+            id: 'cli',
+            criterionId: task.criteria[0].id,
+            label: 'node version',
+            type: 'cli',
+            plan: { executable: process.execPath, args: ['--version'] },
+          },
+        ],
+      },
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).status, 'passed');
+  const listed = await (await fetch(`${origin}/api/tasks`, { headers })).json();
+  const artifact = JSON.parse(listed.tasks[0].evidence[0].artifact);
+  assert.match(artifact.location, /^\.latchkit\/tasks\/acceptance-evidence\//);
+  assert.equal(Object.hasOwn(artifact, 'stdout'), false);
+});
+
+test('acceptance API cancellation stops its owned command and returns partial evidence', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  await writeFile(path.join(root, 'source.txt'), 'source\n');
+  let task = await createTask(root, {
+    title: 'Cancel acceptance',
+    authorization: { source: 'user', scope: 'acceptance', reference: 'api test' },
+    criteria: [{ description: 'Long command' }],
+  });
+  task = await resumeTask(root, { taskId: task.id, expectedRevision: task.revision });
+  const pending = fetch(`${origin}/api/acceptance/verify`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: task.id,
+      executionAuthorized: true,
+      document: {
+        schemaVersion: 1,
+        checks: [
+          {
+            id: 'long',
+            criterionId: task.criteria[0].id,
+            label: 'long command',
+            type: 'cli',
+            timeoutMs: 5_000,
+            plan: { executable: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'] },
+          },
+        ],
+      },
+    }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const cancelled = await fetch(`${origin}/api/acceptance/cancel`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ taskId: task.id }),
+  });
+  assert.equal((await cancelled.json()).cancelled, true);
+  const result = await (await pending).json();
+  assert.equal(result.results[0].outcome, 'cancelled');
+  assert.match(result.results[0].artifact.location, /acceptance-evidence/);
 });
 
 test('configuration and sync API persist the selected skills with a read-only preview', async (t) => {

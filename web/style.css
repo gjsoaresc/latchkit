@@ -547,6 +547,59 @@ input:disabled {
 .sync-section {
   padding-top: 36px;
 }
+
+.evidence-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.evidence-row {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  background: var(--paper);
+}
+
+.evidence-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.evidence-outcome {
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.outcome-passed {
+  background: #dff4e7;
+  color: #176c3a;
+}
+.outcome-failed,
+.outcome-timed-out,
+.outcome-cancelled {
+  background: #fbe4df;
+  color: #96351f;
+}
+.outcome-unsupported,
+.outcome-skipped,
+.outcome-missing,
+.outcome-stale {
+  background: #eee9df;
+  color: #655c4b;
+}
+
+.evidence-location {
+  display: block;
+  margin-top: 0.65rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
 .sync-toolbar {
   padding: 20px 22px;
   background: #e9edde;
