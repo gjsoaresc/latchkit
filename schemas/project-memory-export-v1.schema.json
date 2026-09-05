@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/project-memory-export-v1.schema.json",
+  "title": "Latchkit portable project memory export v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "exportedAt", "memories"],
+  "properties": { "schemaVersion": { "const": 1 }, "exportedAt": { "type": "string", "format": "date-time" }, "memories": { "type": "array" } }
+}

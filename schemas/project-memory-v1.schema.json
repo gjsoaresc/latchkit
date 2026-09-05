@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/project-memory-v1.schema.json",
+  "title": "Latchkit inspectable local project memory v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "revision", "createdAt", "updatedAt", "memories"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": { "type": "object", "additionalProperties": false, "required": ["id"], "properties": { "id": { "type": "string", "minLength": 1 } } },
+    "revision": { "type": "integer", "minimum": 0 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "memories": { "type": "array", "items": { "$ref": "#/$defs/memory" } }
+  },
+  "$defs": {
+    "memoryId": { "type": "string", "pattern": "^memory_[0-9a-fA-F-]{36}$" },
+    "memory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "revision", "kind", "title", "text", "tags", "sources", "provenance", "supersedes", "deletedAt", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/memoryId" }, "revision": { "type": "integer", "minimum": 1 },
+        "kind": { "enum": ["decision", "discovery", "constraint", "resolved-defect"] },
+        "title": { "type": "string", "minLength": 1 }, "text": { "type": "string", "minLength": 1 },
+        "tags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "sources": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["path", "observedAt", "sha256"], "properties": { "path": { "type": "string", "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+" }, "observedAt": { "type": "string", "format": "date-time" }, "sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" } } } },
+        "provenance": { "type": "object", "additionalProperties": false, "required": ["kind", "reference", "importedId"], "properties": { "kind": { "enum": ["manual", "import"] }, "reference": { "type": "string", "minLength": 1 }, "importedId": { "type": ["string", "null"], "pattern": "^memory_[0-9a-fA-F-]{36}$" } } },
+        "supersedes": { "type": ["string", "null"], "pattern": "^memory_[0-9a-fA-F-]{36}$" }, "deletedAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

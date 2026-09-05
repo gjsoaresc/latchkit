@@ -24,6 +24,19 @@ import {
   inspectWorkspaceCapability,
 } from './workspaces/git.js';
 import { createTaskController } from './runtime/task-controller.js';
+import {
+  addProjectMemory,
+  deleteProjectMemory,
+  exportProjectMemory,
+  importProjectMemory,
+  inspectProjectMemory,
+  listProjectMemory,
+  recoverProjectContext,
+  searchProjectMemory,
+  updateProjectMemory,
+} from './project-memory/service.js';
+import { readFile } from 'node:fs/promises';
+import { providerById } from './providers/registry.js';
 
 let cliValues = {};
 
@@ -41,6 +54,7 @@ Usage: latchkit <command> [options]
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
+  memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -63,6 +77,12 @@ Options:
   --host-local-authorized  task start/resume: authorize host-local execution
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
+  --id <id>           memory: stable memory identifier
+  --text <text>       memory: concise memory text or search query
+  --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
+  --file <path>       memory import: portable export JSON file
+  --budget <n>        memory recover: maximum context characters
+  --provider <id>     memory recover: provider contract to evaluate
   --help             Show this help
   --version          Show version
 
@@ -93,7 +113,6 @@ try {
       authorized: { type: 'boolean' },
       'authorization-scope': { type: 'string' },
       'authorization-reference': { type: 'string' },
-      provider: { type: 'string' },
       prompt: { type: 'string' },
       session: { type: 'string' },
       'host-local-authorized': { type: 'boolean' },
@@ -101,6 +120,12 @@ try {
       version: { type: 'boolean' },
       export: { type: 'boolean' },
       clear: { type: 'boolean' },
+      id: { type: 'string' },
+      text: { type: 'string' },
+      kind: { type: 'string' },
+      file: { type: 'string' },
+      budget: { type: 'string' },
+      provider: { type: 'string' },
     },
   });
   cliValues = values;
@@ -108,7 +133,7 @@ try {
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
     const [command, ...extra] = positionals;
-    if (!['task', 'workspace'].includes(command) && extra.length)
+    if (!['task', 'workspace', 'memory'].includes(command) && extra.length)
       throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'],
@@ -137,6 +162,17 @@ try {
         'host-local-authorized',
       ],
       workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
+      memory: [
+        'project',
+        'id',
+        'text',
+        'kind',
+        'title',
+        'file',
+        'budget',
+        'provider',
+        'expected-revision',
+      ],
     }[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
     for (const option of Object.keys(values))
@@ -289,6 +325,57 @@ try {
         print(
           await cleanupTaskWorkspace(root, { taskId: values.task, authorized: values.authorized }),
         );
+    } else if (command === 'memory') {
+      if (
+        !['inspect', 'search', 'add', 'update', 'delete', 'export', 'import', 'recover'].includes(
+          extra[0],
+        ) ||
+        extra.length !== 1
+      )
+        throw new Error(
+          'Usage: latchkit memory <inspect|search|add|update|delete|export|import|recover> [options].',
+        );
+      const action = extra[0];
+      const revision =
+        values['expected-revision'] === undefined ? undefined : Number(values['expected-revision']);
+      if (revision !== undefined && (!Number.isInteger(revision) || revision < 1))
+        throw new Error('--expected-revision must be a positive integer.');
+      if (action === 'inspect')
+        print(
+          values.id ? await inspectProjectMemory(root, values.id) : await listProjectMemory(root),
+        );
+      else if (action === 'search') print(await searchProjectMemory(root, values.text));
+      else if (action === 'add')
+        print(
+          await addProjectMemory(root, {
+            title: values.title,
+            text: values.text,
+            kind: values.kind,
+          }),
+        );
+      else if (action === 'update')
+        print(
+          await updateProjectMemory(root, values.id, {
+            title: values.title,
+            text: values.text,
+            expectedRevision: revision,
+          }),
+        );
+      else if (action === 'delete')
+        print(await deleteProjectMemory(root, values.id, { expectedRevision: revision }));
+      else if (action === 'export') print(await exportProjectMemory(root));
+      else if (action === 'import')
+        print(
+          await importProjectMemory(
+            root,
+            JSON.parse(await readFile(path.resolve(values.file), 'utf8')),
+          ),
+        );
+      else {
+        const provider = values.provider ? providerById(values.provider) : undefined;
+        const budget = values.budget === undefined ? undefined : Number(values.budget);
+        print(await recoverProjectContext(root, { query: values.text, budget, provider }));
+      }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)
