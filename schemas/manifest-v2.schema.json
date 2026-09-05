@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/manifest-v2.schema.json",
+  "title": "Latchkit ownership manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "files", "packs"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "files": {
+      "type": "object",
+      "propertyNames": { "pattern": "^\\.(?:agents|claude)/skills/[a-zA-Z0-9._-]+/SKILL\\.md$" },
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "packs": { "type": "array" }
+  }
+}

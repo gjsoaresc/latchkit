@@ -16,6 +16,8 @@ Latchkit installs project-local `SKILL.md` files and stores provider/skill selec
 
 Latchkit writes the shared destination once when multiple selected providers use it. It does not also create `.gemini/skills` or `.cursor/skills` copies. Provider selection determines export destinations, not visibility permissions: compatible tools may discover installed skills even when they are not selected. Cursor may discover duplicate names when Claude and shared-root copies coexist. Inspect the provider's skill listing when resolving duplicates.
 
+Pack previews report this possible cross-root discovery duplication before mutation. It is informational: Latchkit deduplicates an identical shared destination, but never removes a Claude-root or another tool's file merely to hide a provider discovery collision.
+
 ## Capability evidence matrix
 
 `src/providers/` exposes versioned, normalized provider metadata. As of the verification date above, every listed provider has evidence only for portable skill export. Detection on `PATH` means only that the executable was found; it does not establish login, project configuration, invocation, hook semantics, resumption, cancellation, compaction, usage, or an end-to-end session.

@@ -16,12 +16,19 @@ import {
 const providerIds = ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'];
 const skillIds = ['spec', 'fix', 'review', 'handoff'];
 const validConfig = (overrides = {}) => {
-  const schemaVersion = overrides.schemaVersion ?? 2;
+  const schemaVersion = overrides.schemaVersion ?? 3;
   return {
     schemaVersion,
     providers: [...providerIds],
     skills: [...skillIds],
-    ...(schemaVersion === 2 ? { providerSettings: {} } : {}),
+    ...(schemaVersion >= 2 ? { providerSettings: {} } : {}),
+    ...(schemaVersion === 3
+      ? {
+          packs: [
+            { id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true },
+          ],
+        }
+      : {}),
     ...overrides,
   };
 };
