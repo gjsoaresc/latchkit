@@ -29,13 +29,13 @@ The local suite had one explained Windows file-symlink skip because that host de
 
 ## Provider evidence
 
-| Provider            | Native Windows          | WSL     | Linux   | macOS   | Disposition                                                                                                                                         |
-| ------------------- | ----------------------- | ------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude Code 2.1.258 | blocked                 | unknown | unknown | unknown | Bounded live smoke reached the provider but required login, approval, or permission; see `provider-claude-windows.json`                             |
-| Codex CLI 0.153.2   | pass                    | unknown | unknown | unknown | Bounded one-turn live smoke exited 0; see `provider-codex-windows.json`                                                                             |
-| Gemini CLI          | unavailable             | unknown | unknown | unknown | Executable was not installed on the qualification host                                                                                              |
-| Cursor IDE 3.19.7   | manual evidence missing | unknown | unknown | unknown | Editor was installed, but the required manual skill/hook workflow was not performed                                                                 |
-| Cursor CLI          | unsupported upstream    | unknown | unknown | unknown | Current upstream installation docs support Windows through WSL, not natively; the documented `cursor-agent` executable was unavailable on this host |
+| Provider                         | Native Windows          | WSL     | Linux   | macOS   | Disposition                                                                                                                                         |
+| -------------------------------- | ----------------------- | ------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code 2.1.258              | blocked                 | unknown | unknown | unknown | Bounded live smoke reached the provider but required login, approval, or permission; see `provider-claude-windows.json`                             |
+| Codex CLI 0.153.2                | pass                    | unknown | unknown | unknown | Bounded one-turn live smoke exited 0; see `provider-codex-windows.json`                                                                             |
+| Gemini CLI (individual accounts) | unsupported upstream    | unknown | unknown | unknown | A real personal-account sign-in reports that Gemini CLI is no longer supported for individuals; Google directs those users to Antigravity CLI       |
+| Cursor IDE 3.19.7                | manual evidence missing | unknown | unknown | unknown | Editor was installed, but the required manual skill/hook workflow was not performed                                                                 |
+| Cursor CLI                       | unsupported upstream    | unknown | unknown | unknown | Current upstream installation docs support Windows through WSL, not natively; the documented `cursor-agent` executable was unavailable on this host |
 
 `unknown`, `blocked`, and `unavailable` are not support claims. The evidence records contain no transcript, command arguments, credentials, or usage estimate.
 
@@ -44,7 +44,7 @@ The local suite had one explained Windows file-symlink skip because that host de
 The September 6 follow-up at commit `508ffaf41629af043b5e2a7c6c503be738f02681` corrected provider-contract drift and exercised an installed local archive with SHA-256 `29a11dd2f24430cb4aab09bedb9632d77daf66fc0e9c547fe59eb73341a7a2e4`. See `provider-diagnostics-windows.json` and `lifecycle-codex-windows.json`.
 
 - Claude's official `auth status` command returned exit 1 with `loggedIn: false`. Authentication blocks live validation before repository permissions can be evaluated.
-- Gemini CLI 0.58.0 ran through the official npm package without persistent installation. No authenticated Gemini session was authorized, so this proves executable provisioning only.
+- Gemini CLI 0.58.0 was provisioned, and a real personal-account sign-in returned that Gemini CLI is no longer supported for individuals and directs migration to Antigravity CLI. Google's upstream announcement records the June 18, 2026 retirement for Google AI Pro, Google AI Ultra, and free-tier individual accounts; enterprise Gemini Code Assist licenses and supported API-key/Google Cloud access are separate scopes: https://github.com/google-gemini/gemini-cli/discussions/28017. This is unsupported-upstream evidence, not a pass. Antigravity was not installed or tested.
 - Current Cursor documentation names `cursor-agent` and supports Windows through WSL, not a native Windows installer. The adapter and compatibility statement were corrected; the WSL executable remains absent.
 - The installed-archive Codex harness recorded the required initial failure, rejected failed evidence, terminated an owned provider process, recorded the run as interrupted, and recovered the task to a new provider run. The nested Codex process then exited 0 without changing source or writing the spec, so the test remained failed and no completion evidence was produced.
 - A separate text-only probe proved the corrected `codex exec resume --json` vector: both turns exited 0 with `thread.started`, `turn.started`, `item.completed`, and `turn.completed`. Only a hash of the thread ID was emitted; no transcript was retained.
@@ -64,7 +64,7 @@ Budgets were declared before the local measurement: server startup maximum 1,000
 Before changing this decision to go:
 
 1. Select and commit an explicit v1 release-candidate version/tag; do not publish `0.1.0-alpha.1` as the qualified stable release.
-2. Run the bounded provider verification matrix with authorized accounts on the supported environments. At minimum resolve the Claude Windows block, install and verify Gemini CLI and Cursor CLI, perform the documented Cursor IDE manual workflow, and record every required OS cell as pass, unsupported, or blocked with evidence.
+2. Run the bounded provider verification matrix with authorized accounts on the supported environments. At minimum resolve the Claude Windows block, verify Cursor CLI, perform the documented Cursor IDE manual workflow, and record every required OS cell as pass, unsupported, or blocked with evidence. Gemini individual-account use is unsupported upstream; enterprise/API-key testing is only required if maintainers explicitly choose that paid or organizational release scope.
 3. Run one live requirements → implementation → failed-then-passed verification → independent review → handoff workflow on that exact candidate, including one interruption/recovery, and retain sanitized task evidence.
 4. Rerun the controlled release workflow for that exact candidate and archive digest. Stable publication still requires the separately protected `npm-production` environment approval.
 
