@@ -1,8 +1,8 @@
-import { access, lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { PROVIDERS, SKILLS } from './catalog.js';
 import {
@@ -14,6 +14,14 @@ import {
   validateManifest,
 } from './config/contracts.js';
 import { buildMigration, executeMigration, normalizeMigrationTarget } from './config/migrations.js';
+import { readOptional, resolveProjectRoot, statIfExists, writeAtomic } from './storage.js';
+import { inspectProjectLock, removeProvenStaleLock, withProjectLock } from './installer/lock.js';
+import {
+  applyRegisteredTransaction,
+  createResourceRegistry,
+  inspectTransaction,
+  recoverTransaction,
+} from './installer/transactions.js';
 
 export { PROVIDERS, SKILLS, CURRENT_CONFIG_SCHEMA_VERSION, SUPPORTED_CONFIG_SCHEMA_VERSIONS, ConfigContractError };
 const stateDirectory = '.latchkit';
@@ -22,66 +30,10 @@ const manifestPath = `${stateDirectory}/manifest.json`;
 const sourceRoot = fileURLToPath(new URL('../skills/', import.meta.url));
 const hash = content => createHash('sha256').update(content).digest('hex');
 const allSkillPaths = new Set(PROVIDERS.flatMap(p => SKILLS.map(s => `${p.skillDirectory}/latchkit-${s.id}/SKILL.md`)));
-
-async function statIfExists(target) {
-  try { return await lstat(target); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-
-// Only write beneath a real project root; reject junctions/symlinks in managed paths.
-async function safePath(root, relative) {
-  if (!relative || path.isAbsolute(relative) || relative.includes('\\') || relative.split('/').some(p => !p || p === '.' || p === '..')) {
-    throw new Error(`Unsafe managed path: ${relative}`);
-  }
-  let target = root;
-  const segments = relative.split('/');
-  for (let i = 0; i < segments.length; i++) {
-    target = path.join(target, segments[i]);
-    const stat = await statIfExists(target);
-    if (stat?.isSymbolicLink()) throw new Error(`Refusing symlink or junction: ${relative}`);
-    if (stat && i < segments.length - 1 && !stat.isDirectory()) throw new Error(`Expected directory: ${relative}`);
-    if (stat && i === segments.length - 1 && !stat.isFile()) throw new Error(`Expected regular file: ${relative}`);
-  }
-  return target;
-}
-
-async function projectRoot(root) {
-  const resolved = await realpath(path.resolve(root));
-  if (!(await lstat(resolved)).isDirectory()) throw new Error('Project must be a directory.');
-  return resolved;
-}
-
-async function readOptional(root, relative) {
-  const target = await safePath(root, relative);
-  try { return await readFile(target, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-
-async function writeAtomic(root, relative, content) {
-  const target = await safePath(root, relative);
-  await mkdir(path.dirname(target), { recursive: true });
-  await safePath(root, relative);
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  try {
-    await (await open(temporary, 'wx', 0o600)).close();
-    const handle = await open(temporary, 'w');
-    try { await handle.writeFile(content, 'utf8'); } finally { await handle.close(); }
-    await rename(temporary, target);
-  } finally {
-    try { await unlink(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-}
-
-async function withLock(root, operation) {
-  const lockPath = await safePath(root, `${stateDirectory}/lock`);
-  await mkdir(path.dirname(lockPath), { recursive: true });
-  let lock;
-  try { lock = await open(lockPath, 'wx', 0o600); }
-  catch (error) {
-    if (error.code === 'EEXIST') throw new Error('Another Latchkit operation holds .latchkit/lock. If a previous process crashed, verify it stopped before deleting that lock.');
-    throw error;
-  }
-  try { await lock.writeFile(`${process.pid}\n`); return await operation(); }
-  finally { await lock.close(); await unlink(lockPath); }
-}
+const resourceRegistry = createResourceRegistry([...allSkillPaths].map(relative => ({ id: `skill:${relative}`, path: relative })));
+const resourceIdForPath = relative => `skill:${relative}`;
+const projectRoot = resolveProjectRoot;
+const withLock = withProjectLock;
 
 const contractOptions = {
   providerIds: PROVIDERS.map(provider => provider.id),
@@ -218,7 +170,7 @@ export async function planSync(root) {
   return { changes, conflicts };
 }
 
-async function applySync(root, removing) {
+async function applySync(root, removing, options = {}) {
   root = await projectRoot(root);
   return withLock(root, async () => {
     const plan = await makePlan(root, removing);
@@ -227,41 +179,59 @@ async function applySync(root, removing) {
       error.conflicts = plan.conflicts;
       throw error;
     }
-    // Record each successful change, so partial I/O failures retain ownership information.
+    const transactionChanges = [];
+    const nextManifest = { schemaVersion: plan.manifest.schemaVersion, files: { ...plan.manifest.files } };
     for (const change of plan.changes) {
       if (change.action === 'unchanged') continue;
       const current = await readOptional(root, change.path);
       const recorded = plan.manifest.files[change.path];
       if (current !== null && (!recorded || hash(current) !== recorded)) throw new Error(`File changed during sync: ${change.path}`);
       if (change.action === 'remove') {
-        if (current !== null) await unlink(await safePath(root, change.path));
-        delete plan.manifest.files[change.path];
+        transactionChanges.push({ resourceId: resourceIdForPath(change.path), bytes: null });
+        delete nextManifest.files[change.path];
       } else {
         const content = plan.desired.get(change.path);
-        await writeAtomic(root, change.path, content);
-        plan.manifest.files[change.path] = hash(content);
-      }
-      try {
-        await writeAtomic(root, manifestPath, `${JSON.stringify(plan.manifest, null, 2)}\n`);
-      } catch (error) {
-        // Keep ownership and file contents aligned when metadata cannot be persisted.
-        try {
-          if (current === null) {
-            const target = await safePath(root, change.path);
-            if (await statIfExists(target)) await unlink(target);
-          } else await writeAtomic(root, change.path, current);
-        } catch (rollbackError) {
-          throw new Error(`Manifest update failed (${error.message}); recovery also failed for ${change.path}: ${rollbackError.message}. Inspect this file before syncing again.`, { cause: error });
-        }
-        throw new Error(`Manifest update failed; restored ${change.path}. ${error.message}`, { cause: error });
+        transactionChanges.push({ resourceId: resourceIdForPath(change.path), bytes: content });
+        nextManifest.files[change.path] = hash(content);
       }
     }
+    if (transactionChanges.length) await applyRegisteredTransaction(root, {
+      operation: removing ? 'remove' : 'sync',
+      registry: resourceRegistry,
+      changes: transactionChanges,
+      manifest: `${JSON.stringify(nextManifest, null, 2)}\n`,
+      faultBoundary: options.faultBoundary,
+    });
     return { changes: plan.changes, conflicts: [] };
   });
 }
 
-export const syncProject = root => applySync(root, false);
-export const removeProjectSkills = root => applySync(root, true);
+export const syncProject = (root, options) => applySync(root, false, options);
+export const removeProjectSkills = (root, options) => applySync(root, true, options);
+
+export async function inspectRecovery(root) {
+  root = await projectRoot(root);
+  return { lock: await inspectProjectLock(root), transaction: await inspectTransaction(root, resourceRegistry) };
+}
+
+export async function recoverProject(root) {
+  root = await projectRoot(root);
+  const inspection = await inspectProjectLock(root);
+  if (inspection.state === 'live' || inspection.state === 'invalid') {
+    const error = new Error(inspection.state === 'live'
+      ? 'A live Latchkit operation owns the project lock; recovery was not started.'
+      : inspection.reason);
+    error.code = 'RECOVERY_LOCK_BLOCKED';
+    throw error;
+  }
+  let cleanedLock = false;
+  if (inspection.state === 'stale') {
+    await removeProvenStaleLock(root, inspection);
+    cleanedLock = true;
+  }
+  const result = await withProjectLock(root, () => recoverTransaction(root, resourceRegistry));
+  return { ...result, cleanedLock };
+}
 
 async function findExecutable(command) {
   const suffixes = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', '.ps1'] : [''];

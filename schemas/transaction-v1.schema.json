@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/transaction-v1.schema.json",
+  "title": "Latchkit managed-resource transaction v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "transactionId", "operation", "createdAt", "manifest", "resources"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "transactionId": { "type": "string", "format": "uuid" },
+    "operation": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "manifest": { "$ref": "#/$defs/entry" },
+    "resources": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/entry" },
+          {
+            "type": "object",
+            "required": ["resourceId"],
+            "properties": { "resourceId": { "type": "string", "minLength": 1 } }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "before", "after"],
+      "properties": {
+        "resourceId": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$" },
+        "before": { "$ref": "#/$defs/snapshot" },
+        "after": { "$ref": "#/$defs/snapshot" }
+      }
+    },
+    "snapshot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exists"],
+          "properties": { "exists": { "const": false } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exists", "bytes", "sha256", "mode"],
+          "properties": {
+            "exists": { "const": true },
+            "bytes": { "type": "string", "contentEncoding": "base64" },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 }
+          }
+        }
+      ]
+    }
+  }
+}
