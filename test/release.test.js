@@ -37,3 +37,12 @@ test('release preparation refuses a tag that does not match package version', as
     /does not match package version/,
   );
 });
+
+test('controlled publication waits for the exact archive on every supported runtime', async () => {
+  const workflow = await readFile(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(workflow, /Exact archive \/ \$\{\{ matrix\.os \}\} \/ Node/);
+  assert.match(workflow, /os: \[windows-latest, ubuntu-latest, macos-latest\]/);
+  assert.match(workflow, /Exact archive \/ WSL \/ Node 22 \/ mounted drive/);
+  assert.match(workflow, /needs: \[prepare, smoke, wsl-artifact-smoke\]/);
+  assert.match(workflow, /--artifact ["']?release-artifacts\/latchkit-/);
+});
