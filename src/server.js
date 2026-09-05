@@ -2,7 +2,17 @@ import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { readConfig, saveConfig, planSync, syncProject, doctor, PROVIDERS, SKILLS } from './core.js';
+import {
+  readConfig,
+  saveConfig,
+  planConfigMigration,
+  migrateConfig,
+  planSync,
+  syncProject,
+  doctor,
+  PROVIDERS,
+  SKILLS,
+} from './core.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 const WEB_ROOT = new URL('../web/', import.meta.url);
@@ -89,7 +99,8 @@ export async function startServer(root, { port = 0 } = {}) {
       if (req.headers.host !== host) throw fail(403, 'Unrecognized host. Open the URL printed by Latchkit.');
       if (!req.url?.startsWith('/') || req.url.startsWith('//')) throw fail(400, 'Invalid request URL.');
       if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) throw fail(413, 'Request body exceeds 64 KB.');
-      const pathname = new URL(req.url, origin).pathname;
+      const requestUrl = new URL(req.url, origin);
+      const pathname = requestUrl.pathname;
       if (pathname === '/api' || pathname.startsWith('/api/')) {
         if (!authenticated(req, token)) throw fail(401, 'Session key missing or expired. Reopen the URL printed by Latchkit.');
         if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin !== origin) {
@@ -105,6 +116,13 @@ export async function startServer(root, { port = 0 } = {}) {
           const config = await readJson(req);
           await serialize(() => saveConfig(root, config));
           respond(res, 200, { config: await readConfig(root) });
+        } else if (pathname === '/api/config/migration' && req.method === 'GET') {
+          await pendingMutation;
+          const toVersion = requestUrl.searchParams.get('to') ?? undefined;
+          respond(res, 200, await planConfigMigration(root, { toVersion }));
+        } else if (pathname === '/api/config/migration' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => migrateConfig(root, { toVersion: body.toVersion })));
         } else if (pathname === '/api/sync' && req.method === 'POST') {
           if (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding']) await readJson(req);
           respond(res, 200, await serialize(() => syncProject(root)));
@@ -122,7 +140,12 @@ export async function startServer(root, { port = 0 } = {}) {
     } catch (error) {
       if (res.headersSent || res.destroyed) return;
       const status = error.status ?? (error.conflicts ? 409 : 400);
-      respond(res, status, { error: error.message || 'Request failed.', ...(error.conflicts ? { conflicts: error.conflicts } : {}) });
+      respond(res, status, {
+        error: error.message || 'Request failed.',
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.path ? { path: error.path } : {}),
+        ...(error.conflicts ? { conflicts: error.conflicts } : {}),
+      });
     }
   });
   server.requestTimeout = 30_000;

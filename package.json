@@ -10,7 +10,7 @@
   "homepage": "https://github.com/gjsoaresc/latchkit#readme",
   "bin": { "latchkit": "src/cli.js" },
   "engines": { "node": ">=22" },
-  "files": ["src/", "web/", "skills/", "LICENSE", "README.md"],
+  "files": ["src/", "web/", "skills/", "schemas/", "LICENSE", "README.md"],
   "scripts": {
     "start": "node src/cli.js ui",
     "test": "node --test",

@@ -70,6 +70,7 @@ Claude receives `.claude/skills/latchkit-*/SKILL.md`. Codex, Gemini and Cursor s
 ```sh
 latchkit doctor
 latchkit config
+latchkit migrate --dry-run
 latchkit sync --dry-run
 latchkit remove
 ```

@@ -1,23 +1,21 @@
-import { access, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
+import { access, lstat, mkdir, open, readFile, readdir, realpath, rename, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { PROVIDERS, SKILLS } from './catalog.js';
+import {
+  CURRENT_CONFIG_SCHEMA_VERSION,
+  SUPPORTED_CONFIG_SCHEMA_VERSIONS,
+  ConfigContractError,
+  parseConfig,
+  validateConfig as validateConfigContract,
+  validateManifest,
+} from './config/contracts.js';
+import { buildMigration, executeMigration, normalizeMigrationTarget } from './config/migrations.js';
 
-export const PROVIDERS = [
-  { id: 'claude', label: 'Claude Code', command: 'claude', skillDirectory: '.claude/skills' },
-  { id: 'codex', label: 'Codex', command: 'codex', skillDirectory: '.agents/skills' },
-  { id: 'gemini', label: 'Gemini CLI', command: 'gemini', skillDirectory: '.agents/skills' },
-  { id: 'cursor', label: 'Cursor IDE', command: 'cursor', skillDirectory: '.agents/skills' },
-  { id: 'cursor-cli', label: 'Cursor CLI', command: 'agent', skillDirectory: '.agents/skills' },
-];
-export const SKILLS = [
-  { id: 'spec', label: 'Spec & build', description: 'Turn requirements into a scoped plan, implementation, and verification evidence.' },
-  { id: 'fix', label: 'Reproduce & fix', description: 'Reproduce a defect, repair its cause, and check for regressions.' },
-  { id: 'review', label: 'Review changes', description: 'Inspect a diff for actionable defects and missing verification.' },
-  { id: 'handoff', label: 'Save a handoff', description: 'Capture decisions, evidence, and next steps for another session.' },
-];
+export { PROVIDERS, SKILLS, CURRENT_CONFIG_SCHEMA_VERSION, SUPPORTED_CONFIG_SCHEMA_VERSIONS, ConfigContractError };
 const stateDirectory = '.latchkit';
 const configPath = `${stateDirectory}/config.json`;
 const manifestPath = `${stateDirectory}/manifest.json`;
@@ -85,30 +83,32 @@ async function withLock(root, operation) {
   finally { await lock.close(); await unlink(lockPath); }
 }
 
-export function validateConfig(config) {
-  if (!config || typeof config !== 'object' || Array.isArray(config) || config.schemaVersion !== 1) throw new Error('Expected config schemaVersion 1.');
-  if (Object.keys(config).some(key => !['schemaVersion', 'providers', 'skills'].includes(key))) throw new Error('Unknown configuration field.');
-  for (const [key, allowed] of [['providers', PROVIDERS.map(p => p.id)], ['skills', SKILLS.map(s => s.id)]]) {
-    if (!Array.isArray(config[key]) || config[key].some(id => typeof id !== 'string' || !allowed.includes(id)) || new Set(config[key]).size !== config[key].length) {
-      throw new Error(`Invalid ${key}: use unique values from ${allowed.join(', ')}.`);
-    }
-  }
-  return { schemaVersion: 1, providers: [...config.providers], skills: [...config.skills] };
-}
+const contractOptions = {
+  providerIds: PROVIDERS.map(provider => provider.id),
+  skillIds: SKILLS.map(skill => skill.id),
+};
+
+export const validateConfig = config => validateConfigContract(config, contractOptions);
+const parseProjectConfig = raw => parseConfig(raw, contractOptions);
 
 export async function readConfig(root) {
   root = await projectRoot(root);
   const raw = await readOptional(root, configPath);
   if (raw === null) throw new Error('Project is not initialized. Run latchkit init first.');
-  return validateConfig(JSON.parse(raw));
+  return parseProjectConfig(raw);
 }
 
 export async function initProject(root, options = {}) {
   root = await projectRoot(root);
   return withLock(root, async () => {
     const raw = await readOptional(root, configPath);
-    if (raw !== null) return validateConfig(JSON.parse(raw));
-    const config = validateConfig({ schemaVersion: 1, providers: options.providers ?? PROVIDERS.map(p => p.id), skills: options.skills ?? SKILLS.map(s => s.id) });
+    if (raw !== null) return parseProjectConfig(raw);
+    const config = validateConfig({
+      schemaVersion: CURRENT_CONFIG_SCHEMA_VERSION,
+      providers: options.providers ?? PROVIDERS.map(p => p.id),
+      skills: options.skills ?? SKILLS.map(s => s.id),
+      providerSettings: options.providerSettings ?? {},
+    });
     await writeAtomic(root, configPath, `${JSON.stringify(config, null, 2)}\n`);
     return config;
   });
@@ -126,12 +126,62 @@ export async function saveConfig(root, config) {
 async function readManifest(root) {
   const raw = await readOptional(root, manifestPath);
   if (raw === null) return { schemaVersion: 1, files: {} };
-  const manifest = JSON.parse(raw);
-  if (manifest?.schemaVersion !== 1 || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)) throw new Error('Invalid Latchkit manifest.');
-  for (const [relative, digest] of Object.entries(manifest.files)) {
-    if (!allSkillPaths.has(relative) || !/^[a-f0-9]{64}$/.test(digest)) throw new Error('Invalid managed file in manifest.');
-  }
-  return manifest;
+  let manifest;
+  try { manifest = JSON.parse(raw); }
+  catch (error) { throw new ConfigContractError(`Invalid JSON (${error.message}).`, '$', 'MANIFEST_INVALID_JSON'); }
+  return validateManifest(manifest, allSkillPaths);
+}
+
+export async function planConfigMigration(root, options = {}) {
+  root = await projectRoot(root);
+  const raw = await readOptional(root, configPath);
+  if (raw === null) throw new Error('Project is not initialized. Run latchkit init first.');
+  const config = parseProjectConfig(raw);
+  const toVersion = normalizeMigrationTarget(options.toVersion);
+  await refuseDowngrade(root, config.schemaVersion, toVersion);
+  return buildMigration(raw, config, toVersion);
+}
+
+async function refuseDowngrade(root, fromVersion, toVersion) {
+  if (toVersion >= fromVersion) return;
+  const relativeDirectory = `${stateDirectory}/backups`;
+  const directory = path.join(root, stateDirectory, 'backups');
+  const stat = await statIfExists(directory);
+  if (stat?.isSymbolicLink()) throw new Error(`Refusing symlink or junction: ${relativeDirectory}`);
+  if (stat && !stat.isDirectory()) throw new Error(`Expected directory: ${relativeDirectory}`);
+  const names = stat ? await readdir(directory, { withFileTypes: true }) : [];
+  const prefix = `config.v${toVersion}.`;
+  const backups = names
+    .filter(entry => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith('.json'))
+    .map(entry => `${relativeDirectory}/${entry.name}`)
+    .sort();
+  const recovery = backups.length
+    ? `Review and manually restore ${backups.join(' or ')}.`
+    : `No version ${toVersion} backup exists under ${relativeDirectory}/; recover an independently preserved original.`;
+  throw new ConfigContractError(
+    `Downgrade from version ${fromVersion} to ${toVersion} is not supported. ${recovery}`,
+    '$.toVersion',
+    'CONFIG_MIGRATION_UNSUPPORTED',
+  );
+}
+
+export async function migrateConfig(root, options = {}) {
+  root = await projectRoot(root);
+  const toVersion = normalizeMigrationTarget(options.toVersion);
+  return withLock(root, async () => {
+    const raw = await readOptional(root, configPath);
+    if (raw === null) throw new Error('Project is not initialized. Run latchkit init first.');
+    const config = parseProjectConfig(raw);
+    await refuseDowngrade(root, config.schemaVersion, toVersion);
+    const migration = buildMigration(raw, config, toVersion);
+    if (migration.status === 'current') return migration;
+
+    return executeMigration(raw, migration, {
+      readBackup: relative => readOptional(root, relative),
+      writeBackup: (relative, contents) => writeAtomic(root, relative, contents),
+      writeConfig: config => writeAtomic(root, configPath, `${JSON.stringify(validateConfig(config), null, 2)}\n`),
+    });
+  });
 }
 
 async function makePlan(root, removing = false) {
