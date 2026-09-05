@@ -92,5 +92,6 @@ jobs:
         with:
           name: acceptance-evidence-${{ runner.os }}-${{ matrix.browser }}
           path: test-results/acceptance-*/.latchkit/tasks/acceptance-evidence/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
