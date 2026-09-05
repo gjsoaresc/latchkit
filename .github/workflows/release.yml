@@ -34,7 +34,7 @@ jobs:
       - run: npm run check
       - run: npm test
       - id: version
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: node -p "'version=' + require('./package.json').version" >> "$GITHUB_OUTPUT"
       - name: Validate tag/version consistency
         if: github.event_name == 'push' || inputs.tag != ''
         run: node scripts/release-artifacts.js --tag "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}" --output release-artifacts
