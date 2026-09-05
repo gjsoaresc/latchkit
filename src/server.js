@@ -13,6 +13,10 @@ import {
   PROVIDERS,
   SKILLS,
 } from './core.js';
+import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
+import { appendEvent, clearDiagnostics } from './diagnostics/logger.js';
+import { operationalError, statusForError } from './diagnostics/errors.js';
+import { redactString } from './diagnostics/redact.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 const WEB_ROOT = new URL('../web/', import.meta.url);
@@ -143,6 +147,13 @@ export async function startServer(root, { port = 0 } = {}) {
           if (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'])
             await readJson(req);
           respond(res, 200, await serialize(() => syncProject(root)));
+        } else if (pathname === '/api/diagnostics' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await previewSupportBundle(root));
+        } else if (pathname === '/api/diagnostics/export' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => exportSupportBundle(root)));
+        } else if (pathname === '/api/diagnostics' && req.method === 'DELETE') {
+          respond(res, 200, await serialize(() => clearDiagnostics(root)));
         } else {
           throw fail(404, 'API route or method not found.');
         }
@@ -156,10 +167,14 @@ export async function startServer(root, { port = 0 } = {}) {
       res.end(req.method === 'HEAD' ? undefined : data);
     } catch (error) {
       if (res.headersSent || res.destroyed) return;
-      const status = error.status ?? (error.conflicts ? 409 : 400);
+      const diagnostic = operationalError(error, { operation: 'api', stage: req.url ?? 'request' });
+      await appendEvent(root, diagnostic).catch(() => {});
+      const status = statusForError(error);
       respond(res, status, {
-        error: error.message || 'Request failed.',
-        ...(error.code ? { code: error.code } : {}),
+        error: redactString(diagnostic.message),
+        code: diagnostic.code,
+        operationId: diagnostic.operationId,
+        retry: diagnostic.retry,
         ...(error.path ? { path: error.path } : {}),
         ...(error.conflicts ? { conflicts: error.conflicts } : {}),
       });

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/diagnostic-event-v1.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "operationId", "operation", "stage", "timestamp", "code", "message", "retry"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "operationId": { "type": "string", "format": "uuid" },
+    "operation": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "stage": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,63}$" },
+    "message": { "type": "string", "maxLength": 4096 },
+    "retry": { "type": "string", "maxLength": 1024 },
+    "path": { "type": "string", "maxLength": 1024 },
+    "conflictCount": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}
