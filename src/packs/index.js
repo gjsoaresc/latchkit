@@ -162,7 +162,7 @@ export async function loadBundledPack() {
     provenance: 'Bundled original MIT Latchkit workflow skills.',
     compatibility: {
       configSchemaVersions: [3],
-      providers: ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'],
+      providers: ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli'],
     },
     source: { type: 'bundled' },
     files,

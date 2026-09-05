@@ -31,13 +31,13 @@ The configuration uses the stable skill IDs `requirements`, `spec`, `build`, `fi
 | ----------------- | ------------------------------------------ |
 | Claude Code       | `.claude/skills/`                          |
 | Codex             | `.agents/skills/`                          |
-| Gemini CLI        | `.agents/skills/`                          |
+| Antigravity CLI   | `.agents/skills/`                          |
 | Cursor IDE        | `.agents/skills/`                          |
 | Cursor CLI        | `.agents/skills/`                          |
 
 Shared destinations are deduplicated during synchronization. Generated copies are distribution artifacts; edit the canonical bundled skill to develop a new version.
 
-Selecting a provider controls where Latchkit installs files. It does not isolate other agents from those files. Gemini and Cursor recognize shared roots, and Cursor can also discover other providers' skill directories. Selecting Claude alongside a shared-root provider can expose matching skills through multiple roots in Cursor. A single managed destination avoids unnecessary copies, but provider discovery rules still govern what appears. See [compatibility](compatibility.md).
+Selecting a provider controls where Latchkit installs files. It does not isolate other agents from those files. Antigravity and Cursor recognize shared roots, and Cursor can also discover other providers' skill directories. Selecting Claude alongside a shared-root provider can expose matching skills through multiple roots in Cursor. A single managed destination avoids unnecessary copies, but provider discovery rules still govern what appears. See [compatibility](compatibility.md).
 
 ## Provider contracts and lifecycle bridge
 
@@ -77,7 +77,7 @@ The transaction core accepts registered resource IDs rather than caller-supplied
 
 `src/rules/` discovers only bounded, explicit project manifests and toolchain files. It does not invoke package managers, evaluate repository modules, inspect credentials, or copy package-script bodies. Commands are stored as executable-plus-argument arrays and remain marked declared and unverified. The canonical model records generator provenance, selected directory scopes, source paths, original Latchkit guidance, and validated user overrides.
 
-Exporters preserve provider semantics. Codex receives scoped `AGENTS.md` sections. Claude and Gemini import that shared hierarchy when Codex is selected; otherwise Claude uses scoped `.claude/rules` files and Gemini imports a separately owned canonical rule. Cursor receives `.mdc` frontmatter unless its selected Codex export is already discoverable, in which case preview reports the shared visibility and omits the duplicate. Provider selection is not represented as a visibility boundary. Details and limitations are in [project instructions](project-instructions.md).
+Exporters preserve provider semantics. Codex receives scoped `AGENTS.md` sections. Claude imports that shared hierarchy when Codex is selected; otherwise Claude uses scoped `.claude/rules` files. Antigravity shares the `.agents/skills` surface without provider-specific instruction or hook mutation. Cursor receives `.mdc` frontmatter unless its selected Codex export is already discoverable, in which case preview reports the shared visibility and omits the duplicate. Provider selection is not represented as a visibility boundary. Details and limitations are in [project instructions](project-instructions.md).
 
 The HTTP server binds only to `127.0.0.1`, requires a per-launch bearer token for API calls, validates the host and mutation origin, and limits request bodies. The URL fragment carries the token so it is not sent as a normal HTTP URL or referrer. The console serves one fixed project and has no command-execution endpoint.
 

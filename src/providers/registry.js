@@ -2,6 +2,7 @@ import { PROVIDER_CONTRACT_VERSION, validateProviderContract } from './contracts
 import { CURSOR_CLI_PROVIDER } from './cursor-cli.js';
 import { CLAUDE_CONTRACT } from './claude.js';
 import { CURSOR_IDE_CONTRACT } from './cursor-ide.js';
+import { ANTIGRAVITY_ADAPTER } from './antigravity.js';
 
 const unknown = (reason) => ({ state: 'unknown', reason, versionRange: '*', evidenceUrl: '' });
 const supported = (evidenceUrl) => ({
@@ -28,11 +29,11 @@ const definitions = [
   ['claude', 'Claude Code', 'claude', '.claude/skills', 'https://code.claude.com/docs/en/skills'],
   ['codex', 'Codex', 'codex', '.agents/skills', 'https://learn.chatgpt.com/docs/build-skills'],
   [
-    'gemini',
-    'Gemini CLI',
-    'gemini',
+    'antigravity',
+    'Antigravity CLI',
+    'agy',
     '.agents/skills',
-    'https://geminicli.com/docs/cli/using-agent-skills/',
+    'https://antigravity.google/docs/cli/overview',
   ],
   ['cursor', 'Cursor IDE', 'cursor', '.agents/skills', 'https://cursor.com/docs/skills'],
   [
@@ -49,6 +50,7 @@ export const PROVIDERS = Object.freeze(
     if (id === 'claude') return CLAUDE_CONTRACT;
     if (id === 'cursor') return CURSOR_IDE_CONTRACT;
     if (id === 'cursor-cli') return validateProviderContract(CURSOR_CLI_PROVIDER);
+    if (id === 'antigravity') return ANTIGRAVITY_ADAPTER.contract;
     return validateProviderContract({
       schemaVersion: PROVIDER_CONTRACT_VERSION,
       id,

@@ -22,13 +22,13 @@ The candidate checkout must be clean and committed. The harness verifies the sup
 
 ## Release matrix
 
-| Provider    | Native Windows | WSL2    | Linux   | macOS   | Evidence required       |
-| ----------- | -------------- | ------- | ------- | ------- | ----------------------- |
-| Claude Code | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
-| Codex       | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
-| Gemini CLI  | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
-| Cursor IDE  | unknown        | unknown | unknown | unknown | manual editor workflow  |
-| Cursor CLI  | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
+| Provider        | Native Windows | WSL2    | Linux   | macOS   | Evidence required                                                           |
+| --------------- | -------------- | ------- | ------- | ------- | --------------------------------------------------------------------------- |
+| Claude Code     | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
+| Codex           | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
+| Antigravity CLI | unsupported    | unknown | unknown | unknown | No authenticated run; upstream contract is limited to documented print mode |
+| Cursor IDE      | unknown        | unknown | unknown | unknown | manual editor workflow                                                      |
+| Cursor CLI      | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
 
 `unknown` means no observed provider session exists; it is not support. WSL2 is an independent runtime and cannot inherit native Windows evidence. Mark each cell `pass`, `fail`, `unsupported`, `blocked`, or `skipped` with a reason and an evidence record. Only observed cells may be promoted to supported release claims.
 

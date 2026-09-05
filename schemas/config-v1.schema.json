@@ -10,7 +10,7 @@
     "providers": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["claude", "codex", "gemini", "cursor", "cursor-cli"] }
+      "items": { "enum": ["claude", "codex", "antigravity", "cursor", "cursor-cli"] }
     },
     "skills": {
       "type": "array",

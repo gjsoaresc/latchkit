@@ -13,7 +13,7 @@ import {
   doctor,
 } from '../src/core.js';
 
-const providerIds = ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'];
+const providerIds = ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli'];
 const skillIds = ['spec', 'fix', 'review', 'handoff'];
 const validConfig = (overrides = {}) => {
   const schemaVersion = overrides.schemaVersion ?? 3;

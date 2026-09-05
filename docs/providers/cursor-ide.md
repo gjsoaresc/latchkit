@@ -23,7 +23,7 @@ but unobserved integration remains end-to-end unverified.
 
 ## Skills, rules, and activation
 
-Cursor shares `.agents/skills`; Latchkit writes that destination once even if Codex, Gemini CLI,
+Cursor shares `.agents/skills`; Latchkit writes that destination once even if Codex, Antigravity CLI,
 Cursor IDE, and Cursor CLI are selected together. Cursor may also discover skills in other provider
 roots, so selecting a provider is not a visibility boundary. After sync, open Cursor's Rules
 settings, inspect the available skills, and reload the window if a new skill is absent.
