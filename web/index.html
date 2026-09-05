@@ -16,7 +16,7 @@
           ><span>latchkit<span class="brand-dot">.</span></span></a
         >
         <div class="sidebar-caption">DEVELOPER WORKSPACE</div>
-        <nav>
+        <nav aria-label="Primary">
           <a class="nav-item active" href="#workspace"
             ><span aria-hidden="true">◈</span>Workspace</a
           >
@@ -67,7 +67,7 @@
           </div>
         </section>
 
-        <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
+        <div id="notice" class="notice hidden" role="status" aria-live="polite" tabindex="-1"></div>
 
         <section class="summary-grid" aria-label="Workspace summary">
           <div class="summary-card">
@@ -90,32 +90,38 @@
           </div>
         </section>
 
-        <section id="configuration" class="config-section">
+        <section id="configuration" class="config-section" aria-labelledby="providers-heading">
           <div class="section-heading">
             <div>
               <p class="eyebrow">01 / YOUR TOOLBOX</p>
-              <h2>Meet your agents.</h2>
+              <h2 id="providers-heading">Meet your agents.</h2>
               <p>Select the tools that should receive your workflow skills.</p>
             </div>
             <span class="subtle-tag">PROVIDER ADAPTERS</span>
           </div>
-          <div id="providers" class="provider-grid" aria-label="Provider selection"></div>
+          <fieldset class="selection-group">
+            <legend class="sr-only">Providers that receive workflow skills</legend>
+            <div id="providers" class="provider-grid"></div>
+          </fieldset>
           <p class="section-note">
             Detection checks the current environment. Native Windows and WSL have separate tool
             installations.
           </p>
         </section>
 
-        <section class="config-section skills-section">
+        <section class="config-section skills-section" aria-labelledby="skills-heading">
           <div class="section-heading">
             <div>
               <p class="eyebrow">02 / YOUR PLAYBOOK</p>
-              <h2>A workflow that follows you.</h2>
+              <h2 id="skills-heading">A workflow that follows you.</h2>
               <p>Portable instructions for the work you do every day.</p>
             </div>
             <span class="subtle-tag">SKILL.MD</span>
           </div>
-          <div id="skills" class="skills-grid" aria-label="Skill selection"></div>
+          <fieldset class="selection-group">
+            <legend class="sr-only">Workflow skills to install</legend>
+            <div id="skills" class="skills-grid"></div>
+          </fieldset>
           <p class="section-note">
             Skills guide the agent. They do not enforce hooks, permissions, or automatic quality
             gates.
@@ -139,13 +145,13 @@
               </button>
             </div>
           </div>
-          <div id="plan-panel" class="plan-panel hidden">
+          <div id="plan-panel" class="plan-panel hidden" aria-live="polite">
             <div class="plan-heading">
               <h3>File changes</h3>
               <span id="plan-summary" class="mini-label"></span>
             </div>
-            <div id="conflicts" class="conflicts hidden"></div>
-            <ul id="plan-changes" class="plan-changes"></ul>
+            <div id="conflicts" class="conflicts hidden" role="alert" tabindex="-1"></div>
+            <ul id="plan-changes" class="plan-changes" aria-label="Planned file changes"></ul>
             <div class="plan-footer">
               <p id="plan-note">Only Latchkit-managed files are updated.</p>
               <button id="apply" class="button button-primary" disabled>

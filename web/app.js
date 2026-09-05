@@ -15,6 +15,7 @@ let savedConfig;
 let configRevision;
 let busy = false;
 let plan;
+const API_VERSION = 1;
 const providerInitials = { claude: 'C', codex: 'O', gemini: 'G', cursor: '↗', 'cursor-cli': '>_' };
 const skillIcons = { spec: '◇', fix: '⌁', review: '◎', handoff: '⇢' };
 
@@ -26,15 +27,22 @@ function el(tag, className, content) {
 }
 
 async function api(route, { method = 'GET', body } = {}) {
-  const response = await fetch(`/api/${route}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(route === 'config' && method === 'PUT' ? { 'If-Match': configRevision } : {}),
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  let response;
+  try {
+    response = await fetch(`/api/${route}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(route === 'config' && method === 'PUT' ? { 'If-Match': configRevision } : {}),
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch {
+    throw new Error(
+      'The local server is unavailable. Check the terminal running Latchkit and retry.',
+    );
+  }
   let data;
   try {
     data = await response.json();
@@ -42,16 +50,38 @@ async function api(route, { method = 'GET', body } = {}) {
     throw new Error('The local server returned an unreadable response.');
   }
   if (!response.ok) {
-    const error = new Error(data.error || `Request failed (${response.status}).`);
+    const message =
+      response.status === 401
+        ? 'This session key has expired. Reopen the complete URL printed by Latchkit.'
+        : data.error || `Request failed (${response.status}).`;
+    const error = new Error(message);
     Object.assign(error, data);
+    error.status = response.status;
     throw error;
   }
+  if (data.apiVersion !== API_VERSION)
+    throw new Error('This console needs a newer local API. Restart Latchkit.');
   return data;
 }
 
 function showNotice(message, isError = false) {
-  $('notice').textContent = message;
-  $('notice').className = `notice ${isError ? 'notice-error' : 'notice-success'}`;
+  const notice = $('notice');
+  notice.textContent = message;
+  notice.className = `notice ${isError ? 'notice-error' : 'notice-success'}`;
+  notice.setAttribute('role', isError ? 'alert' : 'status');
+  notice.focus({ preventScroll: true });
+}
+
+function sorted(values) {
+  return [...new Set(values)].sort();
+}
+
+function comparable(config) {
+  return JSON.stringify({
+    ...config,
+    providers: sorted(config.providers || []),
+    skills: sorted(config.skills || []),
+  });
 }
 
 function selection() {
@@ -67,7 +97,7 @@ function selection() {
 }
 
 function isDirty() {
-  return Boolean(savedConfig) && JSON.stringify(selection()) !== JSON.stringify(savedConfig);
+  return Boolean(savedConfig) && comparable(selection()) !== comparable(savedConfig);
 }
 
 function updateActions() {
@@ -89,7 +119,9 @@ function updateActions() {
       ? 'Connect this session to load configuration.'
       : dirty
         ? 'You have unsaved changes.'
-        : 'Configuration saved. Ready to preview.';
+        : selection().providers.length && selection().skills.length
+          ? 'Configuration saved. Ready to preview.'
+          : 'Configuration saved with an empty selection. Preview will remove managed skills.';
   if (state) $('skill-count').textContent = selection().skills.length;
 }
 
@@ -113,6 +145,7 @@ function renderProviders() {
     input.name = 'provider';
     input.value = provider.id;
     input.checked = savedConfig.providers.includes(provider.id);
+    input.setAttribute('aria-describedby', `provider-${provider.id}-details`);
     const top = el('div', 'provider-top');
     top.append(
       el('span', 'provider-symbol', providerInitials[provider.id] || provider.label.slice(0, 1)),
@@ -122,10 +155,16 @@ function renderProviders() {
     const detection = el(
       'span',
       `detection ${detected ? 'is-detected' : ''}`,
-      detected ? 'Detected' : 'Not detected',
+      detected ? 'Executable on PATH' : 'Executable not found on PATH',
     );
     if (diagnostic?.path) detection.title = diagnostic.path;
-    label.append(detection, el('code', 'skill-directory', provider.skillDirectory));
+    const details = el(
+      'span',
+      'sr-only',
+      `${provider.label} status: ${detected ? 'executable on PATH' : 'executable not found on PATH'}. Skill export is supported; integration is not verified.`,
+    );
+    details.id = `provider-${provider.id}-details`;
+    label.append(detection, el('code', 'skill-directory', provider.skillDirectory), details);
     input.addEventListener('change', invalidatePlan);
     container.append(label);
   }
@@ -141,6 +180,7 @@ function renderSkills() {
     input.name = 'skill';
     input.value = skill.id;
     input.checked = savedConfig.skills.includes(skill.id);
+    input.setAttribute('aria-label', `${skill.label}: ${skill.description}`);
     const top = el('div', 'skill-top');
     top.append(el('span', 'skill-icon', skillIcons[skill.id] || '◇'), input);
     label.append(
@@ -153,7 +193,7 @@ function renderSkills() {
   }
 }
 
-function renderState() {
+function renderState({ preserveSelection = null } = {}) {
   const project = String(state.doctor.project || 'Current project');
   $('project-name').textContent = project.split(/[\\/]/).filter(Boolean).at(-1) || project;
   $('project-path').textContent = project;
@@ -167,6 +207,14 @@ function renderState() {
   ).length;
   renderProviders();
   renderSkills();
+  if (preserveSelection) {
+    document.querySelectorAll('input[name="provider"]').forEach((input) => {
+      input.checked = preserveSelection.providers.includes(input.value);
+    });
+    document.querySelectorAll('input[name="skill"]').forEach((input) => {
+      input.checked = preserveSelection.skills.includes(input.value);
+    });
+  }
   updateActions();
 }
 
@@ -225,14 +273,16 @@ async function action(operation) {
     await operation();
   } catch (error) {
     if (error.code === 'CONFIG_REVISION_CONFLICT' || error.code === 'SYNC_PLAN_STALE') {
-      await reloadState();
+      const pendingSelection = selection();
+      await reloadState({ preserveSelection: pendingSelection });
       invalidatePlan();
       showNotice(
-        'Workspace changed elsewhere. The current configuration was reloaded; review a new preview.',
+        'Workspace changed elsewhere. Your edits were kept. Review them, save again, and create a new preview.',
         true,
       );
       return;
     }
+    if (error.status === 401) token = '';
     showNotice(error.message, true);
   } finally {
     busy = false;
@@ -248,7 +298,11 @@ $('save').addEventListener('click', () =>
     state.config = savedConfig;
     renderProviders();
     renderSkills();
-    showNotice('Configuration saved. Preview your sync to review the generated files.');
+    showNotice(
+      selection().providers.length && selection().skills.length
+        ? 'Configuration saved. Preview your sync to review the generated files.'
+        : 'Configuration saved with an empty selection. Preview will remove managed skills.',
+    );
   }),
 );
 
@@ -272,12 +326,25 @@ $('apply').addEventListener('click', () =>
   }),
 );
 
-async function reloadState() {
+async function reloadState(options = {}) {
   state = await api('state');
   savedConfig = state.config;
   configRevision = state.configRevision;
-  renderState();
+  renderState(options);
 }
+
+window.addEventListener('beforeunload', (event) => {
+  if (!isDirty()) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+
+window.addEventListener('online', () =>
+  showNotice('Connection restored. You can continue working.'),
+);
+window.addEventListener('offline', () =>
+  showNotice('Connection lost. Your current edits are still on this page.', true),
+);
 
 async function initialize() {
   if (!token) {

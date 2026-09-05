@@ -4,6 +4,7 @@ node_modules/
 .claude/
 *.tgz
 coverage/
+test-results/
 .DS_Store
 Thumbs.db
 .env

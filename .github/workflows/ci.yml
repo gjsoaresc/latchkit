@@ -54,3 +54,35 @@ jobs:
           $windowsRepo = '${{ github.workspace }}'.Replace('\', '/')
           $repo = (wsl wslpath -a $windowsRepo).Trim()
           wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd '$repo'; npm ci --ignore-scripts; node scripts/artifact-smoke.js --require-wsl --require-links --mounted-project '$repo/.wsl-mounted-smoke'; rm -rf '$repo/.wsl-mounted-smoke'"
+
+  browser:
+    name: Browser console / ${{ matrix.browser }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            browser: chromium
+            install: chromium
+          - os: ubuntu-latest
+            browser: firefox
+            install: firefox
+          - os: ubuntu-latest
+            browser: webkit
+            install: webkit
+          - os: windows-latest
+            browser: chromium
+            install: chromium
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Install browser dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps ${{ matrix.install }}
+      - name: Install browser
+        run: npx playwright install ${{ matrix.install }}
+      - run: npm run test:browser -- --project=${{ matrix.browser }}
