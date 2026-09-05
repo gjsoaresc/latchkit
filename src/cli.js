@@ -23,8 +23,8 @@ Usage: latchkit <command> [options]
   config     Print saved project configuration
   migrate    Upgrade configuration; use --dry-run to preview
   recover    Inspect or recover an interrupted mutation
-  sync       Install selected skills and pack versions; use --dry-run to preview
-  remove     Remove unmodified Latchkit skills; keep configuration and notes
+  sync       Install selected skills and scoped project instructions; use --dry-run to preview
+  remove     Remove unchanged Latchkit-managed content; keep user-authored text
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -33,7 +33,7 @@ Options:
   --skills <csv>      init: spec,fix,review,handoff
   --port <number>     ui: local port (default: automatically selected)
   --to <version>      migrate: target schema version (default: current)
-  --dry-run           migrate/recover/sync: preview files, pack versions, and collisions without writing
+  --dry-run           migrate/recover/sync: preview exact managed changes and collisions without writing
   --help             Show this help
   --version          Show version
 

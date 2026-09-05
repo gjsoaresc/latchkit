@@ -1,0 +1,15 @@
+{
+  "name": "fixture-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build.js --token=do-not-export-this",
+    "test": "node --test",
+    "lint": "eslint ."
+  }
+}

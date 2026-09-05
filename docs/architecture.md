@@ -11,6 +11,7 @@ Latchkit is an original open-source toolkit that adds shared engineering skills 
 | Canonical skills | `skills/latchkit-*/SKILL.md` contains original portable instructions. |
 | Provider destinations | Project-local copies in supported discovery roots. |
 | Provider contracts | Versioned capability evidence and non-executing adapter plans. |
+| Project rules | Bounded manifest discovery, canonical instruction data, and provider-native exports. |
 | Local UI | A browser interface for viewing providers and editing project configuration. |
 | Workflow notes | Agents following the skills write task evidence under `.latchkit/notes/`. |
 
@@ -50,7 +51,7 @@ The current bridge is an in-process, injectable dispatcher rather than a running
 
 ## Runtime boundary
 
-Managed files have SHA-256 ownership entries in `.latchkit/manifest.json`. The v2 ownership manifest also records the selected pack identity, version, source selection, pin state, and provenance. Sync preflights every planned destination and stops before changes if any file is unowned, edited, or reached through a symlink/junction. The installer publishes `.latchkit/transaction.json` with exact before/after bytes before its first resource mutation and commits the complete manifest last. A crash before that commit rolls back; a crash after it finalizes. Files that match neither recorded state are preserved as conflicts.
+Managed files have SHA-256 ownership entries in `.latchkit/manifest.json`. Ownership manifest v2 added the selected pack identity, version, source selection, pin state, and provenance; v3 adds narrow managed-section ownership for shared instruction files. Sync preflights every planned destination and stops before changes if any file is unowned, edited, or reached through a symlink/junction. The installer publishes `.latchkit/transaction.json` with exact before/after bytes before its first resource mutation and commits the complete manifest last. A crash before that commit rolls back; a crash after it finalizes. Files that match neither recorded state are preserved as conflicts.
 
 ## Skill packs
 
@@ -60,7 +61,13 @@ Pins are declarative: Latchkit never searches for or automatically changes a ver
 
 The project lock contains a unique identity and an ephemeral Ed25519 proof endpoint on loopback. Contenders verify the live process rather than trusting a reusable PID. `latchkit recover --dry-run` is read-only; `latchkit recover` only reclaims a cryptographically well-formed lock whose owner no longer answers. Malformed or ambiguous metadata requires manual review. Writes fsync temporary files before rename and sync parent directories where the platform supports it. Storage devices, network filesystems, or operating systems that do not honor these primitives remain outside the durability guarantee. The installer does not defend against a malicious process with equivalent local privileges.
 
-The transaction core accepts registered resource IDs rather than caller-supplied target paths. It journals whole files; provider serializers remain responsible for preserving unrelated JSON, TOML, comments, and marked sections before submitting their rendered bytes.
+The transaction core accepts registered resource IDs rather than caller-supplied target paths. It journals whole files; provider serializers remain responsible for preserving unrelated JSON, TOML, comments, line endings, and marked sections before submitting their rendered bytes. Ownership manifest v3 keeps full-file hashes separate from narrow project-instruction section hashes. A changed or missing owned section blocks the entire operation; removal strips only the unchanged section and transaction recovery retains exact before/after bytes.
+
+## Project instruction generation
+
+`src/rules/` discovers only bounded, explicit project manifests and toolchain files. It does not invoke package managers, evaluate repository modules, inspect credentials, or copy package-script bodies. Commands are stored as executable-plus-argument arrays and remain marked declared and unverified. The canonical model records generator provenance, selected directory scopes, source paths, original Latchkit guidance, and validated user overrides.
+
+Exporters preserve provider semantics. Codex receives scoped `AGENTS.md` sections. Claude and Gemini import that shared hierarchy when Codex is selected; otherwise Claude uses scoped `.claude/rules` files and Gemini imports a separately owned canonical rule. Cursor receives `.mdc` frontmatter unless its selected Codex export is already discoverable, in which case preview reports the shared visibility and omits the duplicate. Provider selection is not represented as a visibility boundary. Details and limitations are in [project instructions](project-instructions.md).
 
 The HTTP server binds only to `127.0.0.1`, requires a per-launch bearer token for API calls, validates the host and mutation origin, and limits request bodies. The URL fragment carries the token so it is not sent as a normal HTTP URL or referrer. The console serves one fixed project and has no command-execution endpoint.
 
