@@ -10,6 +10,7 @@ Latchkit is an original open-source toolkit that adds shared engineering skills 
 | Project configuration | `.latchkit/config.json` records the selected providers and selected skill IDs. |
 | Canonical skills | `skills/latchkit-*/SKILL.md` contains original portable instructions. |
 | Provider destinations | Project-local copies in supported discovery roots. |
+| Provider contracts | Versioned capability evidence and non-executing adapter plans. |
 | Local UI | A browser interface for viewing providers and editing project configuration. |
 | Workflow notes | Agents following the skills write task evidence under `.latchkit/notes/`. |
 
@@ -34,6 +35,16 @@ The configuration uses the skill IDs `spec`, `fix`, `review`, and `handoff`. The
 Shared destinations are deduplicated during synchronization. Generated copies are distribution artifacts; edit the canonical bundled skill to develop a new version.
 
 Selecting a provider controls where Latchkit installs files. It does not isolate other agents from those files. Gemini and Cursor recognize shared roots, and Cursor can also discover other providers' skill directories. Selecting Claude alongside a shared-root provider can expose matching skills through multiple roots in Cursor. A single managed destination avoids unnecessary copies, but provider discovery rules still govern what appears. See [compatibility](compatibility.md).
+
+## Provider contracts and lifecycle bridge
+
+`src/providers/registry.js` owns the provider registry; `src/providers/contracts.js` validates versioned, serializable provider metadata, with published JSON schemas in `schemas/`. The legacy `PROVIDERS` exports remain available through `src/catalog.js` and `src/core.js` for existing CLI and UI consumers. A contract records capabilities and verification independently: installed, authenticated, configured, and end-to-end verified are separate facts. Capabilities include portable skills, invocation, individual hooks, blocking/advisory decisions, compaction, resume, cancellation, and usage. Every entry carries state, reason, version range, and evidence URL, so consumers need no vendor-specific field names.
+
+An adapter, when one is implemented, must supply operations for inspection, installation planning, skill/rule export planning, invocation and resume planning, lifecycle input/output translation, and optional usage planning. Command plans contain an executable and argument array only; constructing or validating a plan never executes it. Provider contracts do not change approval policy, grant trust, read credentials, or manage account login.
+
+Lifecycle adapters translate to a normalized envelope with a schema version; provider version and runtime; project, task, and session correlation; event ID; timestamp; event kind; bounded object payload; and declared decision modes. `turn-completed`, `session-terminated`, `interrupted`, and `verified-task-completed` are distinct events. The last is emitted only after a task owner has independently verified completion; it is not inferred from a turn ending.
+
+The current bridge is an in-process, injectable dispatcher rather than a running hook service. Its future adapter entrypoint is: provider input → validated envelope → task lookup and authorization → handler → provider response translation. The future quality-gates component owns a concrete handler and any hook command/service transport; provider end-to-end work owns proving the joined path. With no adapter or service, hooks do not run when the console is closed (or open). The dispatcher deduplicates event IDs, reports a timestamp older than an accepted event in the same provider/project/task/session stream as out-of-order, returns explicit missing-task and unauthorized results, and makes handler failure and timeout advisory. Malformed envelopes are rejected before lookup; no one of these outcomes silently passes a gate.
 
 ## Runtime boundary
 

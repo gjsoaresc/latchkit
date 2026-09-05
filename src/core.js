@@ -4,7 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { PROVIDERS, SKILLS } from './catalog.js';
+import { SKILLS } from './catalog.js';
+import { PROVIDERS } from './providers/registry.js';
 import {
   CURRENT_CONFIG_SCHEMA_VERSION,
   SUPPORTED_CONFIG_SCHEMA_VERSIONS,
@@ -310,7 +311,15 @@ export async function doctor(root) {
     providers: await Promise.all(
       PROVIDERS.map(async (provider) => {
         const executable = await findExecutable(provider.command);
-        return { ...provider, detected: Boolean(executable), path: executable };
+        return {
+          ...provider,
+          verification: {
+            ...provider.verification,
+            installed: executable ? 'verified' : 'unverified',
+          },
+          detected: Boolean(executable),
+          path: executable,
+        };
       }),
     ),
   };
