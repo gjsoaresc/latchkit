@@ -124,6 +124,8 @@ artifacts, dry-run evidence, controlled publication, upgrades, and rollback.
 For task-oriented operations, see [support and troubleshooting](docs/support.md)
 and [upgrade, migration, rollback, and removal](docs/migration.md).
 
+See [skill evaluations](docs/skill-evaluations.md) for the offline behavioral harness and explicitly authorized, bounded provider comparisons.
+
 ## License and provenance
 
 [MIT](LICENSE). All implementation and bundled skill text in this repository are original. Latchkit is an independent project inspired by the general idea of structured coding-agent workflows. It is not a fork of or affiliated with Pilot Shell or any provider. Provider software and services retain their own terms.

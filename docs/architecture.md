@@ -90,6 +90,10 @@ The skills request plans, meaningful regression tests, reviews, and evidence. Th
 
 Project memory is a separate, inspectable snapshot at `.latchkit/memory/state-v1.json`; see [ADR 0002](adr/0002-local-project-memory.md). It stores only explicit concise records and has no automatic transcript capture, database, embedding service, MCP server, background scheduler, or provider-memory modification. Local search has no cache separate from the snapshot. Recovery is on-demand and bounded by a caller-selected character budget; it labels returned text untrusted historical context, rechecks source existence/hash, and returns manual mode when provider compaction capability is unavailable. Deleted records are scrubbed from managed searchable fields and excluded from exports, but prior exports, backups, and Git history are outside local deletion scope.
 
+## Behavioral skill evaluations
+
+`src/evaluations/` provides an offline-first, versioned behavioral harness. It copies original fixtures into an isolated temporary workspace, grades independently declared observable outcomes, redacts retained output, and removes the workspace after each run. The specification and result schema do not make a model's prose an oracle: required execution and task evidence must be present, and forbidden side effects fail plan-only scenarios. The fixture executor in ordinary CI validates harness behavior only. Optional Claude/Codex comparisons use published adapter plans with explicit host-local authorization and bounded runs; they do not authenticate, alter provider policy, or establish a passing result when a provider is unavailable.
+
 Future enforcement belongs in separate provider adapters with executable integration tests. One provider's hook names, payloads, and approval behavior cannot be assumed valid in another. The [roadmap](roadmap.md) tracks those components separately from portable skill distribution.
 
 The Cursor IDE adapter is the first editor-specific boundary. Its opt-in project hooks use native
