@@ -60,6 +60,51 @@ test('review results are strict, independent, and deduplicated', async (t) => {
   assert.equal(result.reviewers[0].result.findings[0].detail, 'token=[REDACTED]');
 });
 
+test('real Codex JSONL and Claude JSON envelopes yield strict review results', async (t) => {
+  const root = await fixture(t);
+  const reviewResult = {
+    schemaVersion: 1,
+    state: 'completed',
+    findings: [],
+    summary: 'No findings.',
+  };
+  for (const [providerId, stdout] of [
+    [
+      'codex',
+      [
+        JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+        JSON.stringify({
+          type: 'item.completed',
+          item: { id: 'item-1', type: 'agent_message', text: JSON.stringify(reviewResult) },
+        }),
+        JSON.stringify({ type: 'turn.completed', usage: {} }),
+      ].join('\n'),
+    ],
+    [
+      'claude',
+      JSON.stringify({
+        type: 'result',
+        session_id: 'session-1',
+        result: JSON.stringify(reviewResult),
+      }),
+    ],
+  ]) {
+    const result = await createReviewOrchestrator({
+      root,
+      reviewerAdapters: new Map([[providerId, adapter()]]),
+      source: async () => ({ revision: 'abc', dirtyFingerprint: 'dirty-1' }),
+      workspace: async () => ({ capability: 'unavailable' }),
+      launch: async () => ({ status: 'exited', stdout, stderr: '' }),
+    }).run({
+      taskId: `task-${providerId}`,
+      reviewers: [{ providerId }],
+      executionAuthorized: true,
+    });
+    assert.equal(result.reviewers[0].state, 'completed');
+    assert.deepEqual(result.reviewers[0].result, reviewResult);
+  }
+});
+
 test('malformed, unavailable, nested, and unauthorized reviews remain explicit', async (t) => {
   const root = await fixture(t);
   const base = {

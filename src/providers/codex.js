@@ -249,9 +249,9 @@ export const codexAdapter = createProviderAdapter(CODEX_CONTRACT, {
   planInvocation({ prompt, cwd } = {}) {
     return plan(['exec', '--json', '--', String(prompt ?? '')], cwd);
   },
-  planResume({ sessionId, cwd } = {}) {
+  planResume({ sessionId, prompt, cwd } = {}) {
     return sessionId
-      ? plan(['resume', '--json', '--', String(sessionId)], cwd)
+      ? plan(['exec', 'resume', '--json', '--', String(sessionId), String(prompt ?? '')], cwd)
       : noPlan('A session ID is required for resume.');
   },
   translateLifecycleInput(input, options) {

@@ -53,6 +53,17 @@ test('Codex plans use argument vectors and never trust-bypass flags', () => {
     cwd: 'C:\\work dir',
   });
   assert.ok(!JSON.stringify(invocation).includes('trust'));
+
+  const resume = codexAdapter.operations.planResume({
+    sessionId: 'thread-123',
+    prompt: 'write the handoff',
+    cwd: 'C:\\work dir',
+  });
+  assert.deepEqual(validateCommandPlan(resume), {
+    executable: 'codex',
+    args: ['exec', 'resume', '--json', '--', 'thread-123', 'write the handoff'],
+    cwd: 'C:\\work dir',
+  });
 });
 
 test('Codex lifecycle translation validates normalized envelope', () => {

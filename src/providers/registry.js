@@ -35,7 +35,13 @@ const definitions = [
     'https://geminicli.com/docs/cli/using-agent-skills/',
   ],
   ['cursor', 'Cursor IDE', 'cursor', '.agents/skills', 'https://cursor.com/docs/skills'],
-  ['cursor-cli', 'Cursor CLI', 'agent', '.agents/skills', 'https://cursor.com/docs/cli/using'],
+  [
+    'cursor-cli',
+    'Cursor CLI',
+    'cursor-agent',
+    '.agents/skills',
+    'https://cursor.com/docs/cli/using',
+  ],
 ];
 
 export const PROVIDERS = Object.freeze(

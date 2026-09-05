@@ -12,6 +12,14 @@ It executes at most one safe text-only prompt, has a 120-second hard upper timeo
 
 The output follows `schemas/provider-e2e-evidence-v1.schema.json`; it binds the tested commit, adapter configuration hash, provider version, Node/runtime and configured limits. A real run should additionally retain the disposable fixture artifact under the operator's protected evidence location, after sanitization.
 
+For an explicitly authorized Codex release-candidate lifecycle, first build the exact archive and record its SHA-256, then run:
+
+```sh
+npm run verify:lifecycle -- --authorized --provider codex --artifact-sha256 <sha256> --output .github/release-evidence/issue-36/lifecycle-codex-windows.json
+```
+
+The candidate checkout must be clean and committed. The harness creates a disposable Git project, installs the candidate's bundled skills, records an expected failing check, terminates one owned provider process, recovers the interrupted task, performs one bounded implementation, resumes its provider thread for a handoff, and runs one isolated review. It also verifies that failed, unauthorized, and unsupported evidence cannot become task completion. The retained JSON contains statuses, hashes, versions, limits, and finding counts only; provider output, prompts, command arguments, credentials, usage guesses, and the disposable project are not retained. This is one native-host Codex cell, not evidence for another provider or operating system.
+
 ## Release matrix
 
 | Provider | Native Windows | WSL2 | Linux | macOS | Evidence required |

@@ -15,10 +15,10 @@ const evidence = (state = 'supported') => ({
   evidenceUrl: '',
 });
 
-function adapter() {
+function adapter(id = 'fixture') {
   const contract = {
     schemaVersion: 1,
-    id: 'fixture',
+    id,
     label: 'Fixture',
     command: process.execPath,
     skillDirectory: '.agents/skills',
@@ -88,6 +88,33 @@ test('controller starts one owned session, redacts results, and never treats exi
   assert.equal(result.session.providerSessionId, 'provider-session');
   assert.equal(result.session.result.stderr, '[redacted]');
   assert.equal((await readTaskSessions(root))[0].state, 'finished');
+});
+
+test('controller extracts the resumable Codex thread identity from JSONL output', async (t) => {
+  const { root, task } = await fixture(t);
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['codex', adapter('codex')]]),
+    launch: async ({ onEvent }) => {
+      onEvent({ type: 'process-start', pid: 1234 });
+      return {
+        status: 'exited',
+        exitCode: 0,
+        stderr: '',
+        stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'thread-provider-session' }),
+          JSON.stringify({ type: 'turn.completed', usage: {} }),
+        ].join('\n'),
+      };
+    },
+  });
+  const result = await controller.start({
+    taskId: task.id,
+    providerId: 'codex',
+    executionAuthorized: true,
+  });
+  assert.equal(result.session.providerSessionId, 'thread-provider-session');
+  assert.equal((await readTaskSessions(root))[0].providerSessionId, 'thread-provider-session');
 });
 
 test('controller cancellation reaches only its live child and late events cannot resurrect task', async (t) => {

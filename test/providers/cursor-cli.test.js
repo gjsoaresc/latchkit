@@ -29,8 +29,9 @@ test('registers Cursor CLI with evidence-backed invocation and resume only', () 
 });
 
 test('inspection is bounded and legacy executable selection is explicit', () => {
-  assert.deepEqual(inspect().candidates, ['agent']);
-  assert.deepEqual(inspect({ allowLegacy: true }).candidates, ['agent', 'cursor-agent']);
+  assert.equal(PROVIDERS.find((provider) => provider.id === 'cursor-cli').command, 'cursor-agent');
+  assert.deepEqual(inspect().candidates, ['cursor-agent']);
+  assert.deepEqual(inspect({ allowLegacy: true }).candidates, ['cursor-agent', 'agent']);
   assert.deepEqual(
     inspect().probes.map(({ args }) => args),
     [['--version'], ['--help']],
@@ -48,7 +49,7 @@ test('plans safe interactive, structured, resume, and Windows-compatible vectors
       cwd: 'C:\\project with spaces',
     }),
     {
-      executable: 'agent',
+      executable: 'cursor-agent',
       args: [
         '--print',
         '--output-format',
@@ -61,10 +62,10 @@ test('plans safe interactive, structured, resume, and Windows-compatible vectors
     },
   );
   assert.deepEqual(planResume({ chatId: 'chat-1' }), {
-    executable: 'agent',
+    executable: 'cursor-agent',
     args: ['--resume=chat-1'],
   });
-  assert.deepEqual(planResume(), { executable: 'agent', args: ['resume'] });
+  assert.deepEqual(planResume(), { executable: 'cursor-agent', args: ['resume'] });
   assert.throws(() => planInvocation({ outputFormat: 'json' }), /requires print/);
 });
 

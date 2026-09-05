@@ -25,13 +25,13 @@ The local suite had one explained Windows file-symlink skip because that host de
 
 ## Provider evidence
 
-| Provider            | Native Windows          | WSL     | Linux   | macOS   | Disposition                                                                                                             |
-| ------------------- | ----------------------- | ------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Claude Code 2.1.258 | blocked                 | unknown | unknown | unknown | Bounded live smoke reached the provider but required login, approval, or permission; see `provider-claude-windows.json` |
-| Codex CLI 0.153.2   | pass                    | unknown | unknown | unknown | Bounded one-turn live smoke exited 0; see `provider-codex-windows.json`                                                 |
-| Gemini CLI          | unavailable             | unknown | unknown | unknown | Executable was not installed on the qualification host                                                                  |
-| Cursor IDE 3.19.7   | manual evidence missing | unknown | unknown | unknown | Editor was installed, but the required manual skill/hook workflow was not performed                                     |
-| Cursor CLI          | unavailable             | unknown | unknown | unknown | The documented `agent` executable was not installed                                                                     |
+| Provider            | Native Windows          | WSL     | Linux   | macOS   | Disposition                                                                                                                                         |
+| ------------------- | ----------------------- | ------- | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code 2.1.258 | blocked                 | unknown | unknown | unknown | Bounded live smoke reached the provider but required login, approval, or permission; see `provider-claude-windows.json`                             |
+| Codex CLI 0.153.2   | pass                    | unknown | unknown | unknown | Bounded one-turn live smoke exited 0; see `provider-codex-windows.json`                                                                             |
+| Gemini CLI          | unavailable             | unknown | unknown | unknown | Executable was not installed on the qualification host                                                                                              |
+| Cursor IDE 3.19.7   | manual evidence missing | unknown | unknown | unknown | Editor was installed, but the required manual skill/hook workflow was not performed                                                                 |
+| Cursor CLI          | unsupported upstream    | unknown | unknown | unknown | Current upstream installation docs support Windows through WSL, not natively; the documented `cursor-agent` executable was unavailable on this host |
 
 `unknown`, `blocked`, and `unavailable` are not support claims. The evidence records contain no transcript, command arguments, credentials, or usage estimate.
 
