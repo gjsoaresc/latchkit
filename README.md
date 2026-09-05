@@ -112,6 +112,7 @@ The direction is an open engineering workflow layer: requirements → plan → i
 - [Architecture and reliability boundaries](docs/architecture.md)
 - [Compatibility and primary documentation](docs/compatibility.md)
 - [Workflow scenarios](docs/workflows.md)
+- [Local workflow workbench](docs/workflow-workbench.md)
 - [Contributing](CONTRIBUTING.md)
 
 ```sh

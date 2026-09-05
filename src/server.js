@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   readConfigSnapshot,
@@ -21,6 +22,17 @@ import { createTaskController } from './runtime/task-controller.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
 import { createAcceptanceVerifier } from './acceptance/service.js';
 import { listTasks } from './task-state/service.js';
+import {
+  addProjectMemory,
+  deleteProjectMemory,
+  exportProjectMemory,
+  inspectProjectMemory,
+  listProjectMemory,
+  recoverProjectContext,
+  searchProjectMemory,
+  updateProjectMemory,
+} from './project-memory/service.js';
+import { providerById } from './providers/registry.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 export const LOCAL_API_VERSION = 1;
@@ -58,14 +70,18 @@ function authenticated(req, token) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-async function listTasksForConsole(root, taskController) {
+async function listTasksForConsole(root, taskController, { limit, offset } = {}) {
   try {
     const listed = await listTasks(root);
-    const inspected = await Promise.all(
-      listed.tasks.map((task) => taskController.inspect(task.id)),
+    const tasks = listed.tasks.slice(
+      offset ?? 0,
+      limit === undefined ? undefined : (offset ?? 0) + limit,
     );
+    const inspected = await Promise.all(tasks.map((task) => taskController.inspect(task.id)));
     return {
       ...listed,
+      total: listed.tasks.length,
+      ...(limit === undefined ? {} : { limit, offset }),
       tasks: inspected.map((item) => ({
         ...item.task,
         reconciliation: item.reconciliation,
@@ -75,6 +91,86 @@ async function listTasksForConsole(root, taskController) {
     if (error.code !== 'TASK_STATE_NOT_FOUND') throw error;
     return { schemaVersion: 1, revision: 0, tasks: [] };
   }
+}
+
+function boundedNumber(value, { fallback, minimum, maximum }) {
+  if (value === null) return fallback;
+  if (!/^\d+$/.test(value)) throw fail(400, 'Pagination values must be whole numbers.');
+  const number = Number(value);
+  if (number < minimum || number > maximum)
+    throw fail(400, `Pagination values must be between ${minimum} and ${maximum}.`);
+  return number;
+}
+
+async function memoryPage(root, requestUrl) {
+  const limit = boundedNumber(requestUrl.searchParams.get('limit'), {
+    fallback: 25,
+    minimum: 1,
+    maximum: 100,
+  });
+  const offset = boundedNumber(requestUrl.searchParams.get('offset'), {
+    fallback: 0,
+    minimum: 0,
+    maximum: 10_000,
+  });
+  const query = requestUrl.searchParams.get('query') ?? '';
+  const results = query
+    ? await searchProjectMemory(root, query, { limit: 100 })
+    : (await listProjectMemory(root)).memories.map((memory) => ({ memory, score: null }));
+  const listed = await listProjectMemory(root);
+  return {
+    project: listed.project,
+    revision: listed.revision,
+    query,
+    limit,
+    offset,
+    total: results.length,
+    memories: results.slice(offset, offset + limit),
+  };
+}
+
+function taskPageOptions(requestUrl) {
+  return {
+    limit: boundedNumber(requestUrl.searchParams.get('taskLimit'), {
+      fallback: 25,
+      minimum: 1,
+      maximum: 100,
+    }),
+    offset: boundedNumber(requestUrl.searchParams.get('taskOffset'), {
+      fallback: 0,
+      minimum: 0,
+      maximum: 10_000,
+    }),
+  };
+}
+
+async function readKnownArtifact(root, taskController, taskId, evidenceId) {
+  const inspected = await taskController.inspect(taskId);
+  const evidence = inspected.task.evidence.find((item) => item.id === evidenceId);
+  if (!evidence) throw fail(404, 'Evidence does not belong to this task.');
+  let location;
+  try {
+    location = JSON.parse(evidence.artifact ?? '{}').location;
+  } catch {
+    throw fail(404, 'Evidence has no readable artifact.');
+  }
+  if (
+    typeof location !== 'string' ||
+    !/^\.latchkit\/tasks\/acceptance-evidence\/task_[0-9a-f-]+\/[a-z0-9_-]+\/[^/]+\.json$/i.test(
+      location,
+    )
+  )
+    throw fail(404, 'Evidence has no readable artifact.');
+  const target = path.resolve(root, ...location.split('/'));
+  const artifactRoot = path.resolve(root, '.latchkit', 'tasks', 'acceptance-evidence');
+  if (!target.startsWith(`${artifactRoot}${path.sep}`))
+    throw fail(404, 'Artifact is outside project state.');
+  const raw = await readFile(target, 'utf8').catch((error) => {
+    if (error.code === 'ENOENT') throw fail(404, 'Artifact is no longer available.');
+    throw error;
+  });
+  if (Buffer.byteLength(raw) > 256 * 1024) throw fail(413, 'Artifact exceeds the console limit.');
+  return { taskId, evidenceId, location, artifact: JSON.parse(raw) };
 }
 
 async function readJson(req) {
@@ -200,6 +296,55 @@ export async function startServer(root, { port = 0 } = {}) {
           respond(res, 200, await serialize(() => exportSupportBundle(root)));
         } else if (pathname === '/api/diagnostics' && req.method === 'DELETE') {
           respond(res, 200, await serialize(() => clearDiagnostics(root)));
+        } else if (pathname === '/api/workbench' && req.method === 'GET') {
+          await pendingMutation;
+          const [tasks, memory] = await Promise.all([
+            listTasksForConsole(root, taskController, taskPageOptions(requestUrl)),
+            memoryPage(root, requestUrl),
+          ]);
+          respond(res, 200, { revision: `${tasks.revision}:${memory.revision}`, tasks, memory });
+        } else if (pathname === '/api/memory' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await memoryPage(root, requestUrl));
+        } else if (pathname === '/api/memory' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => addProjectMemory(root, body)));
+        } else if (pathname === '/api/memory/export' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await exportProjectMemory(root));
+        } else if (pathname === '/api/memory/recover' && req.method === 'POST') {
+          const body = await readJson(req);
+          const provider = providerById(body.providerId);
+          const config = await readConfigSnapshot(root);
+          if (!provider || !config.config.providers.includes(body.providerId))
+            throw fail(400, 'Select a configured provider for context recovery.');
+          respond(
+            res,
+            200,
+            await recoverProjectContext(root, {
+              query: body.query ?? '',
+              budget: body.budget ?? 4000,
+              provider,
+            }),
+          );
+        } else if (/^\/api\/memory\/memory_[0-9a-f-]+$/i.test(pathname)) {
+          const id = pathname.slice('/api/memory/'.length);
+          if (req.method === 'GET') {
+            await pendingMutation;
+            respond(res, 200, await inspectProjectMemory(root, id));
+          } else if (req.method === 'PUT') {
+            const body = await readJson(req);
+            respond(res, 200, await serialize(() => updateProjectMemory(root, id, body)));
+          } else if (req.method === 'DELETE') {
+            const body = await readJson(req);
+            respond(res, 200, await serialize(() => deleteProjectMemory(root, id, body)));
+          } else throw fail(405, 'Method not allowed.');
+        } else if (pathname === '/api/tasks/artifact' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('taskId');
+          const evidenceId = requestUrl.searchParams.get('evidenceId');
+          if (!taskId || !evidenceId) throw fail(400, 'Task and evidence IDs are required.');
+          respond(res, 200, await readKnownArtifact(root, taskController, taskId, evidenceId));
         } else if (pathname === '/api/tasks' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('task');

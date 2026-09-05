@@ -160,10 +160,72 @@
             </div>
           </div>
         </section>
+        <section id="workbench" class="config-section" aria-labelledby="tasks-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">04 / WORKFLOW WORKBENCH</p>
+              <h2 id="tasks-heading">Tasks, recovery, and proof.</h2>
+              <p>
+                Persisted local state is authoritative. Provider actions remain explicit and
+                bounded.
+              </p>
+            </div>
+            <button id="refresh-workbench" class="button button-secondary">Refresh state</button>
+          </div>
+          <p id="workbench-status" class="section-note" aria-live="polite">Loading task state…</p>
+          <div id="task-list" class="task-list" aria-live="polite"></div>
+          <p class="section-note">
+            Starting or resuming a provider session requires explicit host-local authorization and
+            is intentionally available through the CLI/API only. Cancellation never grants provider
+            permissions.
+          </p>
+        </section>
+        <section id="memory" class="config-section" aria-labelledby="memory-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">05 / PROJECT MEMORY</p>
+              <h2 id="memory-heading">Keep only what helps recovery.</h2>
+              <p>Inspectable, local records. No transcripts are imported automatically.</p>
+            </div>
+            <button id="export-memory" class="button button-secondary">Export local memory</button>
+          </div>
+          <form id="memory-form" class="memory-form">
+            <label>Title <input id="memory-title" name="title" required maxlength="16384" /></label>
+            <label
+              >Kind
+              <select id="memory-kind" name="kind">
+                <option value="discovery">Discovery</option>
+                <option value="decision">Decision</option>
+                <option value="constraint">Constraint</option>
+                <option value="resolved-defect">Resolved defect</option>
+              </select></label
+            >
+            <label class="memory-text-label"
+              >Record <textarea id="memory-text" name="text" required maxlength="16384"></textarea>
+            </label>
+            <button class="button button-primary" type="submit">Add memory</button>
+          </form>
+          <div class="memory-controls">
+            <label for="memory-query">Search local memory</label
+            ><input id="memory-query" type="search" />
+            <button id="search-memory" class="button button-secondary" type="button">Search</button>
+            <label for="recovery-provider">Recovery provider</label
+            ><select id="recovery-provider"></select>
+            <button id="recover-memory" class="button button-secondary" type="button">
+              Build bounded context
+            </button>
+          </div>
+          <div id="memory-list" class="memory-list" aria-live="polite"></div>
+          <pre
+            id="recovery-context"
+            class="recovery-context hidden"
+            aria-label="Bounded historical context"
+          ></pre>
+        </section>
         <section class="config-section" aria-labelledby="evidence-heading">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">04 / ACCEPTANCE EVIDENCE</p>
+              <p class="eyebrow">06 / ACCEPTANCE EVIDENCE</p>
               <h2 id="evidence-heading">What the product proved.</h2>
               <p>
                 Current task criteria and bounded runtime evidence from CLI, HTTP, and browser
