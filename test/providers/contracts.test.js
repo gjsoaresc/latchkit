@@ -67,7 +67,7 @@ test('registry preserves existing provider fields and reports only evidenced sup
     assert.equal(provider.capabilities.skills.state, 'supported');
     assert.equal(
       provider.capabilities.invocation.state,
-      provider.id === 'cursor-cli' ? 'supported' : 'unknown',
+      ['claude', 'cursor-cli'].includes(provider.id) ? 'supported' : 'unknown',
     );
     assert.equal(provider.verification.endToEnd, 'unverified');
   }

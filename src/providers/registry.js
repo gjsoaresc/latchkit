@@ -1,5 +1,6 @@
 import { PROVIDER_CONTRACT_VERSION, validateProviderContract } from './contracts.js';
 import { CURSOR_CLI_PROVIDER } from './cursor-cli.js';
+import { CLAUDE_CONTRACT } from './claude.js';
 
 const unknown = (reason) => ({ state: 'unknown', reason, versionRange: '*', evidenceUrl: '' });
 const supported = (evidenceUrl) => ({
@@ -38,6 +39,7 @@ const definitions = [
 
 export const PROVIDERS = Object.freeze(
   definitions.map(([id, label, command, skillDirectory, evidenceUrl]) => {
+    if (id === 'claude') return CLAUDE_CONTRACT;
     if (id === 'cursor-cli') return validateProviderContract(CURSOR_CLI_PROVIDER);
     return validateProviderContract({
       schemaVersion: PROVIDER_CONTRACT_VERSION,

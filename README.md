@@ -18,7 +18,7 @@ Open-source skills and a local configuration console for the coding tools you al
 
 Latchkit gives your coding agents a shared set of development workflows, with a browser console to configure them. It runs locally, uses your existing provider accounts, and keeps its configuration in your project.
 
-**This is an early working foundation, not full Pilot Shell feature parity.** Skill installation and configuration work today. The skills provide instructions; lifecycle hooks, enforced quality gates, persistent memory services, and session orchestration are planned.
+**This is an early working foundation, not full Pilot Shell feature parity.** Skill installation and configuration work today. Claude Code has a version-aware, project-local hook adapter; enforced quality gates, persistent memory services, and session orchestration remain outside this release.
 
 ## Try it
 
@@ -53,7 +53,7 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 | Host diagnostics      | Detects native vs WSL and executables on PATH                      |
 | Cross-platform checks | Node 22/24 CI on Windows, Linux, and macOS                         |
 
-`doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates Latchkit's runtime and filesystem behavior; real provider sessions and a dedicated WSL test matrix remain on the [roadmap](docs/roadmap.md).
+`doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates Latchkit's runtime and filesystem behavior; real provider sessions and a dedicated WSL test matrix remain on the [roadmap](docs/roadmap.md). See the [Claude adapter notes](docs/providers/claude.md) for hook activation and capability limitations.
 
 ## Use the skills
 
