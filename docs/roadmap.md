@@ -1,6 +1,6 @@
 # Roadmap
 
-Latchkit aims to provide a shared engineering workflow over Claude Code, Gemini CLI, Codex, Cursor IDE, and Cursor CLI on native Windows, optional WSL, Linux, and macOS, with an accessible configuration frontend. This is a staged implementation, not a claim of full Pilot Shell parity.
+Latchkit aims to provide a shared engineering workflow over Claude Code, Antigravity CLI, Codex, Cursor IDE, and Cursor CLI on native Windows, optional WSL, Linux, and macOS, with an accessible configuration frontend. This is a staged implementation, not a claim of full Pilot Shell parity.
 
 ## Initial foundation
 
@@ -26,7 +26,7 @@ Repository tests and platform CI validate the implementation as those checks run
 
 The baseline was checked on September 5, 2026. Pilot Shell's latest release was **v10.12.3**, published September 4, 2026. The release adjusts nonessential hooks to remain private and nonblocking. [Release](https://github.com/maxritter/pilot-shell/releases/tag/v10.12.3)
 
-Pilot advertises macOS, Linux and Windows through WSL2, with Claude Code and Codex support. Its capabilities include structured specification/build/fix/requirements workflows, persistent context, quality checks, reviews, professional tooling and runtime verification. Native Windows and Gemini/Cursor integration are additional Latchkit goals. [Official README](https://github.com/maxritter/pilot-shell)
+Pilot advertises macOS, Linux and Windows through WSL2, with Claude Code and Codex support. Its capabilities include structured specification/build/fix/requirements workflows, persistent context, quality checks, reviews, professional tooling and runtime verification. Native Windows and Antigravity/Cursor integration are additional Latchkit goals. [Official README](https://github.com/maxritter/pilot-shell)
 
 Its lifecycle integrations cover session context, compaction recovery, memory capture and workflow completion rules. Its local Console provides sessions, memory, workflow artifacts, diff annotations, usage and settings. Those capabilities require runtime components beyond a skill pack. [Hooks](https://pilot-shell.com/docs/features/hooks), [Console](https://pilot-shell.com/docs/features/console)
 

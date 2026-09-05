@@ -1,4 +1,3 @@
-import path from 'node:path';
 import { renderClaudeRule, renderCursorRule, renderScopeInstructions } from './render.js';
 
 const slug = (scopePath) =>
@@ -9,13 +8,6 @@ const slug = (scopePath) =>
     .replace(/^-+|-+$/g, '') || 'root';
 
 const scopedPath = (scopePath, filename) => (scopePath ? `${scopePath}/${filename}` : filename);
-
-function relativeImport(fromScope, target) {
-  const from = fromScope || '.';
-  let relative = path.posix.relative(from, target);
-  if (!relative.startsWith('.')) relative = `./${relative}`;
-  return relative;
-}
 
 export function planProviderExports(model, providerIds) {
   const providers = new Set(providerIds);
@@ -34,7 +26,6 @@ export function planProviderExports(model, providerIds) {
   };
   const hasCodex = providers.has('codex');
   const hasClaude = providers.has('claude');
-  const hasGemini = providers.has('gemini');
   const hasCursor = providers.has('cursor') || providers.has('cursor-cli');
 
   for (const scope of model.scopes) {
@@ -63,19 +54,6 @@ export function planProviderExports(model, providerIds) {
       }
     }
 
-    if (hasGemini) {
-      if (hasCodex) {
-        desiredSections.set(scopedPath(scope.path, 'GEMINI.md'), `@AGENTS.md\n`);
-      } else {
-        const canonical = `.latchkit/rules/${scopeSlug}.md`;
-        putFile(canonical, rendered, scope.path);
-        desiredSections.set(
-          scopedPath(scope.path, 'GEMINI.md'),
-          `@${relativeImport(scope.path, canonical)}\n`,
-        );
-      }
-    }
-
     if (hasCursor && !hasCodex)
       putFile(
         `.cursor/rules/latchkit-${scopeSlug}.mdc`,
@@ -96,12 +74,6 @@ export function planProviderExports(model, providerIds) {
       code: 'CLAUDE_AGENTS_IMPORT',
       providers: ['claude', 'codex'],
       reason: 'Claude imports the shared AGENTS.md content explicitly at each selected scope.',
-    });
-  if (hasGemini && hasCodex)
-    warnings.push({
-      code: 'GEMINI_AGENTS_IMPORT',
-      providers: ['gemini', 'codex'],
-      reason: 'Gemini imports the shared AGENTS.md content explicitly at each selected scope.',
     });
   return { desiredFiles, desiredSections, warnings };
 }

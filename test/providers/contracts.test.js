@@ -60,14 +60,14 @@ const event = (overrides = {}) => ({
 test('registry preserves existing provider fields and reports only evidenced support', () => {
   assert.deepEqual(
     PROVIDERS.map((provider) => provider.id),
-    ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'],
+    ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli'],
   );
   for (const provider of PROVIDERS) {
     assert.equal(provider.schemaVersion, 1);
     assert.equal(provider.capabilities.skills.state, 'supported');
     assert.equal(
       provider.capabilities.invocation.state,
-      ['claude', 'cursor-cli'].includes(provider.id)
+      ['claude', 'cursor-cli', 'antigravity'].includes(provider.id)
         ? 'supported'
         : provider.id === 'cursor'
           ? 'unsupported'

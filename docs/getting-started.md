@@ -6,7 +6,7 @@ This guide uses the released package and a disposable project. Latchkit is a loc
 
 - Node.js 22 or newer (`node --version`).
 - Git for Git projects and optional isolated-workspace commands.
-- One separately installed and authenticated provider: [Claude Code](providers/claude.md), [Codex](codex.md), [Gemini CLI](https://geminicli.com/docs/get-started/installation/), [Cursor IDE](providers/cursor-ide.md), or [Cursor CLI](cursor-cli.md).
+- One separately installed and authenticated provider: [Claude Code](providers/claude.md), [Codex](codex.md), [Antigravity CLI](https://antigravity.google/docs/cli/overview), [Cursor IDE](providers/cursor-ide.md), or [Cursor CLI](cursor-cli.md).
 
 Latchkit itself has no runtime package dependencies. Native Windows, Linux, and macOS are supported runtime targets. WSL is optional: install Node.js and the provider inside the WSL distribution when using WSL. A native Windows executable is not evidence that the WSL executable is installed.
 
@@ -62,4 +62,4 @@ Confirm that the generated skill is removed while `.latchkit/config.json`, custo
 
 ## Supported surfaces at a glance
 
-Provider selection chooses an installation destination, not an access or privacy boundary. Claude uses `.claude/skills/`; Codex, Gemini, and Cursor use the shared `.agents/skills/` root. Cursor may discover compatible files from other roots according to Cursor's own rules. Read [compatibility](compatibility.md) before selecting more than one provider.
+Provider selection chooses an installation destination, not an access or privacy boundary. Claude uses `.claude/skills/`; Codex, Antigravity, and Cursor use the shared `.agents/skills/` root. Cursor may discover compatible files from other roots according to Cursor's own rules. Read [compatibility](compatibility.md) before selecting more than one provider.

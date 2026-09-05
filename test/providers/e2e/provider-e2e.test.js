@@ -7,7 +7,7 @@ import { runVerification, writeEvidence } from '../../../scripts/provider-e2e.js
 import { initProject, removeProjectSkills, syncProject } from '../../../src/core.js';
 
 test('offline evidence validates every adapter without credentials or provider execution', async () => {
-  for (const providerId of ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli']) {
+  for (const providerId of ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli']) {
     const record = await runVerification({ providerId });
     assert.equal(record.mode, 'fixture');
     assert.equal(record.artifacts.transcriptStored, false);

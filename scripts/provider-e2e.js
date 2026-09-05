@@ -15,15 +15,21 @@ import { CLAUDE_ADAPTER } from '../src/providers/claude.js';
 import { codexAdapter } from '../src/providers/codex.js';
 import { cursorCliAdapter } from '../src/providers/cursor-cli.js';
 import { cursorIdeAdapter } from '../src/providers/cursor-ide.js';
-import { createGeminiAdapter } from '../src/providers/gemini.js';
+import { ANTIGRAVITY_ADAPTER } from '../src/providers/antigravity.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../src/runtime/process-runner.js';
 
 export const EVIDENCE_SCHEMA_VERSION = 1;
-export const PROVIDER_IDS = Object.freeze(['claude', 'codex', 'gemini', 'cursor', 'cursor-cli']);
+export const PROVIDER_IDS = Object.freeze([
+  'claude',
+  'codex',
+  'antigravity',
+  'cursor',
+  'cursor-cli',
+]);
 const adapters = new Map([
   ['claude', CLAUDE_ADAPTER],
   ['codex', codexAdapter],
-  ['gemini', createGeminiAdapter()],
+  ['antigravity', ANTIGRAVITY_ADAPTER],
   ['cursor', cursorIdeAdapter],
   ['cursor-cli', cursorCliAdapter],
 ]);

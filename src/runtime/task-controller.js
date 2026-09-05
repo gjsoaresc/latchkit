@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { validateCommandPlan, validateLifecycleEnvelope } from '../providers/contracts.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
 import { codexAdapter } from '../providers/codex.js';
-import { createGeminiAdapter } from '../providers/gemini.js';
+import { ANTIGRAVITY_ADAPTER } from '../providers/antigravity.js';
 import { cursorIdeAdapter } from '../providers/cursor-ide.js';
 import { cursorCliAdapter } from '../providers/cursor-cli.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from './process-runner.js';
@@ -24,7 +24,7 @@ const ACTIVE = new Map();
 const ADAPTERS = new Map([
   ['claude', CLAUDE_ADAPTER],
   ['codex', codexAdapter],
-  ['gemini', createGeminiAdapter()],
+  ['antigravity', ANTIGRAVITY_ADAPTER],
   ['cursor', cursorIdeAdapter],
   ['cursor-cli', cursorCliAdapter],
 ]);
@@ -134,7 +134,7 @@ function providerSessionIdentity(providerId, result) {
     );
     return completed?.session_id ?? null;
   }
-  if (providerId === 'gemini' || providerId === 'cursor-cli') {
+  if (providerId === 'antigravity' || providerId === 'cursor-cli') {
     const correlated = records.find((record) => typeof record.session_id === 'string');
     return correlated?.session_id ?? null;
   }

@@ -10,7 +10,7 @@ Open-source skills and a local configuration console for the coding tools you al
 [![License: MIT](https://img.shields.io/badge/license-MIT-17806D.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-E3A14B.svg)](docs/roadmap.md)
 
-**Claude Code · Codex · Gemini CLI · Cursor · Cursor CLI**
+**Claude Code · Codex · Antigravity CLI · Cursor · Cursor CLI**
 
 **Windows native · Windows with WSL · Linux · macOS**
 
@@ -77,9 +77,9 @@ After syncing, restart your coding agent or reload its skills. Ask it to use:
 - `latchkit-handoff` to write a durable session handoff.
 - `latchkit-setup` to prepare scoped provider guidance and preview conflicts.
 
-Claude Code and Cursor expose slash invocation; Codex supports `$latchkit-spec` and the other skill names. Gemini discovers skills by description and manages activation through its skill system. See the current [provider notes](docs/compatibility.md).
+Claude Code and Cursor expose slash invocation; Codex supports `$latchkit-spec` and the other skill names. Antigravity uses its documented print-mode prompt flow. See the current [provider notes](docs/compatibility.md).
 
-Claude receives `.claude/skills/latchkit-*/SKILL.md`. Codex, Gemini and Cursor share `.agents/skills/latchkit-*/SKILL.md`. Provider selection chooses install destinations; it does not prevent another compatible tool from discovering those files.
+Claude receives `.claude/skills/latchkit-*/SKILL.md`. Codex, Antigravity and Cursor share `.agents/skills/latchkit-*/SKILL.md`. Provider selection chooses install destinations; it does not prevent another compatible tool from discovering those files.
 
 ```sh
 latchkit doctor

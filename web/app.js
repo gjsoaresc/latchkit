@@ -16,7 +16,13 @@ let configRevision;
 let busy = false;
 let plan;
 const API_VERSION = 1;
-const providerInitials = { claude: 'C', codex: 'O', gemini: 'G', cursor: '↗', 'cursor-cli': '>_' };
+const providerInitials = {
+  claude: 'C',
+  codex: 'O',
+  antigravity: 'A',
+  cursor: '↗',
+  'cursor-cli': '>_',
+};
 const skillIcons = { spec: '◇', fix: '⌁', review: '◎', handoff: '⇢' };
 
 function el(tag, className, content) {

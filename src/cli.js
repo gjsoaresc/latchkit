@@ -71,7 +71,7 @@ Usage: latchkit <command> [options]
 
 Options:
   --project <path>    Project directory (default: current directory)
-  --providers <csv>   init: claude,codex,gemini,cursor,cursor-cli
+  --providers <csv>   init: claude,codex,antigravity,cursor,cursor-cli
   --skills <csv>      init: requirements,spec,build,fix,review,handoff,setup
   --port <number>     ui: local port (default: automatically selected)
   --to <version>      migrate: target schema version (default: current)

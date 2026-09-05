@@ -113,20 +113,19 @@ test('provider exports deduplicate shared AGENTS guidance and expose exact previ
   const exports = await buildProjectRuleExports(root, [
     'claude',
     'codex',
-    'gemini',
+    'antigravity',
     'cursor',
     'cursor-cli',
   ]);
   assert.ok(exports.desiredSections.has('AGENTS.md'));
   assert.equal(exports.desiredSections.get('CLAUDE.md'), '@AGENTS.md\n');
-  assert.equal(exports.desiredSections.get('GEMINI.md'), '@AGENTS.md\n');
   assert.equal(exports.desiredFiles.size, 0);
   assert.ok(exports.warnings.some((warning) => warning.code === 'SHARED_AGENTS_VISIBILITY'));
 
   await fs.writeFile(path.join(root, 'AGENTS.md'), '# Human rules\r\n\r\nKeep this.\r\n');
   await fs.writeFile(path.join(root, 'CLAUDE.md'), '# Claude local\n');
   await initProject(root, {
-    providers: ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'],
+    providers: ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli'],
     skills: [],
   });
   const before = await fs.readFile(path.join(root, 'AGENTS.md'));

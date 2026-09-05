@@ -10,7 +10,7 @@
     "providers": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["claude", "codex", "gemini", "cursor", "cursor-cli"] }
+      "items": { "enum": ["claude", "codex", "antigravity", "cursor", "cursor-cli"] }
     },
     "skills": {
       "type": "array",
@@ -23,7 +23,7 @@
       "properties": {
         "claude": { "$ref": "#/$defs/settings" },
         "codex": { "$ref": "#/$defs/settings" },
-        "gemini": { "$ref": "#/$defs/settings" },
+        "antigravity": { "$ref": "#/$defs/settings" },
         "cursor": { "$ref": "#/$defs/settings" },
         "cursor-cli": { "$ref": "#/$defs/settings" }
       }

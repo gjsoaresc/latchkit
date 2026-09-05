@@ -12,7 +12,7 @@ Latchkit does not run package scripts, load repository modules, invoke a package
 
 - Codex uses managed sections in `AGENTS.md` at each discovered scope. Root-to-working-directory precedence still applies. A same-directory `AGENTS.override.md` can shadow the export, so preview reports it.
 - Claude uses separately owned `.claude/rules/latchkit-*.md` files. When Codex is also selected, a narrow `@AGENTS.md` section in the corresponding `CLAUDE.md` avoids duplicating the instruction body.
-- Gemini uses a narrow import in the corresponding `GEMINI.md`. It imports `AGENTS.md` when Codex is selected or a separately owned `.latchkit/rules/*.md` file otherwise. A user's customized Gemini context filename can prevent the default file from loading; Latchkit does not rewrite Gemini settings.
+- Antigravity consumes the shared `.agents/skills/` export; Latchkit does not rewrite Antigravity settings or permissions.
 - Cursor uses separately owned `.cursor/rules/latchkit-*.mdc` files with `description`, `globs`, and `alwaysApply: false`. When Codex is selected, Cursor can already discover the `AGENTS.md` hierarchy, so Latchkit reports that shared visibility and omits the duplicate `.mdc` export.
 
 Provider selection controls what Latchkit writes, not what another compatible tool can see. Scoped discovery also differs among providers; preview warnings describe known sharing or shadowing instead of claiming isolation.
