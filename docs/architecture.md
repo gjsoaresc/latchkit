@@ -23,7 +23,7 @@ Project configuration and the ownership manifest are independently versioned con
 
 ## Skill synchronization
 
-The configuration uses the skill IDs `spec`, `fix`, `review`, and `handoff`. They map to the folders `latchkit-spec`, `latchkit-fix`, `latchkit-review`, and `latchkit-handoff`.
+The configuration uses the stable skill IDs `requirements`, `spec`, `build`, `fix`, `review`, `handoff`, and `setup`. They map to folders with the corresponding `latchkit-` prefix. The original four IDs remain valid in every supported configuration version; adding the three workflow IDs requires no migration.
 
 | Selected provider | Destination relative to the target project |
 | ----------------- | ------------------------------------------ |
@@ -63,7 +63,7 @@ Cancellation retains the worktree and reports a recovery command, including stag
 
 ## Skill packs
 
-Configuration v3 selects explicit packs. The bundled `latchkit-core@1.0.0` pack remains the default and maps the existing four skill IDs to their existing names. A local pack is a directory containing `latchkit-pack.json` and declared regular files under `skills/<portable-name>/SKILL.md`. Its manifest declares an ID, semantic version, provenance, supported configuration schema versions and provider IDs, plus SHA-256 checksums. Checksums establish copied-byte integrity; they do not establish publisher trust. Local paths are an explicit user trust decision and are never fetched or executed.
+Configuration v3 selects explicit packs. The bundled `latchkit-core@1.0.0` pack remains the default and includes seven original workflow skills. A local pack is a directory containing `latchkit-pack.json` and declared regular files under `skills/<portable-name>/SKILL.md`. Its manifest declares an ID, semantic version, provenance, supported configuration schema versions and provider IDs, plus SHA-256 checksums. Checksums establish copied-byte integrity; they do not establish publisher trust. Local paths are an explicit user trust decision and are never fetched or executed.
 
 Pins are declarative: Latchkit never searches for or automatically changes a version. To upgrade or roll back, change the selected pack version and source manifest deliberately, review `sync --dry-run`, then sync. The transaction contains both versions' bytes, so an interrupted change recovers through the same journal. An edited managed destination blocks either direction and is preserved for manual resolution. Pack IDs may coexist, but two packs may not claim the same provider destination. Traversal, absolute paths, linked files, case-ambiguous names, Unicode non-NFC paths, and Windows reserved names are refused.
 

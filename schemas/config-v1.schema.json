@@ -15,7 +15,7 @@
     "skills": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "enum": ["spec", "fix", "review", "handoff"] }
+      "items": { "enum": ["requirements", "spec", "build", "fix", "review", "handoff", "setup"] }
     }
   }
 }

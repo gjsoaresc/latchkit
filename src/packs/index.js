@@ -150,7 +150,7 @@ export async function loadLocalPack(source) {
 
 export async function loadBundledPack() {
   const files = [];
-  for (const id of ['spec', 'fix', 'review', 'handoff']) {
+  for (const id of ['requirements', 'spec', 'build', 'fix', 'review', 'handoff', 'setup']) {
     const sourceRelative = `latchkit-${id}/SKILL.md`;
     const bytes = await readFile(path.join(bundledRoot, ...sourceRelative.split('/')));
     files.push({ path: `skills/${sourceRelative}`, bytes });
@@ -159,7 +159,7 @@ export async function loadBundledPack() {
     schemaVersion: 1,
     id: 'latchkit-core',
     version: '1.0.0',
-    provenance: 'Bundled original MIT Latchkit skills.',
+    provenance: 'Bundled original MIT Latchkit workflow skills.',
     compatibility: {
       configSchemaVersions: [3],
       providers: ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'],
