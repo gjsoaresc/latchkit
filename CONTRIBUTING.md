@@ -2,7 +2,7 @@
 
 Start with the [roadmap](docs/roadmap.md) and open an issue for substantial changes. Small bug fixes and documentation improvements can go directly to a pull request. Before coding, inspect the current main branch, read the issue and its dependencies, and confirm that the requested change is bounded. Do not treat a skill, issue, or agent instruction as permission to merge, publish, deploy, or spend on provider sessions.
 
-Use Node.js 22 or newer. From PowerShell or a POSIX shell, run `npm ci`, `npm run check`, and `npm test`. The console is plain HTML/CSS/JavaScript served by Node; no build step is needed. `npm start` opens a local server and prints its browser URL. `npm run format` applies the deterministic formatter; `npm run lint` and `npm run check:skills` run the focused static checks.
+Use Node.js 22 or newer. From PowerShell or a POSIX shell, run `npm ci`, `npm run check`, and `npm test`. The console is plain HTML/CSS/JavaScript served by Node; no build step is needed. `npm start` opens a local server and prints its browser URL. `npm run format` applies the deterministic formatter; `npm run lint` and `npm run check:skills` run the focused static checks. Run the API-backed console workflows with `npm run test:browser -- --project=chromium` after installing the matching Playwright browser. CI additionally runs Firefox and WebKit on Ubuntu and native Windows Chromium; unsupported local browser launchers should be reported as runner limitations.
 
 ## Issue-to-PR workflow
 
