@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/diff-annotations-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "revision", "annotations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "taskId",
+          "path",
+          "fileDigest",
+          "side",
+          "line",
+          "body",
+          "authorKind",
+          "status",
+          "revision",
+          "createdAt",
+          "updatedAt",
+          "resolution"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^annotation_" },
+          "taskId": { "type": "string", "pattern": "^task_" },
+          "path": { "type": "string" },
+          "fileDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "side": { "enum": ["left", "right"] },
+          "line": { "type": "integer", "minimum": 1 },
+          "body": { "type": "string", "maxLength": 8000 },
+          "authorKind": { "enum": ["user", "agent"] },
+          "status": { "enum": ["open", "resolved", "stale"] },
+          "revision": { "type": "string" },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" },
+          "resolution": { "type": ["object", "null"] }
+        }
+      }
+    }
+  }
+}

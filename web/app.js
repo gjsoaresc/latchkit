@@ -346,6 +346,126 @@ function renderTasks(tasks = []) {
       criteria.append(el('li', '', `${criterion.description} — ${evidence?.outcome ?? 'missing'}`));
     }
     detail.append(el('strong', '', 'Acceptance criteria'), criteria);
+    const review = el('section', 'task-review');
+    review.append(el('strong', '', 'Revision-bound review feedback'));
+    const annotationForm = el('form', 'annotation-form');
+    const annotationPath = el('input');
+    annotationPath.required = true;
+    annotationPath.placeholder = 'Task-worktree path';
+    annotationPath.setAttribute('aria-label', 'Review feedback file path');
+    const annotationLine = el('input');
+    annotationLine.required = true;
+    annotationLine.type = 'number';
+    annotationLine.min = '1';
+    annotationLine.value = '1';
+    annotationLine.setAttribute('aria-label', 'Review feedback line number');
+    const annotationBody = el('input');
+    annotationBody.required = true;
+    annotationBody.placeholder = 'Untrusted review feedback';
+    annotationBody.setAttribute('aria-label', 'Review feedback text');
+    const annotate = el('button', 'button button-secondary', 'Add feedback');
+    annotate.type = 'submit';
+    annotationForm.append(annotationPath, annotationLine, annotationBody, annotate);
+    const feedback = el(
+      'div',
+      'annotation-list',
+      'Load feedback to inspect the current diff revision.',
+    );
+    const loadFeedback = el('button', 'button button-secondary', 'Load review feedback');
+    loadFeedback.type = 'button';
+    loadFeedback.addEventListener('click', () =>
+      action(async () => {
+        const data = await api(`annotations?taskId=${encodeURIComponent(task.id)}`);
+        feedback.replaceChildren();
+        if (!data.annotations.length)
+          feedback.append(el('p', 'section-note', 'No review feedback is recorded.'));
+        for (const annotation of data.annotations) {
+          const row = el('article', `annotation annotation-${annotation.status}`);
+          row.append(
+            el('code', '', `${annotation.path}:${annotation.line} (${annotation.side})`),
+            el('p', '', annotation.body),
+            el(
+              'span',
+              'section-note',
+              annotation.stale ? 'Stale: the reviewed revision changed.' : annotation.status,
+            ),
+          );
+          if (annotation.status === 'open') {
+            const evidence = el('input', 'annotation-evidence');
+            evidence.type = 'text';
+            evidence.placeholder = 'Current task evidence ID required to resolve';
+            evidence.setAttribute('aria-label', 'Evidence ID proving this feedback was resolved');
+            const resolve = el(
+              'button',
+              'button button-secondary',
+              'Resolve with current revision',
+            );
+            resolve.type = 'button';
+            resolve.addEventListener('click', () =>
+              action(async () => {
+                await api('annotations/action', {
+                  method: 'POST',
+                  body: {
+                    taskId: task.id,
+                    annotationId: annotation.id,
+                    action: 'resolve',
+                    expectedStoreRevision: data.revision,
+                    evidenceRevision: data.currentRevision,
+                    evidenceId: evidence.value.trim(),
+                  },
+                });
+                loadFeedback.click();
+              }),
+            );
+            row.append(evidence, resolve);
+          } else if (annotation.status === 'resolved') {
+            const reopen = el('button', 'button button-secondary', 'Reopen');
+            reopen.type = 'button';
+            reopen.addEventListener('click', () =>
+              action(async () => {
+                await api('annotations/action', {
+                  method: 'POST',
+                  body: {
+                    taskId: task.id,
+                    annotationId: annotation.id,
+                    action: 'reopen',
+                    expectedStoreRevision: data.revision,
+                  },
+                });
+                loadFeedback.click();
+              }),
+            );
+            row.append(reopen);
+          }
+          feedback.append(row);
+        }
+      }),
+    );
+    annotationForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      action(async () => {
+        const [diff, annotations] = await Promise.all([
+          api(`diff?taskId=${encodeURIComponent(task.id)}`),
+          api(`annotations?taskId=${encodeURIComponent(task.id)}`),
+        ]);
+        await api('annotations', {
+          method: 'POST',
+          body: {
+            taskId: task.id,
+            path: annotationPath.value,
+            side: 'right',
+            line: Number(annotationLine.value),
+            body: annotationBody.value,
+            expectedRevision: diff.revision,
+            expectedStoreRevision: annotations.revision,
+          },
+        });
+        annotationForm.reset();
+        loadFeedback.click();
+      });
+    });
+    review.append(annotationForm, loadFeedback, feedback);
+    detail.append(review);
     if (task.checkpoints?.length) {
       const last = task.checkpoints.at(-1);
       detail.append(el('p', 'section-note', `Latest checkpoint: ${last.summary}`));

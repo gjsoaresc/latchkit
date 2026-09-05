@@ -20,6 +20,13 @@ import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
 import { createTaskController } from './runtime/task-controller.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
+import {
+  createDiffAnnotation,
+  inspectDiff,
+  inspectDiffFile,
+  listDiffAnnotations,
+  updateDiffAnnotation,
+} from './reviews/diff-annotations.js';
 import { createAcceptanceVerifier } from './acceptance/service.js';
 import { listTasks } from './task-state/service.js';
 import {
@@ -373,6 +380,35 @@ export async function startServer(root, { port = 0 } = {}) {
         } else if (pathname === '/api/reviews/cancel' && req.method === 'POST') {
           const body = await readJson(req);
           respond(res, 200, await serialize(() => reviewOrchestrator.cancel(body)));
+        } else if (pathname === '/api/diff' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('taskId');
+          if (!taskId) throw fail(400, 'Task ID is required.');
+          respond(
+            res,
+            200,
+            await inspectDiff(root, {
+              taskId,
+              base: requestUrl.searchParams.get('base') ?? undefined,
+            }),
+          );
+        } else if (pathname === '/api/diff/file' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('taskId');
+          const file = requestUrl.searchParams.get('path');
+          if (!taskId || !file) throw fail(400, 'Task ID and path are required.');
+          respond(res, 200, await inspectDiffFile(root, { taskId, path: file }));
+        } else if (pathname === '/api/annotations' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('taskId');
+          if (!taskId) throw fail(400, 'Task ID is required.');
+          respond(res, 200, await listDiffAnnotations(root, { taskId }));
+        } else if (pathname === '/api/annotations' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => createDiffAnnotation(root, body)));
+        } else if (pathname === '/api/annotations/action' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => updateDiffAnnotation(root, body)));
         } else if (pathname === '/api/acceptance/verify' && req.method === 'POST') {
           const body = await readJson(req);
           respond(
