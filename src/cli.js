@@ -26,6 +26,7 @@ import {
 } from './workspaces/git.js';
 import { createTaskController } from './runtime/task-controller.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
+import { createAcceptanceVerifier } from './acceptance/service.js';
 import {
   addProjectMemory,
   deleteProjectMemory,
@@ -56,6 +57,7 @@ Usage: latchkit <command> [options]
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
   review     Run bounded independent reviews
+  acceptance Run CLI, HTTP, browser, or manual acceptance checks
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   ui         Start the local configuration console (Ctrl+C to stop)
@@ -83,7 +85,7 @@ Options:
   --id <id>           memory: stable memory identifier
   --text <text>       memory: concise memory text or search query
   --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
-  --file <path>       memory import: portable export JSON file
+  --file <path>       memory import or acceptance verify: versioned JSON file
   --budget <n>        memory recover: maximum context characters
   --provider <id>     memory recover: provider contract to evaluate
   --help             Show this help
@@ -136,7 +138,7 @@ try {
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
     const [command, ...extra] = positionals;
-    if (!['task', 'workspace', 'review', 'memory'].includes(command) && extra.length)
+    if (!['task', 'workspace', 'review', 'memory', 'acceptance'].includes(command) && extra.length)
       throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'],
@@ -165,6 +167,7 @@ try {
         'host-local-authorized',
       ],
       review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
+      acceptance: ['project', 'task', 'file', 'host-local-authorized'],
       workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
       memory: [
         'project',
@@ -320,6 +323,27 @@ try {
           executionAuthorized: values['host-local-authorized'] === true,
         }),
       );
+    } else if (command === 'acceptance') {
+      if (extra.length !== 1 || extra[0] !== 'verify')
+        throw new Error('Usage: latchkit acceptance verify [options].');
+      if (!values.task) throw new Error('acceptance requires --task.');
+      const verifier = createAcceptanceVerifier({ root });
+      if (!values.file) throw new Error('acceptance verify requires --file.');
+      const abort = new AbortController();
+      const cancel = () => abort.abort();
+      for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, cancel);
+      try {
+        const result = await verifier.verify({
+          taskId: values.task,
+          document: JSON.parse(await readFile(path.resolve(values.file), 'utf8')),
+          executionAuthorized: values['host-local-authorized'] === true,
+          signal: abort.signal,
+        });
+        print(result);
+        if (result.status !== 'passed') process.exitCode = 1;
+      } finally {
+        for (const signal of ['SIGINT', 'SIGTERM']) process.removeListener(signal, cancel);
+      }
     } else if (command === 'workspace') {
       if (extra.length !== 1 || !['inspect', 'create', 'cancel', 'cleanup'].includes(extra[0])) {
         throw new Error('Usage: latchkit workspace <inspect|create|cancel|cleanup> [options].');

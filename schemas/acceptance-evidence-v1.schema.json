@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/acceptance-evidence-v1.schema.json",
+  "title": "Latchkit acceptance evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "artifactId", "check", "binding", "provenance", "startedAt", "endedAt", "fixture", "fixtureCleanup", "result"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "artifactId": { "type": "string", "pattern": "^acceptance_[0-9a-fA-F-]{36}$" },
+    "check": { "type": "object", "required": ["id", "type", "label"] },
+    "binding": { "type": "object", "required": ["taskId", "runId", "criterionId", "criterionRevision", "source"] },
+    "provenance": { "type": "object" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "fixture": { "type": ["object", "null"] },
+    "fixtureCleanup": { "type": ["object", "null"] },
+    "result": {
+      "type": "object",
+      "required": ["status", "outcome"],
+      "properties": {
+        "status": { "type": "string" },
+        "outcome": { "enum": ["passed", "failed", "timed-out", "cancelled", "unsupported"] }
+      }
+    }
+  }
+}
