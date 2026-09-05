@@ -24,6 +24,7 @@ import {
   inspectWorkspaceCapability,
 } from './workspaces/git.js';
 import { createTaskController } from './runtime/task-controller.js';
+import { createReviewOrchestrator } from './reviews/orchestrator.js';
 import {
   addProjectMemory,
   deleteProjectMemory,
@@ -53,6 +54,7 @@ Usage: latchkit <command> [options]
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
+  review     Run bounded independent reviews
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   ui         Start the local configuration console (Ctrl+C to stop)
@@ -133,7 +135,7 @@ try {
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
     const [command, ...extra] = positionals;
-    if (!['task', 'workspace', 'memory'].includes(command) && extra.length)
+    if (!['task', 'workspace', 'review', 'memory'].includes(command) && extra.length)
       throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'],
@@ -161,6 +163,7 @@ try {
         'session',
         'host-local-authorized',
       ],
+      review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
       workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
       memory: [
         'project',
@@ -304,6 +307,18 @@ try {
           }),
         );
       }
+    } else if (command === 'review') {
+      if (extra.length !== 1 || !['run'].includes(extra[0]))
+        throw new Error('Usage: latchkit review run [options].');
+      if (!values.task || !values.provider)
+        throw new Error('review run requires --task and --provider.');
+      print(
+        await createReviewOrchestrator({ root }).run({
+          taskId: values.task,
+          reviewers: [{ id: values.provider, providerId: values.provider, prompt: values.prompt }],
+          executionAuthorized: values['host-local-authorized'] === true,
+        }),
+      );
     } else if (command === 'workspace') {
       if (extra.length !== 1 || !['inspect', 'create', 'cancel', 'cleanup'].includes(extra[0])) {
         throw new Error('Usage: latchkit workspace <inspect|create|cancel|cleanup> [options].');
