@@ -26,7 +26,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@1e60f620b9541d1c323b38fe2175d4fc4dd0ea # v4.0.4
+      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
         with:
           node-version: 22
           cache: npm
@@ -59,7 +59,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@1e60f620b9541d1c323b38fe2175d4fc4dd0ea # v4.0.4
+      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
