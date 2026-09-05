@@ -69,7 +69,7 @@ test('supports keyboard completion, accessible names, empty selections, and narr
   await expect(page.getByLabel(/Codex/)).toHaveAccessibleName(/Codex/);
   await page.keyboard.press('Tab');
   await expect(page.locator(':focus')).toBeVisible();
-  await page.getByLabel(/Spec/).uncheck();
+  await page.getByLabel(/specification/i).uncheck();
   await page.getByRole('button', { name: /Save configuration/ }).click();
   await expect(page.getByRole('status')).toContainText('empty selection');
   await page.getByRole('button', { name: /Preview sync/ }).click();
