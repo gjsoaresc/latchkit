@@ -1,0 +1,11 @@
+{
+  "conversation_id": "opaque-conversation-123",
+  "generation_id": "opaque-generation-2",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "3.9.0",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "deploy --token super-secret"
+  },
+  "user_email": "must-not-be-exported@example.test"
+}

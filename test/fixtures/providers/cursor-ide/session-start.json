@@ -1,0 +1,9 @@
+{
+  "conversation_id": "opaque-conversation-123",
+  "generation_id": "opaque-generation-1",
+  "hook_event_name": "sessionStart",
+  "cursor_version": "3.9.0",
+  "workspace_roots": ["C:/work/project"],
+  "user_email": "must-not-be-exported@example.test",
+  "transcript_path": "C:/private/transcript.json"
+}

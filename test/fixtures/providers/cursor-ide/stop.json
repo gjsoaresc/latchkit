@@ -1,0 +1,7 @@
+{
+  "conversation_id": "opaque-conversation-123",
+  "generation_id": "opaque-generation-3",
+  "hook_event_name": "stop",
+  "cursor_version": "3.9.0",
+  "status": "completed"
+}

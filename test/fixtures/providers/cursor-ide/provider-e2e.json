@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "provider": "cursor-ide",
+  "cursorVersion": "3.9.0",
+  "recordedAt": "2026-09-05",
+  "evidence": "offline-fixture",
+  "platforms": ["win32", "linux", "darwin"],
+  "realEditorSession": false,
+  "claims": {
+    "configuration": "verified-offline",
+    "eventTranslation": "verified-offline",
+    "skillDiscovery": "unverified",
+    "agentInvocation": "unsupported-manual",
+    "hookObservation": "unverified",
+    "disableRemove": "verified-offline"
+  }
+}

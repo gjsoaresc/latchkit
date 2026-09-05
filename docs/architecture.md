@@ -77,6 +77,12 @@ The skills request plans, meaningful regression tests, reviews, and evidence. Th
 
 Future enforcement belongs in separate provider adapters with executable integration tests. One provider's hook names, payloads, and approval behavior cannot be assumed valid in another. The [roadmap](roadmap.md) tracks those components separately from portable skill distribution.
 
+The Cursor IDE adapter is the first editor-specific boundary. Its opt-in project hooks use native
+Cursor event names and a packaged, bounded Node handler; they do not create an editor session or a
+quality-gate service. Translation allowlists non-sensitive fields, records Agent/Tab/workspace
+source, and maps only shared lifecycle kinds that have an exact meaning. See the
+[Cursor IDE adapter](providers/cursor-ide.md).
+
 ## Portability principles
 
 - Keep path handling in Node and avoid required Bash, symlinks, administrator rights, or global configuration writes.
