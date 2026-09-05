@@ -35,6 +35,20 @@ The local suite had one explained Windows file-symlink skip because that host de
 
 `unknown`, `blocked`, and `unavailable` are not support claims. The evidence records contain no transcript, command arguments, credentials, or usage estimate.
 
+### Follow-up diagnostics
+
+The September 6 follow-up at commit `508ffaf41629af043b5e2a7c6c503be738f02681` corrected provider-contract drift and exercised an installed local archive with SHA-256 `29a11dd2f24430cb4aab09bedb9632d77daf66fc0e9c547fe59eb73341a7a2e4`. See `provider-diagnostics-windows.json` and `lifecycle-codex-windows.json`.
+
+- Claude's official `auth status` command returned exit 1 with `loggedIn: false`. Authentication blocks live validation before repository permissions can be evaluated.
+- Gemini CLI 0.58.0 ran through the official npm package without persistent installation. No authenticated Gemini session was authorized, so this proves executable provisioning only.
+- Current Cursor documentation names `cursor-agent` and supports Windows through WSL, not a native Windows installer. The adapter and compatibility statement were corrected; the WSL executable remains absent.
+- The installed-archive Codex harness recorded the required initial failure, rejected failed evidence, terminated an owned provider process, recorded the run as interrupted, and recovered the task to a new provider run. The nested Codex process then exited 0 without changing source or writing the spec, so the test remained failed and no completion evidence was produced.
+- A separate text-only probe proved the corrected `codex exec resume --json` vector: both turns exited 0 with `thread.started`, `turn.started`, `item.completed`, and `turn.completed`. Only a hash of the thread ID was emitted; no transcript was retained.
+
+The full live implementation/review/handoff criterion therefore remains blocked. Run the documented `verify:lifecycle` command from a normal terminal outside an active Codex desktop task with the existing authenticated account and reviewed workspace-write/approval policy. Do not use bypass flags.
+
+The same follow-up found no remote tags, no GitHub releases, and no configured `npm-production` environment (the repository-scoped GitHub API returned 404). `release-authority.json` records this result. Selecting the exact v1 version/tag, configuring protected trusted publication, and later approving a qualified stable release are maintainer decisions; this evidence does not invent them.
+
 ## Lifecycle, recovery, and resource evidence
 
 The maintained suite passed the end-to-end mechanics for failed-then-passed acceptance, stale evidence, denied authorization, unsupported gates, cancellation, interrupted installer recovery, rollback, user-edit preservation, worktree cleanup refusal, token isolation, memory export/deletion, and support-bundle redaction. These are reproducible automated scenarios, not a substitute for the required live multi-provider requirements-to-handoff workflow.

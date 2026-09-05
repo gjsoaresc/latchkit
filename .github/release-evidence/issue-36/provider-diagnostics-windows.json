@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "provider-diagnostics",
+  "candidateCommit": "508ffaf41629af043b5e2a7c6c503be738f02681",
+  "testedAt": "2026-09-06",
+  "runtime": {
+    "platform": "win32",
+    "architecture": "x64",
+    "node": "v26.8.1"
+  },
+  "providers": {
+    "claude": {
+      "version": "2.1.258",
+      "executable": "available",
+      "authStatusExitCode": 1,
+      "loggedIn": false,
+      "disposition": "blocked-authentication",
+      "repositoryPermissionEvaluated": false
+    },
+    "codex": {
+      "version": "0.153.2",
+      "executable": "available",
+      "textInvocation": "passed",
+      "textResume": "passed",
+      "workspaceWrite": "blocked-in-nested-host"
+    },
+    "gemini": {
+      "version": "0.58.0",
+      "provisioning": "official-npm-package-ran-transiently",
+      "persistentExecutable": "absent",
+      "authentication": "not-tested",
+      "liveSession": "not-authorized"
+    },
+    "cursorIde": {
+      "version": "3.19.7",
+      "executable": "available",
+      "manualWorkflow": "not-performed"
+    },
+    "cursorCli": {
+      "documentedExecutable": "cursor-agent",
+      "nativeWindows": "unsupported-by-current-upstream-installation-docs",
+      "wslExecutable": "absent"
+    }
+  },
+  "wsl": {
+    "distribution": "Ubuntu",
+    "node": "absent",
+    "gemini": "absent",
+    "cursorAgent": "absent"
+  },
+  "privacy": {
+    "credentialValuesRead": false,
+    "credentialValuesStored": false,
+    "accountIdentifiersStored": false,
+    "transcriptsStored": false
+  }
+}
