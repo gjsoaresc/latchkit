@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/provider-e2e-evidence-v1.schema.json",
+  "title": "Latchkit provider verification evidence v1",
+  "type": "object",
+  "required": ["schemaVersion", "testedAt", "commit", "provider", "providerVersion", "runtime", "mode", "fixture", "bounds", "configurationHash", "result", "usage", "artifacts"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "provider": { "enum": ["claude", "codex", "gemini", "cursor", "cursor-cli"] },
+    "mode": { "enum": ["fixture", "live", "manual"] },
+    "result": { "type": "object", "required": ["status", "reason"], "properties": { "status": { "enum": ["pass", "fail", "unsupported", "blocked", "skipped", "unknown"] }, "reason": { "type": "string" } } },
+    "artifacts": { "type": "object", "properties": { "transcriptStored": { "const": false }, "commandStored": { "const": false } } }
+  }
+}

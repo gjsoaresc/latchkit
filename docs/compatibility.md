@@ -80,3 +80,5 @@ WSL is a separate required workflow job, not inferred from an Ubuntu runner. It 
 These checks verify Latchkit's distributable and filesystem/runtime behavior. They do not authenticate provider binaries or prove a real agent session; provider discovery and invocation still require separate credentialed evidence.
 
 The maintained browser console suite runs API-backed Chromium, Firefox, and WebKit jobs on Ubuntu, plus a native Windows Chromium job. Local Firefox/WebKit availability depends on the runner; a browser launch failure is reported as a runner limitation rather than converted into a passing skip. Browser artifacts are disabled by default so screenshots and traces cannot capture session tokens or local project paths.
+
+Provider end-to-end evidence is tracked separately in the [verification matrix](verification/provider-e2e.md). Until an observed, sanitized record exists for a provider/version/OS cell, that cell is **unknown**, not verified support.
