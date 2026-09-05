@@ -1,6 +1,6 @@
 export const CURRENT_CONFIG_SCHEMA_VERSION = 3;
 export const SUPPORTED_CONFIG_SCHEMA_VERSIONS = Object.freeze([1, 2, 3]);
-export const MANIFEST_SCHEMA_VERSION = 2;
+export const MANIFEST_SCHEMA_VERSION = 3;
 
 const CONFIG_FIELDS = new Map([
   [1, new Set(['schemaVersion', 'providers', 'skills'])],
@@ -152,14 +152,14 @@ export function validateConfig(config, { providerIds, skillIds }) {
 export function validateManifest(manifest, allowedPaths) {
   if (!record(manifest))
     throw new ConfigContractError('Expected an object.', '$', 'MANIFEST_INVALID');
-  const fields = new Set(['schemaVersion', 'files', 'packs']);
+  const fields = new Set(['schemaVersion', 'files', 'packs', 'sections']);
   for (const key of Object.keys(manifest)) {
     if (!fields.has(key))
       throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`, 'MANIFEST_INVALID');
   }
-  if (![1, MANIFEST_SCHEMA_VERSION].includes(manifest.schemaVersion)) {
+  if (![1, 2, MANIFEST_SCHEMA_VERSION].includes(manifest.schemaVersion)) {
     throw new ConfigContractError(
-      `Expected schema version 1 or ${MANIFEST_SCHEMA_VERSION}.`,
+      `Expected schema version 1, 2, or ${MANIFEST_SCHEMA_VERSION}.`,
       '$.schemaVersion',
       'MANIFEST_INVALID',
     );
@@ -181,7 +181,7 @@ export function validateManifest(manifest, allowedPaths) {
     files[relative] = digest;
   }
   if (manifest.schemaVersion === 1)
-    return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs: [] };
+    return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs: [], sections: {} };
   if (!Array.isArray(manifest.packs))
     throw new ConfigContractError('Expected an array.', '$.packs', 'MANIFEST_INVALID');
   const packs = manifest.packs.map((pack, index) => {
@@ -198,5 +198,34 @@ export function validateManifest(manifest, allowedPaths) {
       );
     return cloneJson(pack, `$.packs[${index}]`);
   });
-  return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs };
+  if (manifest.schemaVersion === 2)
+    return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs, sections: {} };
+  if (!record(manifest.sections))
+    throw new ConfigContractError('Expected an object.', '$.sections', 'MANIFEST_INVALID');
+  const sections = {};
+  for (const [relative, entry] of Object.entries(manifest.sections)) {
+    const entryPath = `$.sections.${relative}`;
+    if (Object.hasOwn(files, relative))
+      throw new ConfigContractError(
+        'A path cannot be owned as both a file and a section.',
+        entryPath,
+        'MANIFEST_INVALID',
+      );
+    if (allowedPaths && !allowedPaths.has(relative))
+      throw new ConfigContractError('Unknown managed section path.', entryPath, 'MANIFEST_INVALID');
+    if (
+      !record(entry) ||
+      Object.keys(entry).length !== 2 ||
+      entry.id !== 'project-instructions' ||
+      typeof entry.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(entry.sha256)
+    )
+      throw new ConfigContractError(
+        'Expected managed section metadata.',
+        entryPath,
+        'MANIFEST_INVALID',
+      );
+    sections[relative] = { id: entry.id, sha256: entry.sha256 };
+  }
+  return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs, sections };
 }

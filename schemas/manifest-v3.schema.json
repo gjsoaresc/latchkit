@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/manifest-v3.schema.json",
+  "title": "Latchkit ownership manifest v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "files", "packs", "sections"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "files": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?:\\.(?:agents|claude)/skills/[a-zA-Z0-9._-]+/SKILL\\.md|\\.claude/rules/latchkit-[a-zA-Z0-9._-]+\\.md|\\.cursor/rules/latchkit-[a-zA-Z0-9._-]+\\.mdc|\\.latchkit/rules/[a-zA-Z0-9._-]+\\.md)$"
+      },
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "packs": { "type": "array" },
+    "sections": {
+      "type": "object",
+      "propertyNames": { "pattern": "^(?:[^/]+/)*(?:AGENTS|CLAUDE|GEMINI)\\.md$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sha256"],
+        "properties": {
+          "id": { "const": "project-instructions" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    }
+  }
+}

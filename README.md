@@ -46,9 +46,10 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 | --------------------- | ------------------------------------------------------------------ |
 | Portable workflows    | Four original skills: spec/build, fix, review, handoff             |
 | Project configuration | Provider and skill selection in `.latchkit/config.json`            |
+| Project instructions  | Offline manifest discovery and scoped, reviewable provider exports |
 | Local console         | Real configuration, executable discovery, install preview and sync |
 | Managed installation  | Hash-based ownership checks; conflicts block changes               |
-| Safe removal          | Removes unmodified managed skill files; keeps notes and config     |
+| Safe removal          | Removes unchanged owned files/sections; keeps user text and config |
 | Host diagnostics      | Detects native vs WSL and executables on PATH                      |
 | Cross-platform checks | Node 22/24 CI on Windows, Linux, and macOS                         |
 
@@ -76,7 +77,9 @@ latchkit sync --dry-run
 latchkit remove
 ```
 
-If a managed file has local edits, sync stops and reports its path. Preserve or move your changes before trying again. There is no force-overwrite flag. Configuration saves and skill synchronization are separate actions.
+Sync preview includes the exact generated project-instruction sections, their provenance, declared command argument arrays, and provider discovery warnings. Latchkit never runs a discovered project command. It adds narrow owned sections to shared `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` files, or separately owned Claude/Cursor rule files, while preserving human-authored text and line endings. See [project instructions](docs/project-instructions.md).
+
+If a managed file or managed instruction section has local edits, sync stops and reports its path. Preserve or reconcile your changes before trying again. There is no force-overwrite flag. Configuration saves and synchronization are separate actions.
 
 Skill packs are explicit, versioned configuration selections. The bundled core pack is pinned by default; Latchkit never performs background upgrades. A trusted local pack declares its identity, version, provenance, compatibility and checksums in `latchkit-pack.json`; review `sync --dry-run` before deliberately changing a selected version. Checksums confirm content integrity, not publisher identity.
 

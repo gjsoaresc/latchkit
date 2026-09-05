@@ -1,0 +1,7 @@
+{
+  "name": "@fixture/web-app",
+  "scripts": {
+    "test": "node --test",
+    "build": "node build.js"
+  }
+}

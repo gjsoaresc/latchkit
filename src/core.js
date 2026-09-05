@@ -23,6 +23,13 @@ import {
   inspectTransaction,
   recoverTransaction,
 } from './installer/transactions.js';
+import { buildProjectRuleExports } from './rules/index.js';
+import {
+  digest as ruleDigest,
+  findManagedSection,
+  mergeManagedSection,
+  removeManagedSection,
+} from './rules/ownership.js';
 
 export {
   PROVIDERS,
@@ -35,7 +42,8 @@ const stateDirectory = '.latchkit';
 const configPath = `${stateDirectory}/config.json`;
 const manifestPath = `${stateDirectory}/manifest.json`;
 const hash = (content) => createHash('sha256').update(content).digest('hex');
-const resourceIdForPath = (relative) => `skill:${relative}`;
+const resourceIdForPath = (relative) =>
+  /^\.(?:agents|claude)\/skills\//.test(relative) ? `skill:${relative}` : `rule:${relative}`;
 const projectRoot = resolveProjectRoot;
 const withLock = withProjectLock;
 
@@ -84,7 +92,7 @@ export async function saveConfig(root, config) {
 
 async function readManifest(root) {
   const raw = await readOptional(root, manifestPath);
-  if (raw === null) return { schemaVersion: 2, files: {}, packs: [] };
+  if (raw === null) return { schemaVersion: 3, files: {}, packs: [], sections: {} };
   let manifest;
   try {
     manifest = JSON.parse(raw);
@@ -161,6 +169,7 @@ async function makePlan(root, removing = false) {
       };
   const manifest = await readManifest(root);
   const desired = new Map();
+  const desiredSections = new Map();
   const directories = new Set(
     PROVIDERS.filter((p) => config.providers.includes(p.id)).map((p) => p.skillDirectory),
   );
@@ -207,6 +216,20 @@ async function makePlan(root, removing = false) {
       }
     }
   }
+  const ruleExport = removing
+    ? {
+        model: { schemaVersion: 1, scopes: [] },
+        desiredFiles: new Map(),
+        desiredSections,
+        warnings: [],
+      }
+    : await buildProjectRuleExports(root, config.providers);
+  for (const [relative, content] of ruleExport.desiredFiles) {
+    if (desired.has(relative)) throw new Error(`Managed resource collision at ${relative}.`);
+    desired.set(relative, content);
+  }
+  for (const [relative, content] of ruleExport.desiredSections)
+    desiredSections.set(relative, content);
   const changes = [],
     conflicts = [];
   for (const relative of [...new Set([...Object.keys(manifest.files), ...desired.keys()])].sort()) {
@@ -240,6 +263,98 @@ async function makePlan(root, removing = false) {
             : 'update';
     changes.push({ action, path: relative });
   }
+  const renderedSections = new Map();
+  const sectionHashes = new Map();
+  for (const relative of [
+    ...new Set([...Object.keys(manifest.sections), ...desiredSections.keys()]),
+  ].sort()) {
+    let current;
+    try {
+      current = await readOptional(root, relative);
+    } catch (error) {
+      conflicts.push({ path: relative, reason: error.message });
+      continue;
+    }
+    const owned = manifest.sections[relative];
+    let existing;
+    try {
+      existing = current === null ? null : findManagedSection(current);
+    } catch (error) {
+      conflicts.push({ path: relative, reason: error.message });
+      continue;
+    }
+    if (existing && !owned) {
+      conflicts.push({
+        path: relative,
+        reason:
+          'Latchkit markers exist but are not recorded as owned; remove or reconcile them manually.',
+      });
+      continue;
+    }
+    if (owned && (!existing || ruleDigest(existing.content) !== owned.sha256)) {
+      conflicts.push({
+        path: relative,
+        reason:
+          'Managed project instruction section has local edits or is missing; preserve or reconcile it before syncing.',
+      });
+      continue;
+    }
+    const body = desiredSections.get(relative);
+    const importLine = body?.trim();
+    if (
+      !owned &&
+      !existing &&
+      importLine?.startsWith('@') &&
+      current?.split(/\r?\n/).some((line) => line.trim() === importLine)
+    ) {
+      desiredSections.delete(relative);
+      changes.push({
+        action: 'unchanged',
+        path: relative,
+        resource: 'existing-project-instructions',
+      });
+      continue;
+    }
+    if (importLine === '@AGENTS.md') {
+      const scopePrefix = relative.includes('/')
+        ? relative.slice(0, relative.lastIndexOf('/') + 1)
+        : '';
+      const agents = await readOptional(root, `${scopePrefix}AGENTS.md`);
+      const reverseImport = `@${relative.slice(scopePrefix.length)}`;
+      if (agents?.split(/\r?\n/).some((line) => line.trim() === reverseImport)) {
+        conflicts.push({
+          path: relative,
+          reason: `Adding ${importLine} would create an import cycle with ${scopePrefix}AGENTS.md.`,
+        });
+        continue;
+      }
+    }
+    let next;
+    if (body === undefined) {
+      next = current === null ? null : removeManagedSection(current);
+      if (next === '') next = null;
+    } else {
+      next = mergeManagedSection(current ?? '', body);
+      const section = findManagedSection(next);
+      sectionHashes.set(relative, ruleDigest(section.content));
+    }
+    renderedSections.set(relative, next);
+    const action =
+      next === null
+        ? 'remove'
+        : current === null
+          ? 'create'
+          : current === next
+            ? 'unchanged'
+            : 'update';
+    changes.push({
+      action,
+      path: relative,
+      resource: 'project-instructions',
+      ...(body === undefined ? {} : { content: body }),
+    });
+  }
+  changes.sort((left, right) => left.path.localeCompare(right.path));
   const duplicateDiscovery =
     directories.has('.claude/skills') && directories.has('.agents/skills')
       ? [
@@ -250,7 +365,19 @@ async function makePlan(root, removing = false) {
           },
         ]
       : [];
-  return { changes, conflicts, desired, manifest, packMetadata, duplicateDiscovery };
+  return {
+    changes,
+    conflicts,
+    desired,
+    desiredSections,
+    renderedSections,
+    sectionHashes,
+    manifest,
+    packMetadata,
+    duplicateDiscovery,
+    ruleModel: ruleExport.model,
+    ruleWarnings: ruleExport.warnings,
+  };
 }
 
 export async function planSync(root) {
@@ -262,6 +389,8 @@ export async function planSync(root) {
     installedPacks: plan.manifest.packs,
     desiredPacks: plan.packMetadata,
     duplicateDiscovery: plan.duplicateDiscovery,
+    projectInstructions: plan.ruleModel,
+    ruleWarnings: plan.ruleWarnings,
   };
 }
 
@@ -278,11 +407,12 @@ async function applySync(root, removing, options = {}) {
     }
     const transactionChanges = [];
     const nextManifest = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       files: { ...plan.manifest.files },
       packs: plan.packMetadata,
+      sections: { ...plan.manifest.sections },
     };
-    for (const change of plan.changes) {
+    for (const change of plan.changes.filter((item) => item.resource !== 'project-instructions')) {
       if (change.action === 'unchanged') continue;
       const current = await readOptional(root, change.path);
       const recorded = plan.manifest.files[change.path];
@@ -297,11 +427,35 @@ async function applySync(root, removing, options = {}) {
         nextManifest.files[change.path] = hash(content);
       }
     }
+    for (const change of plan.changes.filter(
+      (item) => item.resource === 'project-instructions' && item.action !== 'unchanged',
+    )) {
+      const current = await readOptional(root, change.path);
+      const owned = plan.manifest.sections[change.path];
+      const existing = current === null ? null : findManagedSection(current);
+      if (owned && (!existing || ruleDigest(existing.content) !== owned.sha256))
+        throw new Error(`Project instruction section changed during sync: ${change.path}`);
+      transactionChanges.push({
+        resourceId: resourceIdForPath(change.path),
+        bytes: plan.renderedSections.get(change.path),
+      });
+      if (plan.desiredSections.has(change.path))
+        nextManifest.sections[change.path] = {
+          id: 'project-instructions',
+          sha256: plan.sectionHashes.get(change.path),
+        };
+      else delete nextManifest.sections[change.path];
+    }
     if (transactionChanges.length) {
       const registry = createResourceRegistry(
-        [...new Set([...Object.keys(plan.manifest.files), ...plan.desired.keys()])].map(
-          (relative) => ({ id: resourceIdForPath(relative), path: relative }),
-        ),
+        [
+          ...new Set([
+            ...Object.keys(plan.manifest.files),
+            ...Object.keys(plan.manifest.sections),
+            ...plan.desired.keys(),
+            ...plan.desiredSections.keys(),
+          ]),
+        ].map((relative) => ({ id: resourceIdForPath(relative), path: relative })),
       );
       await applyRegisteredTransaction(root, {
         operation: removing ? 'remove' : 'sync',
@@ -317,6 +471,8 @@ async function applySync(root, removing, options = {}) {
       installedPacks: plan.manifest.packs,
       desiredPacks: plan.packMetadata,
       duplicateDiscovery: plan.duplicateDiscovery,
+      projectInstructions: plan.ruleModel,
+      ruleWarnings: plan.ruleWarnings,
     };
   });
 }
@@ -327,9 +483,19 @@ export const removeProjectSkills = (root, options) => applySync(root, true, opti
 export async function inspectRecovery(root) {
   root = await projectRoot(root);
   const manifest = await readManifest(root);
-  const plan = await makePlan(root).catch(() => ({ desired: new Map() }));
+  const plan = await makePlan(root).catch(() => ({
+    desired: new Map(),
+    desiredSections: new Map(),
+  }));
   const registry = createResourceRegistry(
-    [...new Set([...Object.keys(manifest.files), ...plan.desired.keys()])].map((relative) => ({
+    [
+      ...new Set([
+        ...Object.keys(manifest.files),
+        ...Object.keys(manifest.sections),
+        ...plan.desired.keys(),
+        ...plan.desiredSections.keys(),
+      ]),
+    ].map((relative) => ({
       id: resourceIdForPath(relative),
       path: relative,
     })),
@@ -358,9 +524,19 @@ export async function recoverProject(root) {
     cleanedLock = true;
   }
   const manifest = await readManifest(root);
-  const plan = await makePlan(root).catch(() => ({ desired: new Map() }));
+  const plan = await makePlan(root).catch(() => ({
+    desired: new Map(),
+    desiredSections: new Map(),
+  }));
   const registry = createResourceRegistry(
-    [...new Set([...Object.keys(manifest.files), ...plan.desired.keys()])].map((relative) => ({
+    [
+      ...new Set([
+        ...Object.keys(manifest.files),
+        ...Object.keys(manifest.sections),
+        ...plan.desired.keys(),
+        ...plan.desiredSections.keys(),
+      ]),
+    ].map((relative) => ({
       id: resourceIdForPath(relative),
       path: relative,
     })),

@@ -45,16 +45,16 @@ The process runner is an adapter primitive, not evidence that a listed provider 
 
 Latchkit's own runtime minimum is Node.js 22. Each selected provider retains its own installation requirements. On WSL, install and run Node and the chosen CLI inside the distribution; a working native Windows executable does not demonstrate a working WSL installation.
 
-## Rules and hooks: future adapters
+## Project instruction exports and future hooks
 
-The current starter does not install these integrations. They need independent provider implementations and execution tests. The hook documentation below is evidence to recheck before an adapter changes an `unknown` capability state; matching names do not establish matching event semantics.
+Latchkit now exports deterministic project instructions through documented file discovery surfaces. This is filesystem serialization, not a concrete provider adapter or an end-to-end provider verification. Hooks remain future adapter work; matching hook names do not establish matching event semantics.
 
-| Provider | Instruction surface | Hook surface |
+| Provider | Latchkit instruction export | Hook surface |
 |---|---|---|
-| Claude Code | `CLAUDE.md`, `.claude/rules`; `AGENTS.md` needs an explicit import. [Memory](https://code.claude.com/docs/en/memory) | `.claude/settings.json`; provider event and command contracts. [Hooks](https://code.claude.com/docs/en/hooks) |
-| Codex | `AGENTS.md`. [OpenAI guidance](https://developers.openai.com/codex/guides/agents-md/) | Native hooks require version-aware adapters. [OpenAI hooks](https://learn.chatgpt.com/docs/hooks) |
-| Gemini CLI | `GEMINI.md`; context filenames are configurable. [Context](https://geminicli.com/docs/cli/gemini-md/) | `.gemini/settings.json`; Gemini event schemas. [Hooks](https://geminicli.com/docs/hooks/) |
-| Cursor IDE/CLI | `.cursor/rules`, `AGENTS.md`; CLI also documents `CLAUDE.md`. [Rules](https://cursor.com/docs/rules), [CLI](https://cursor.com/docs/cli/using) | `.cursor/hooks.json`; do not assume identical IDE/CLI event coverage. [Hooks](https://cursor.com/docs/hooks) |
+| Claude Code | Scoped `.claude/rules/latchkit-*.md`, or narrow `CLAUDE.md` imports when sharing Codex `AGENTS.md`. [Memory](https://code.claude.com/docs/en/memory) | `.claude/settings.json`; provider event and command contracts. [Hooks](https://code.claude.com/docs/en/hooks) |
+| Codex | Owned sections in the root-to-scope `AGENTS.md` hierarchy; a same-directory `AGENTS.override.md` shadow is reported. [OpenAI guidance](https://developers.openai.com/codex/guides/agents-md/) | Native hooks require version-aware adapters. [OpenAI hooks](https://learn.chatgpt.com/docs/hooks) |
+| Gemini CLI | Narrow `GEMINI.md` imports of shared `AGENTS.md` or separately owned canonical rules. A customized context filename can change discovery and must be reviewed. [Context](https://geminicli.com/docs/cli/gemini-md/) | `.gemini/settings.json`; Gemini event schemas. [Hooks](https://geminicli.com/docs/hooks/) |
+| Cursor IDE/CLI | Scoped `.cursor/rules/latchkit-*.mdc` with `description`, `globs`, and `alwaysApply`; omitted when selected Codex `AGENTS.md` is already shared. [Rules](https://cursor.com/docs/rules), [CLI](https://cursor.com/docs/cli/using) | `.cursor/hooks.json`; do not assume identical IDE/CLI event coverage. [Hooks](https://cursor.com/docs/hooks) |
 
 ## Verification policy
 
