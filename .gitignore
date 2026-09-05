@@ -3,6 +3,8 @@ node_modules/
 .agents/
 .claude/
 *.tgz
+release-artifacts/
+release-artifacts-*/
 coverage/
 test-results/
 .DS_Store
