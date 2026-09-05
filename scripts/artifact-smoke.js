@@ -317,14 +317,17 @@ async function main() {
     const fs = await import('node:fs/promises');
     await fs.mkdir(packDir, { recursive: true });
     await fs.mkdir(installDir, { recursive: true });
+    const suppliedArtifact = valueAfter('--artifact');
     const artifact =
-      valueAfter('--artifact') ??
+      suppliedArtifact ??
       JSON.parse(
         await command(npmCommand, ['pack', '--json', '--pack-destination', packDir], {
           cwd: repository,
         }),
       )[0].filename;
-    const artifactPath = path.resolve(packDir, artifact);
+    const artifactPath = suppliedArtifact
+      ? path.resolve(repository, suppliedArtifact)
+      : path.resolve(packDir, artifact);
     const checksum = createHash('sha256')
       .update(await readFile(artifactPath))
       .digest('hex');

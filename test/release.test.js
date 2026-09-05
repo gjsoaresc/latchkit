@@ -29,6 +29,11 @@ test('CLI version, release manifest, checksum, and SPDX inventory use the packag
     /^[a-f0-9]{64} {2}/,
   );
   assert.equal(sbom.packages[0].versionInfo, packageJson.version);
+  const artifact = path.relative(root, path.join(output, manifest.archive));
+  const smoke = await run(process.execPath, ['scripts/artifact-smoke.js', '--artifact', artifact], {
+    cwd: root,
+  });
+  assert.equal(JSON.parse(smoke.stdout).sha256, manifest.sha256);
 });
 
 test('release preparation refuses a tag that does not match package version', async () => {
