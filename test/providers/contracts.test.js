@@ -65,7 +65,10 @@ test('registry preserves existing provider fields and reports only evidenced sup
   for (const provider of PROVIDERS) {
     assert.equal(provider.schemaVersion, 1);
     assert.equal(provider.capabilities.skills.state, 'supported');
-    assert.equal(provider.capabilities.invocation.state, 'unknown');
+    assert.equal(
+      provider.capabilities.invocation.state,
+      provider.id === 'cursor-cli' ? 'supported' : 'unknown',
+    );
     assert.equal(provider.verification.endToEnd, 'unverified');
   }
 });

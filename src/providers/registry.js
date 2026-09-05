@@ -1,4 +1,5 @@
 import { PROVIDER_CONTRACT_VERSION, validateProviderContract } from './contracts.js';
+import { CURSOR_CLI_PROVIDER } from './cursor-cli.js';
 
 const unknown = (reason) => ({ state: 'unknown', reason, versionRange: '*', evidenceUrl: '' });
 const supported = (evidenceUrl) => ({
@@ -36,8 +37,9 @@ const definitions = [
 ];
 
 export const PROVIDERS = Object.freeze(
-  definitions.map(([id, label, command, skillDirectory, evidenceUrl]) =>
-    validateProviderContract({
+  definitions.map(([id, label, command, skillDirectory, evidenceUrl]) => {
+    if (id === 'cursor-cli') return validateProviderContract(CURSOR_CLI_PROVIDER);
+    return validateProviderContract({
       schemaVersion: PROVIDER_CONTRACT_VERSION,
       id,
       label,
@@ -50,8 +52,8 @@ export const PROVIDERS = Object.freeze(
         configured: 'unverified',
         endToEnd: 'unverified',
       },
-    }),
-  ),
+    });
+  }),
 );
 
 export function providerById(id) {
