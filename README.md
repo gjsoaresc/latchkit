@@ -111,6 +111,9 @@ npm test
 npm pack --dry-run
 ```
 
+See [release and recovery procedures](docs/releases.md) for installable npm
+artifacts, dry-run evidence, controlled publication, upgrades, and rollback.
+
 ## License and provenance
 
 [MIT](LICENSE). All implementation and bundled skill text in this repository are original. Latchkit is an independent project inspired by the general idea of structured coding-agent workflows. It is not a fork of or affiliated with Pilot Shell or any provider. Provider software and services retain their own terms.

@@ -22,6 +22,7 @@
     "web/",
     "skills/",
     "schemas/",
+    "docs/",
     "LICENSE",
     "README.md"
   ],
@@ -29,13 +30,15 @@
     "start": "node src/cli.js ui",
     "test": "node --test test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
     "test:browser": "playwright test",
-    "format": "prettier --write src web scripts test package.json .github/workflows/ci.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
-    "format:check": "prettier --check src web scripts test package.json .github/workflows/ci.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
+    "format": "prettier --write src web scripts test package.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
+    "format:check": "prettier --check src web scripts test package.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
     "lint": "eslint src web scripts test",
     "check:skills": "node scripts/validate-skills.js",
     "check": "npm run format:check && npm run lint && node scripts/check.js",
     "verify:providers": "node scripts/provider-e2e.js",
-    "smoke:artifact": "node scripts/artifact-smoke.js"
+    "smoke:artifact": "node scripts/artifact-smoke.js",
+    "release:artifacts": "node scripts/release-artifacts.js",
+    "release:dry-run": "node scripts/release-artifacts.js --dry-run"
   },
   "keywords": [
     "agent-skills",

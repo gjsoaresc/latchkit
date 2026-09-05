@@ -1,0 +1,77 @@
+name: Controlled release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Expected v<package-version> tag; leave blank for a credential-free dry run'
+        required: false
+        type: string
+      publish:
+        description: 'Publish after the release environment approves this run'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Rebuild and attest release artifact
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1e60f620b9541d1c323b38fe2175d4fc4dd0ea # v4.0.4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - id: version
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+      - name: Validate tag/version consistency
+        if: github.event_name == 'push' || inputs.tag != ''
+        run: node scripts/release-artifacts.js --tag "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}" --output release-artifacts
+      - name: Prepare credential-free release evidence
+        if: github.event_name != 'push' && inputs.tag == ''
+        run: npm run release:dry-run -- --output release-artifacts
+      - run: npm run smoke:artifact
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: release-artifacts
+          path: release-artifacts/
+          if-no-files-found: error
+
+  publish:
+    name: Publish approved stable release
+    needs: prepare
+    if: github.event_name == 'push' && !contains(github.ref_name, '-') || github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    environment: npm-production
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1e60f620b9541d1c323b38fe2175d4fc4dd0ea # v4.0.4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Refuse a manual publish without an exact tag
+        run: node scripts/release-artifacts.js --tag "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}" --artifact "release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz" --output release-artifacts
+      - name: Publish with npm trusted publishing provenance
+        run: npm publish "release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz" --provenance
+      - name: Create GitHub release from verified evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${{ needs.prepare.outputs.version }}" release-artifacts/* --title "v${{ needs.prepare.outputs.version }}" --generate-notes

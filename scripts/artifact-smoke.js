@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -170,6 +170,60 @@ async function assertArtifact(root, node, entry, label) {
   await stopChild(child);
 }
 
+async function assertInstalledPackage(installDir, node, expectedVersion) {
+  const packageRoot = path.join(installDir, 'node_modules', 'latchkit');
+  const packageJson = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'));
+  if (packageJson.version !== expectedVersion)
+    throw new Error(
+      `artifact: installed package version ${packageJson.version} does not match ${expectedVersion}`,
+    );
+  for (const required of ['README.md', 'LICENSE', 'src', 'web', 'skills', 'schemas', 'docs']) {
+    if (
+      !(await stat(path.join(packageRoot, required))).isDirectory?.() &&
+      required !== 'README.md' &&
+      required !== 'LICENSE'
+    )
+      throw new Error(`artifact: required packaged resource is missing: ${required}`);
+  }
+  const readme = await readFile(path.join(packageRoot, 'README.md'), 'utf8');
+  for (const target of [...readme.matchAll(/\]\((docs\/[^)#]+)(?:#[^)]+)?\)/g)].map(
+    (match) => match[1],
+  )) {
+    if (
+      !(await stat(path.join(packageRoot, target)).then(
+        () => true,
+        () => false,
+      ))
+    )
+      throw new Error(`artifact: packaged README documentation link is missing: ${target}`);
+  }
+  const forbidden = ['node_modules', 'test', '.github', '.env', 'package-lock.json'];
+  for (const name of forbidden) {
+    if (
+      await stat(path.join(packageRoot, name)).then(
+        () => true,
+        () => false,
+      )
+    )
+      throw new Error(`artifact: excluded development resource was packaged: ${name}`);
+  }
+  const bin = path.join(
+    installDir,
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'latchkit.cmd' : 'latchkit',
+  );
+  const result = await command(
+    bin,
+    ['--version'],
+    process.platform === 'win32' ? { shell: true } : {},
+  );
+  if (result.trim() !== expectedVersion)
+    throw new Error('artifact: installed bin shim did not report package version');
+  if ((await readdir(path.join(packageRoot, 'skills'))).length === 0)
+    throw new Error('artifact: bundled skills are missing');
+}
+
 async function linkCapability(root, node, entry) {
   const fs = await import('node:fs/promises');
   await fs.mkdir(root, { recursive: true });
@@ -279,6 +333,10 @@ async function main() {
       ['install', '--ignore-scripts', '--no-package-lock', '--prefix', installDir, artifactPath],
       { cwd: repository },
     );
+    const expectedVersion = JSON.parse(
+      await readFile(path.join(repository, 'package.json'), 'utf8'),
+    ).version;
+    await assertInstalledPackage(installDir, process.execPath, expectedVersion);
     const node = process.execPath;
     const entry = path.join(installDir, 'node_modules', 'latchkit', 'src', 'cli.js');
     await assertArtifact(projectRoot, node, entry, 'artifact');

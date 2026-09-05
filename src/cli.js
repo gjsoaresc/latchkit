@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { VERSION } from './version.js';
 import {
   doctor,
   initProject,
@@ -131,7 +132,7 @@ try {
     },
   });
   cliValues = values;
-  if (values.version) console.log('0.1.0-alpha.1');
+  if (values.version) console.log(VERSION);
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
     const [command, ...extra] = positionals;
