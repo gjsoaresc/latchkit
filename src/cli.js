@@ -13,13 +13,7 @@ import {
   removeProjectSkills,
   syncProject,
 } from './core.js';
-import {
-  cancelTask,
-  importMarkdownTask,
-  inspectTask,
-  listTasks,
-  resumeTask,
-} from './task-state/service.js';
+import { importMarkdownTask, inspectTask, listTasks, resumeTask } from './task-state/service.js';
 import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
 import { appendEvent } from './diagnostics/logger.js';
 import { operationalError } from './diagnostics/errors.js';
@@ -29,6 +23,7 @@ import {
   createTaskWorkspace,
   inspectWorkspaceCapability,
 } from './workspaces/git.js';
+import { createTaskController } from './runtime/task-controller.js';
 
 let cliValues = {};
 
@@ -44,7 +39,7 @@ Usage: latchkit <command> [options]
   sync       Install selected skills; use --dry-run to preview
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
-  task       Inspect, import, resume, or cancel durable workflow state
+  task       Start, inspect, import, resume, or cancel durable workflow state
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   ui         Start the local configuration console (Ctrl+C to stop)
 
@@ -62,6 +57,10 @@ Options:
   --revision <ref>    workspace create: base commit (default: HEAD)
   --mode <name>       workspace inspect/create: isolated or direct
   --authorized        workspace cleanup: direct user authorization
+  --provider <id>     task start/resume: provider adapter ID
+  --prompt <text>     task start/resume: provider prompt
+  --session <id>      task resume: prior Latchkit session ID
+  --host-local-authorized  task start/resume: authorize host-local execution
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
   --help             Show this help
@@ -94,6 +93,10 @@ try {
       authorized: { type: 'boolean' },
       'authorization-scope': { type: 'string' },
       'authorization-reference': { type: 'string' },
+      provider: { type: 'string' },
+      prompt: { type: 'string' },
+      session: { type: 'string' },
+      'host-local-authorized': { type: 'boolean' },
       help: { type: 'boolean' },
       version: { type: 'boolean' },
       export: { type: 'boolean' },
@@ -128,6 +131,10 @@ try {
         'title',
         'authorization-scope',
         'authorization-reference',
+        'provider',
+        'prompt',
+        'session',
+        'host-local-authorized',
       ],
       workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
     }[command];
@@ -170,8 +177,11 @@ try {
       } else if (values.export) print(await exportSupportBundle(root));
       else print(await previewSupportBundle(root));
     } else if (command === 'task') {
-      if (extra.length !== 1 || !['inspect', 'import', 'resume', 'cancel'].includes(extra[0])) {
-        throw new Error('Usage: latchkit task <inspect|import|resume|cancel> [options].');
+      if (
+        extra.length !== 1 ||
+        !['start', 'inspect', 'import', 'resume', 'cancel'].includes(extra[0])
+      ) {
+        throw new Error('Usage: latchkit task <start|inspect|import|resume|cancel> [options].');
       }
       const action = extra[0];
       const expectedRevision =
@@ -184,7 +194,31 @@ try {
       }
       if (action === 'inspect')
         print(values.task ? await inspectTask(root, values.task) : await listTasks(root));
-      else if (action === 'resume')
+      else if (action === 'start') {
+        if (!values.provider) throw new Error('task start requires --provider.');
+        print(
+          await createTaskController({ root }).start({
+            taskId: values.task,
+            providerId: values.provider,
+            prompt: values.prompt,
+            expectedRevision,
+            mutationId: values['mutation-id'],
+            executionAuthorized: values['host-local-authorized'] === true,
+          }),
+        );
+      } else if (action === 'resume' && (values.provider || values.session)) {
+        if (!values.session) throw new Error('Provider session resume requires --session.');
+        print(
+          await createTaskController({ root }).resume({
+            taskId: values.task,
+            sessionId: values.session,
+            prompt: values.prompt,
+            expectedRevision,
+            mutationId: values['mutation-id'],
+            executionAuthorized: values['host-local-authorized'] === true,
+          }),
+        );
+      } else if (action === 'resume')
         print(
           await resumeTask(root, {
             taskId: values.task,
@@ -195,12 +229,14 @@ try {
         );
       else if (action === 'cancel')
         print(
-          await cancelTask(root, {
-            taskId: values.task,
-            expectedRevision,
-            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
-            ...(values.reason ? { reason: values.reason } : {}),
-          }),
+          (
+            await createTaskController({ root }).cancel({
+              taskId: values.task,
+              expectedRevision,
+              ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+              ...(values.reason ? { reason: values.reason } : {}),
+            })
+          ).task,
         );
       else {
         const hasAuthorization =
