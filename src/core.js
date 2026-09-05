@@ -42,6 +42,7 @@ const stateDirectory = '.latchkit';
 const configPath = `${stateDirectory}/config.json`;
 const manifestPath = `${stateDirectory}/manifest.json`;
 const hash = (content) => createHash('sha256').update(content).digest('hex');
+const configRevision = (content) => `"sha256:${hash(content)}"`;
 const resourceIdForPath = (relative) =>
   /^\.(?:agents|claude)\/skills\//.test(relative) ? `skill:${relative}` : `rule:${relative}`;
 const projectRoot = resolveProjectRoot;
@@ -60,6 +61,14 @@ export async function readConfig(root) {
   const raw = await readOptional(root, configPath);
   if (raw === null) throw new Error('Project is not initialized. Run latchkit init first.');
   return parseProjectConfig(raw);
+}
+
+/** Return the validated configuration plus an opaque revision of its exact stored bytes. */
+export async function readConfigSnapshot(root) {
+  root = await projectRoot(root);
+  const raw = await readOptional(root, configPath);
+  if (raw === null) throw new Error('Project is not initialized. Run latchkit init first.');
+  return { config: parseProjectConfig(raw), revision: configRevision(raw) };
 }
 
 export async function initProject(root, options = {}) {
@@ -87,6 +96,26 @@ export async function saveConfig(root, config) {
   return withLock(root, async () => {
     await writeAtomic(root, configPath, `${JSON.stringify(validated, null, 2)}\n`);
     return validated;
+  });
+}
+
+/** Compare and save under the project lock so separate processes cannot lose updates. */
+export async function saveConfigIfRevision(root, config, revision) {
+  root = await projectRoot(root);
+  const validated = validateConfig(config);
+  return withLock(root, async () => {
+    const raw = await readOptional(root, configPath);
+    if (raw === null) throw new Error('Project is not initialized. Run latchkit init first.');
+    const currentRevision = configRevision(raw);
+    if (revision !== currentRevision) {
+      const error = new Error('Configuration changed in another process. Reload it before saving.');
+      error.code = 'CONFIG_REVISION_CONFLICT';
+      error.revision = currentRevision;
+      throw error;
+    }
+    const next = `${JSON.stringify(validated, null, 2)}\n`;
+    await writeAtomic(root, configPath, next);
+    return { config: validated, revision: configRevision(next) };
   });
 }
 
@@ -383,7 +412,27 @@ async function makePlan(root, removing = false) {
 export async function planSync(root) {
   root = await projectRoot(root);
   const plan = await makePlan(root);
-  return {
+  return describeSyncPlan(root, plan);
+}
+
+async function describeSyncPlan(root, plan) {
+  const paths = [
+    ...new Set([
+      ...Object.keys(plan.manifest.files),
+      ...Object.keys(plan.manifest.sections),
+      ...plan.desired.keys(),
+      ...plan.desiredSections.keys(),
+    ]),
+  ].sort();
+  const current = await Promise.all(
+    paths.map(async (relative) => {
+      const bytes = await readOptional(root, relative);
+      return [relative, bytes === null ? null : hash(bytes)];
+    }),
+  );
+  const config = await readOptional(root, configPath);
+  const manifest = await readOptional(root, manifestPath);
+  const publicPlan = {
     changes: plan.changes,
     conflicts: plan.conflicts,
     installedPacks: plan.manifest.packs,
@@ -392,12 +441,27 @@ export async function planSync(root) {
     projectInstructions: plan.ruleModel,
     ruleWarnings: plan.ruleWarnings,
   };
+  return {
+    ...publicPlan,
+    configRevision: configRevision(config ?? ''),
+    planId: `sha256:${hash(JSON.stringify({ root, config, manifest, current, publicPlan }))}`,
+  };
 }
 
 async function applySync(root, removing, options = {}) {
   root = await projectRoot(root);
   return withLock(root, async () => {
     const plan = await makePlan(root, removing);
+    const described = await describeSyncPlan(root, plan);
+    if (options.planId && options.planId !== described.planId) {
+      const error = new Error(
+        'The reviewed sync preview is stale. Refresh the preview before applying.',
+      );
+      error.code = 'SYNC_PLAN_STALE';
+      error.planId = described.planId;
+      error.configRevision = described.configRevision;
+      throw error;
+    }
     if (plan.conflicts.length) {
       const error = new Error(
         `Sync blocked: ${plan.conflicts.map((c) => `${c.path}: ${c.reason}`).join('\n')}`,
@@ -465,14 +529,11 @@ async function applySync(root, removing, options = {}) {
         faultBoundary: options.faultBoundary,
       });
     }
+    const next = await describeSyncPlan(root, await makePlan(root, removing));
     return {
-      changes: plan.changes,
-      conflicts: [],
-      installedPacks: plan.manifest.packs,
-      desiredPacks: plan.packMetadata,
-      duplicateDiscovery: plan.duplicateDiscovery,
-      projectInstructions: plan.ruleModel,
-      ruleWarnings: plan.ruleWarnings,
+      ...described,
+      planId: next.planId,
+      configRevision: next.configRevision,
     };
   });
 }

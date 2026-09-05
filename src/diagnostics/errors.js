@@ -7,6 +7,8 @@ const CODE_BY_ERROR = new Map([
   ['CONFIG_INVALID_JSON', 'CONFIG_INVALID_JSON'],
   ['CONFIG_UNSUPPORTED_VERSION', 'CONFIG_UNSUPPORTED_VERSION'],
   ['CONFIG_MIGRATION_UNSUPPORTED', 'CONFIG_MIGRATION_UNSUPPORTED'],
+  ['CONFIG_REVISION_CONFLICT', 'CONFIG_REVISION_CONFLICT'],
+  ['SYNC_PLAN_STALE', 'SYNC_PLAN_STALE'],
   ['RECOVERY_LOCK_BLOCKED', 'RECOVERY_LOCK_BLOCKED'],
 ]);
 
@@ -36,5 +38,10 @@ export function operationalError(error, { operation = 'unknown', stage = 'operat
 }
 
 export function statusForError(error) {
-  return error?.status ?? (error?.conflicts ? 409 : 400);
+  return (
+    error?.status ??
+    (error?.conflicts || ['CONFIG_REVISION_CONFLICT', 'SYNC_PLAN_STALE'].includes(error?.code)
+      ? 409
+      : 400)
+  );
 }
