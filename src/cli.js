@@ -26,6 +26,12 @@ import {
 } from './workspaces/git.js';
 import { createTaskController } from './runtime/task-controller.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
+import {
+  createDiffAnnotation,
+  inspectDiff,
+  listDiffAnnotations,
+  updateDiffAnnotation,
+} from './reviews/diff-annotations.js';
 import { createAcceptanceVerifier } from './acceptance/service.js';
 import {
   addProjectMemory,
@@ -57,6 +63,7 @@ Usage: latchkit <command> [options]
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
   review     Run bounded independent reviews
+  diff       Inspect a revision-bound Git diff or record review feedback
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
@@ -88,6 +95,11 @@ Options:
   --file <path>       memory import or acceptance verify: versioned JSON file
   --budget <n>        memory recover: maximum context characters
   --provider <id>     memory recover: provider contract to evaluate
+  --path <path>       diff annotation: project-relative file path
+  --line <number>     diff annotation: one-based line
+  --side <side>       diff annotation: left or right
+  --body <text>       diff annotation text
+  --evidence-id <id>  diff resolve: current task evidence ID
   --help             Show this help
   --version          Show version
 
@@ -131,6 +143,15 @@ try {
       file: { type: 'string' },
       budget: { type: 'string' },
       provider: { type: 'string' },
+      path: { type: 'string' },
+      line: { type: 'string' },
+      side: { type: 'string' },
+      body: { type: 'string' },
+      annotation: { type: 'string' },
+      'expected-store-revision': { type: 'string' },
+      'evidence-revision': { type: 'string' },
+      'evidence-id': { type: 'string' },
+      base: { type: 'string' },
     },
   });
   cliValues = values;
@@ -138,7 +159,10 @@ try {
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
     const [command, ...extra] = positionals;
-    if (!['task', 'workspace', 'review', 'memory', 'acceptance'].includes(command) && extra.length)
+    if (
+      !['task', 'workspace', 'review', 'memory', 'acceptance', 'diff'].includes(command) &&
+      extra.length
+    )
       throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'],
@@ -167,6 +191,20 @@ try {
         'host-local-authorized',
       ],
       review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
+      diff: [
+        'project',
+        'task',
+        'path',
+        'line',
+        'side',
+        'body',
+        'annotation',
+        'expected-revision',
+        'expected-store-revision',
+        'evidence-revision',
+        'evidence-id',
+        'base',
+      ],
       acceptance: ['project', 'task', 'file', 'host-local-authorized'],
       workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
       memory: [
@@ -323,6 +361,47 @@ try {
           executionAuthorized: values['host-local-authorized'] === true,
         }),
       );
+    } else if (command === 'diff') {
+      if (
+        !['inspect', 'annotations', 'annotate', 'resolve', 'reopen'].includes(extra[0]) ||
+        extra.length !== 1
+      )
+        throw new Error(
+          'Usage: latchkit diff <inspect|annotations|annotate|resolve|reopen> --task <id> [options].',
+        );
+      if (!values.task) throw new Error('diff requires --task.');
+      const action = extra[0];
+      if (action === 'inspect')
+        print(await inspectDiff(root, { taskId: values.task, base: values.base }));
+      else if (action === 'annotations')
+        print(await listDiffAnnotations(root, { taskId: values.task }));
+      else if (action === 'annotate') {
+        const line = Number(values.line);
+        const storeRevision = Number(values['expected-store-revision']);
+        print(
+          await createDiffAnnotation(root, {
+            taskId: values.task,
+            path: values.path,
+            line,
+            side: values.side,
+            body: values.body,
+            expectedRevision: values['expected-revision'],
+            expectedStoreRevision: storeRevision,
+          }),
+        );
+      } else {
+        const storeRevision = Number(values['expected-store-revision']);
+        print(
+          await updateDiffAnnotation(root, {
+            taskId: values.task,
+            annotationId: values.annotation,
+            action,
+            expectedStoreRevision: storeRevision,
+            evidenceRevision: values['evidence-revision'],
+            evidenceId: values['evidence-id'],
+          }),
+        );
+      }
     } else if (command === 'acceptance') {
       if (extra.length !== 1 || extra[0] !== 'verify')
         throw new Error('Usage: latchkit acceptance verify [options].');

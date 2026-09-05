@@ -10,6 +10,12 @@ The console can cancel a task with its current task revision and an idempotency 
 
 `GET /api/tasks/artifact` accepts a task ID and evidence ID, finds that evidence in durable state, and reads only a matching bounded acceptance artifact beneath the project-owned evidence root. There is no browser route for arbitrary filesystem paths.
 
+## Revision-bound diff feedback
+
+For a task with a recorded owned worktree, the workbench and `latchkit diff` expose a read-only Git diff from that worktree's immutable base commit. Diff reads never stage, reset, commit, merge, or delete files. The API refuses caller-supplied worktree paths and bases, verifies the task/worktree registry binding, and bounds diff and individual-file output. Text, binary, large, deleted, renamed, CRLF, spaces, and Unicode paths remain explicit rather than being silently remapped.
+
+Feedback is stored locally at `.latchkit/tasks/diff-annotations-v1.json` using the published `diff-annotations-v1` schema. Each annotation carries task identity, exact diff revision, file content digest, side and line, author kind, status, timestamps, and optional resolution evidence. Comments are untrusted text, are rendered as text only, and never grant permission or become commands. A changed worktree revision marks open feedback stale; Latchkit does not guess a new line. Resolving requires a task evidence ID linked to the current diff revision, while reopening remains explicit. Concurrent writers receive a revision conflict.
+
 ## Memory and recovery
 
 Task and memory workbench lists default to 25 records and have bounded pagination parameters; memory search is capped to 100 results. The console does not inject whole state or transcripts into the DOM. Add, update, delete, export, and recovery calls use the project-memory service. Deletion scrubs the managed record but cannot retract prior exports, backups, or Git history. Exports download locally and are never uploaded.

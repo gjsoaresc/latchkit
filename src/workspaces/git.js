@@ -211,6 +211,19 @@ export async function inspectWorkspaceCapability(root, options = {}) {
   return repository(path.resolve(root), options);
 }
 
+/** Return a verified task-owned checkout without changing Git or user files. */
+export async function inspectTaskWorkspace(root, taskId) {
+  const projectRoot = await realpath(path.resolve(root));
+  validateStableId(taskId, 'task', '$.taskId');
+  await requireRecordedTask(projectRoot, taskId);
+  const info = await repository(projectRoot);
+  if (info.capability !== 'available') return info;
+  const registry = await readRegistry(info.commonDir);
+  const record = registry.workspaces.find((item) => item.taskId === taskId);
+  if (!record) throw new WorkspaceError('Task has no recorded workspace.', 'WORKSPACE_NOT_FOUND');
+  return { ...record, path: await verifyOwned(record) };
+}
+
 /** Create or reconcile one deterministic, task-owned Git worktree. */
 export async function createTaskWorkspace(root, input = {}) {
   const projectRoot = await realpath(path.resolve(root));

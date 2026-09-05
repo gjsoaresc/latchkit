@@ -3,6 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readOptional, writeAtomic } from '../storage.js';
 import { redact } from '../diagnostics/redact.js';
 import { captureSource, createTask } from '../task-state/service.js';
+import { withTaskStateLock } from '../task-state/lock.js';
 import { createTaskWorkspace } from '../workspaces/git.js';
 import { validateCommandPlan } from '../providers/contracts.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
@@ -104,12 +105,14 @@ async function readState(root) {
 }
 
 async function saveState(root, review) {
-  const state = await readState(root);
-  const index = state.reviews.findIndex((item) => item.id === review.id);
-  if (index < 0) state.reviews.push(review);
-  else state.reviews[index] = review;
-  await writeAtomic(root, REVIEW_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, 0o600);
-  return review;
+  return withTaskStateLock(root, async () => {
+    const state = await readState(root);
+    const index = state.reviews.findIndex((item) => item.id === review.id);
+    if (index < 0) state.reviews.push(review);
+    else state.reviews[index] = review;
+    await writeAtomic(root, REVIEW_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, 0o600);
+    return review;
+  });
 }
 
 function dedupe(findings) {
