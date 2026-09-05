@@ -3,7 +3,6 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { validateCommandPlan, validateLifecycleEnvelope } from '../providers/contracts.js';
-import { providerById } from '../providers/registry.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
 import { codexAdapter } from '../providers/codex.js';
 import { createGeminiAdapter } from '../providers/gemini.js';
@@ -191,7 +190,7 @@ export function createTaskController({
       );
     const adapter = adapterFor(providerId, adapters);
     capability(adapter, resumeSession ? 'resume' : 'invocation');
-    const provider = providerById(providerId) ?? adapter.contract;
+    const provider = adapter.contract;
     const before = await inspectTask(root, taskId);
     if (before.task.state === 'cancelled')
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');

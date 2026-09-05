@@ -68,7 +68,8 @@ test('controller starts one owned session, redacts results, and never treats exi
   const controller = createTaskController({
     root,
     adapters: new Map([['fixture', adapter()]]),
-    launch: async ({ onEvent }) => {
+    launch: async ({ provider, onEvent }) => {
+      assert.equal(provider.capabilities.invocation.state, 'supported');
       onEvent({ type: 'process-start', pid: 1234 });
       return {
         status: 'exited',
@@ -95,7 +96,8 @@ test('controller extracts the resumable Codex thread identity from JSONL output'
   const controller = createTaskController({
     root,
     adapters: new Map([['codex', adapter('codex')]]),
-    launch: async ({ onEvent }) => {
+    launch: async ({ provider, onEvent }) => {
+      assert.equal(provider.capabilities.invocation.state, 'supported');
       onEvent({ type: 'process-start', pid: 1234 });
       return {
         status: 'exited',
