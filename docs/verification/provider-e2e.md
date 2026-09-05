@@ -15,20 +15,20 @@ The output follows `schemas/provider-e2e-evidence-v1.schema.json`; it binds the 
 For an explicitly authorized Codex release-candidate lifecycle, first build the exact archive and record its SHA-256, then run:
 
 ```sh
-npm run verify:lifecycle -- --authorized --provider codex --artifact-sha256 <sha256> --output .github/release-evidence/issue-36/lifecycle-codex-windows.json
+npm run verify:lifecycle -- --authorized --provider codex --artifact <archive.tgz> --artifact-sha256 <sha256> --output .github/release-evidence/issue-36/lifecycle-codex-windows.json
 ```
 
-The candidate checkout must be clean and committed. The harness creates a disposable Git project, installs the candidate's bundled skills, records an expected failing check, terminates one owned provider process, recovers the interrupted task, performs one bounded implementation, resumes its provider thread for a handoff, and runs one isolated review. It also verifies that failed, unauthorized, and unsupported evidence cannot become task completion. The retained JSON contains statuses, hashes, versions, limits, and finding counts only; provider output, prompts, command arguments, credentials, usage guesses, and the disposable project are not retained. This is one native-host Codex cell, not evidence for another provider or operating system.
+The candidate checkout must be clean and committed. The harness verifies the supplied digest, installs that exact archive outside the checkout with lifecycle scripts disabled, and imports all Latchkit operations from the installed package. It then creates a disposable Git project, installs the candidate's bundled skills, records an expected failing check, terminates one owned provider process, recovers the interrupted task, performs one bounded implementation, resumes its provider thread for a handoff, and runs one isolated review. It also verifies that failed, unauthorized, and unsupported evidence cannot become task completion. The retained JSON contains statuses, hashes, versions, limits, and finding counts only; provider output, prompts, command arguments, credentials, usage guesses, and the disposable project are not retained. This is one native-host Codex cell, not evidence for another provider or operating system.
 
 ## Release matrix
 
-| Provider | Native Windows | WSL2 | Linux | macOS | Evidence required |
-| --- | --- | --- | --- | --- | --- |
-| Claude Code | unknown | unknown | unknown | unknown | authenticated CLI smoke |
-| Codex | unknown | unknown | unknown | unknown | authenticated CLI smoke |
-| Gemini CLI | unknown | unknown | unknown | unknown | authenticated CLI smoke |
-| Cursor IDE | unknown | unknown | unknown | unknown | manual editor workflow |
-| Cursor CLI | unknown | unknown | unknown | unknown | authenticated CLI smoke |
+| Provider    | Native Windows | WSL2    | Linux   | macOS   | Evidence required       |
+| ----------- | -------------- | ------- | ------- | ------- | ----------------------- |
+| Claude Code | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
+| Codex       | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
+| Gemini CLI  | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
+| Cursor IDE  | unknown        | unknown | unknown | unknown | manual editor workflow  |
+| Cursor CLI  | unknown        | unknown | unknown | unknown | authenticated CLI smoke |
 
 `unknown` means no observed provider session exists; it is not support. WSL2 is an independent runtime and cannot inherit native Windows evidence. Mark each cell `pass`, `fail`, `unsupported`, `blocked`, or `skipped` with a reason and an evidence record. Only observed cells may be promoted to supported release claims.
 

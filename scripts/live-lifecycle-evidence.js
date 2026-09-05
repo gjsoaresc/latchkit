@@ -4,22 +4,9 @@ import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
-import { initProject, syncProject } from '../src/core.js';
-import { createReviewOrchestrator } from '../src/reviews/orchestrator.js';
-import { runProviderProcess } from '../src/runtime/process-runner.js';
-import { createTaskController } from '../src/runtime/task-controller.js';
-import {
-  completeTask,
-  createTask,
-  inspectTask,
-  recordEvidence,
-  resumeTask,
-  verifyTask,
-} from '../src/task-state/service.js';
-import { cleanupTaskWorkspace } from '../src/workspaces/git.js';
 
 const execFileAsync = promisify(execFile);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
@@ -179,6 +166,7 @@ async function main() {
       authorized: { type: 'boolean' },
       provider: { type: 'string', default: 'codex' },
       output: { type: 'string' },
+      artifact: { type: 'string' },
       'artifact-sha256': { type: 'string' },
     },
   });
@@ -186,6 +174,7 @@ async function main() {
   if (values.provider !== 'codex')
     throw new Error('This bounded lifecycle currently supports only the Codex adapter.');
   const output = path.resolve(required(values.output, '--output'));
+  const artifact = path.resolve(required(values.artifact, '--artifact'));
   const artifactSha256 = required(values['artifact-sha256'], '--artifact-sha256');
   if (!/^[a-f0-9]{64}$/.test(artifactSha256))
     throw new Error('--artifact-sha256 must be a lowercase SHA-256 digest.');
@@ -197,11 +186,31 @@ async function main() {
   const packageDocument = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8'));
   const providerVersion = (await command('codex', ['--version'])).stdout.trim();
   const base = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-lifecycle-'));
+  const installed = path.join(base, 'installed');
   const root = path.join(base, 'project');
   const providerPids = [];
   const startedAt = iso();
 
   try {
+    const archiveBytes = await readFile(artifact);
+    if (sha256(archiveBytes) !== artifactSha256)
+      throw new Error('The supplied archive does not match --artifact-sha256.');
+    const npmCli = required(process.env.npm_execpath, 'npm_execpath');
+    await command(
+      process.execPath,
+      [npmCli, 'install', '--ignore-scripts', '--prefix', installed, artifact],
+      { timeoutMs: 120_000 },
+    );
+    const packageRoot = path.join(installed, 'node_modules', 'latchkit');
+    const moduleAt = (relative) => pathToFileURL(path.join(packageRoot, relative)).href;
+    const { initProject, syncProject } = await import(moduleAt('src/core.js'));
+    const { createReviewOrchestrator } = await import(moduleAt('src/reviews/orchestrator.js'));
+    const { runProviderProcess } = await import(moduleAt('src/runtime/process-runner.js'));
+    const { createTaskController } = await import(moduleAt('src/runtime/task-controller.js'));
+    const { completeTask, createTask, inspectTask, recordEvidence, resumeTask, verifyTask } =
+      await import(moduleAt('src/task-state/service.js'));
+    const { cleanupTaskWorkspace } = await import(moduleAt('src/workspaces/git.js'));
+
     await mkdir(root);
     await writeFixture(root);
     await command('git', ['init', '--initial-branch=main'], { cwd: root });
@@ -478,6 +487,7 @@ async function main() {
         retries: 0,
       },
       results: {
+        exactArchiveInstalledOutsideCheckout: true,
         installedSkills: 'passed',
         initialVerification: 'failed-as-required',
         failedEvidenceRejection,
