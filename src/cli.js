@@ -13,7 +13,11 @@ import {
   removeProjectSkills,
   syncProject,
 } from './core.js';
+import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
+import { appendEvent } from './diagnostics/logger.js';
+import { operationalError } from './diagnostics/errors.js';
 
+let cliValues = {};
 const usage = `Latchkit — Your agents. One workflow.
 
 Usage: latchkit <command> [options]
@@ -25,6 +29,7 @@ Usage: latchkit <command> [options]
   recover    Inspect or recover an interrupted mutation
   sync       Install selected skills and scoped project instructions; use --dry-run to preview
   remove     Remove unchanged Latchkit-managed content; keep user-authored text
+  diagnostics Preview/export or clear local redacted diagnostics
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -34,6 +39,8 @@ Options:
   --port <number>     ui: local port (default: automatically selected)
   --to <version>      migrate: target schema version (default: current)
   --dry-run           migrate/recover/sync: preview exact managed changes and collisions without writing
+  --export            diagnostics: export a reviewable local support bundle
+  --clear             diagnostics: delete local diagnostic records
   --help             Show this help
   --version          Show version
 
@@ -55,6 +62,7 @@ try {
       version: { type: 'boolean' },
     },
   });
+  cliValues = values;
   if (values.version) console.log('0.1.0-alpha.1');
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
@@ -68,6 +76,7 @@ try {
       recover: ['project', 'dry-run'],
       sync: ['project', 'dry-run'],
       remove: ['project'],
+      diagnostics: ['project', 'export', 'clear'],
       ui: ['project', 'port'],
     }[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -102,7 +111,13 @@ try {
       print(result);
       if (result.conflicts.length) process.exitCode = 1;
     } else if (command === 'remove') print(await removeProjectSkills(root));
-    else if (command === 'ui') {
+    else if (command === 'diagnostics') {
+      if (values.clear) {
+        const { clearDiagnostics } = await import('./diagnostics/logger.js');
+        print(await clearDiagnostics(root));
+      } else if (values.export) print(await exportSupportBundle(root));
+      else print(await previewSupportBundle(root));
+    } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)
         throw new Error('Port must be an integer between 0 and 65535.');
@@ -120,6 +135,9 @@ try {
     }
   }
 } catch (error) {
-  console.error(`Latchkit: ${error.message}`);
+  const diagnostic = operationalError(error, { operation: 'cli', stage: 'dispatch' });
+  console.error(`Latchkit [${diagnostic.code}]: ${diagnostic.message}`);
+  const project = typeof cliValues.project === 'string' ? path.resolve(cliValues.project) : null;
+  if (project) await appendEvent(project, diagnostic).catch(() => {});
   process.exitCode = 1;
 }
