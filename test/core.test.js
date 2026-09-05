@@ -366,6 +366,9 @@ test('doctor reports every supported provider without changing the project', asy
     assert.equal(typeof provider.label, 'string');
     assert.equal(typeof provider.command, 'string');
     assert.equal(typeof provider.skillDirectory, 'string');
+    assert.ok(['verified', 'unverified'].includes(provider.verification.installed));
+    assert.equal(provider.verification.authenticated, 'unknown');
+    assert.equal(provider.verification.endToEnd, 'unverified');
     assert.equal(typeof provider.detected, 'boolean');
     if (provider.detected) assert.equal(typeof provider.path, 'string');
   }

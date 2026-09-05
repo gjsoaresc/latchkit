@@ -16,6 +16,19 @@ Latchkit installs project-local `SKILL.md` files and stores provider/skill selec
 
 Latchkit writes the shared destination once when multiple selected providers use it. It does not also create `.gemini/skills` or `.cursor/skills` copies. Provider selection determines export destinations, not visibility permissions: compatible tools may discover installed skills even when they are not selected. Cursor may discover duplicate names when Claude and shared-root copies coexist. Inspect the provider's skill listing when resolving duplicates.
 
+## Capability evidence matrix
+
+`src/providers/` exposes versioned, normalized provider metadata. As of the verification date above, every listed provider has evidence only for portable skill export. Detection on `PATH` means only that the executable was found; it does not establish login, project configuration, invocation, hook semantics, resumption, cancellation, compaction, usage, or an end-to-end session.
+
+| Capability | Claude Code | Codex | Gemini CLI | Cursor IDE / CLI |
+|---|---|---|---|---|
+| Portable skill export | Supported, documented | Supported, documented | Supported, documented | Supported, documented |
+| Invocation, resume, compaction, cancellation, usage | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter |
+| Lifecycle hooks and blocking decisions | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter |
+| Installed / authenticated / configured / end-to-end | Independently reported; only installation may be discovered | Independently reported; only installation may be discovered | Independently reported; only installation may be discovered | Independently reported; only installation may be discovered |
+
+Each capability has a `supported`, `partial`, `unsupported`, or `unknown` state, a reason, version range, and evidence URL. Unknown or an unrecognized provider version is not permission to infer support. Compatible skills remain exportable; requested unavailable enforcement is refused. A blocking decision may use an explicitly supported advisory fallback, but the result is labeled advisory and never reported as a passed gate. Missing usage is unknown, never zero. Provider selection is an installation choice, not an account, permission, or filesystem access boundary.
+
 ## Upstream platform requirements
 
 | Provider | Windows | Linux and macOS | Official source |
@@ -30,7 +43,7 @@ Latchkit's own runtime minimum is Node.js 22. Each selected provider retains its
 
 ## Rules and hooks: future adapters
 
-The current starter does not install these integrations. They need independent provider implementations and execution tests.
+The current starter does not install these integrations. They need independent provider implementations and execution tests. The hook documentation below is evidence to recheck before an adapter changes an `unknown` capability state; matching names do not establish matching event semantics.
 
 | Provider | Instruction surface | Hook surface |
 |---|---|---|

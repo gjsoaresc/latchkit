@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/lifecycle-envelope-v1.schema.json",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "provider", "correlation", "eventId", "timestamp", "kind", "payload", "decisionModes"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "provider": { "type": "object", "additionalProperties": false, "required": ["id", "version", "runtime"], "properties": { "id": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 }, "runtime": { "type": "string", "minLength": 1 } } },
+    "correlation": { "type": "object", "additionalProperties": false, "required": ["projectId", "taskId", "sessionId"], "properties": { "projectId": { "type": "string", "minLength": 1 }, "taskId": { "type": "string", "minLength": 1 }, "sessionId": { "type": "string", "minLength": 1 } } },
+    "eventId": { "type": "string", "minLength": 1 }, "timestamp": { "type": "integer", "minimum": 0 },
+    "kind": { "enum": ["turn-completed", "session-terminated", "interrupted", "verified-task-completed"] },
+    "payload": { "type": "object" }, "decisionModes": { "type": "array", "items": { "enum": ["blocking", "advisory"] } }
+  }
+}

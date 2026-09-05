@@ -1,10 +1,5 @@
-export const PROVIDERS = [
-  { id: 'claude', label: 'Claude Code', command: 'claude', skillDirectory: '.claude/skills' },
-  { id: 'codex', label: 'Codex', command: 'codex', skillDirectory: '.agents/skills' },
-  { id: 'gemini', label: 'Gemini CLI', command: 'gemini', skillDirectory: '.agents/skills' },
-  { id: 'cursor', label: 'Cursor IDE', command: 'cursor', skillDirectory: '.agents/skills' },
-  { id: 'cursor-cli', label: 'Cursor CLI', command: 'agent', skillDirectory: '.agents/skills' },
-];
+// Compatibility re-export; provider definitions live in providers/registry.js.
+export { PROVIDERS } from './providers/registry.js';
 
 export const SKILLS = [
   {

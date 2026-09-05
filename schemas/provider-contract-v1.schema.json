@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/provider-contract-v1.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "id", "label", "command", "skillDirectory", "capabilities", "verification"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "label": { "type": "string", "minLength": 1 },
+    "command": { "type": "string", "minLength": 1 },
+    "skillDirectory": { "type": "string", "minLength": 1 },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "verification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["installed", "authenticated", "configured", "endToEnd"],
+      "properties": {
+        "installed": { "$ref": "#/$defs/verification" }, "authenticated": { "$ref": "#/$defs/verification" },
+        "configured": { "$ref": "#/$defs/verification" }, "endToEnd": { "$ref": "#/$defs/verification" }
+      }
+    }
+  },
+  "$defs": {
+    "evidence": { "type": "object", "additionalProperties": false, "required": ["state", "reason", "versionRange", "evidenceUrl"], "properties": { "state": { "enum": ["supported", "partial", "unsupported", "unknown"] }, "reason": { "type": "string", "minLength": 1 }, "versionRange": { "type": "string", "minLength": 1 }, "evidenceUrl": { "type": "string" } } },
+    "evidenceMap": { "type": "object", "additionalProperties": { "$ref": "#/$defs/evidence" } },
+    "verification": { "enum": ["verified", "unverified", "unknown"] },
+    "capabilities": { "type": "object", "additionalProperties": false, "required": ["skills", "invocation", "hooks", "decisions", "compaction", "resume", "cancellation", "usage"], "properties": { "skills": { "$ref": "#/$defs/evidence" }, "invocation": { "$ref": "#/$defs/evidence" }, "hooks": { "$ref": "#/$defs/evidenceMap" }, "decisions": { "$ref": "#/$defs/evidenceMap" }, "compaction": { "$ref": "#/$defs/evidence" }, "resume": { "$ref": "#/$defs/evidence" }, "cancellation": { "$ref": "#/$defs/evidence" }, "usage": { "$ref": "#/$defs/evidence" } } }
+  }
+}
