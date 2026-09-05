@@ -18,6 +18,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run check:skills
       - run: npm run check
       - run: npm test
       - run: npm pack --dry-run

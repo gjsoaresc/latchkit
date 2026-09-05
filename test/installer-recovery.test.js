@@ -15,12 +15,26 @@ import {
   saveConfig,
   syncProject,
 } from '../src/core.js';
-import { applyRegisteredTransaction, createResourceRegistry, inspectTransaction, recoverTransaction } from '../src/installer/transactions.js';
-import { inspectProjectLock, removeProvenStaleLock, withProjectLock } from '../src/installer/lock.js';
+import {
+  applyRegisteredTransaction,
+  createResourceRegistry,
+  inspectTransaction,
+  recoverTransaction,
+} from '../src/installer/transactions.js';
+import {
+  inspectProjectLock,
+  removeProvenStaleLock,
+  withProjectLock,
+} from '../src/installer/lock.js';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const crashHelper = path.join(repositoryRoot, 'scripts', 'test-helpers', 'crash-sync.js');
-const resourceCrashHelper = path.join(repositoryRoot, 'scripts', 'test-helpers', 'crash-resource.js');
+const resourceCrashHelper = path.join(
+  repositoryRoot,
+  'scripts',
+  'test-helpers',
+  'crash-resource.js',
+);
 const cli = path.join(repositoryRoot, 'src', 'cli.js');
 const execFileAsync = promisify(execFile);
 
@@ -31,28 +45,38 @@ async function temporaryProject(t) {
 }
 
 async function exists(filename) {
-  try { await fs.lstat(filename); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  try {
+    await fs.lstat(filename);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 async function crashAt(root, operation, boundary) {
-  const child = fork(crashHelper, [root, operation, boundary], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const child = fork(crashHelper, [root, operation, boundary], {
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
   await new Promise((resolve, reject) => {
     child.once('message', resolve);
     child.once('error', reject);
-    child.once('exit', code => reject(new Error(`Child exited before fault boundary (${code}).`)));
+    child.once('exit', (code) =>
+      reject(new Error(`Child exited before fault boundary (${code}).`)),
+    );
   });
   return child;
 }
 
 async function killChild(child) {
-  const exited = new Promise(resolve => child.once('exit', resolve));
+  const exited = new Promise((resolve) => child.once('exit', resolve));
   child.kill('SIGKILL');
   await exited;
 }
 
-const skillPath = root => path.join(root, '.agents', 'skills', 'latchkit-spec', 'SKILL.md');
+const skillPath = (root) => path.join(root, '.agents', 'skills', 'latchkit-spec', 'SKILL.md');
 
-test('a process killed immediately after journal publication leaves resources untouched and recoverable', async t => {
+test('a process killed immediately after journal publication leaves resources untouched and recoverable', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const child = await crashAt(root, 'sync', 'journal');
@@ -63,7 +87,7 @@ test('a process killed immediately after journal publication leaves resources un
   assert.equal(await exists(skillPath(root)), false);
 });
 
-test('a live transaction lock cannot be reclaimed and a killed create rolls back', async t => {
+test('a live transaction lock cannot be reclaimed and a killed create rolls back', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const child = await crashAt(root, 'sync', 'resource:0');
@@ -84,7 +108,7 @@ test('a live transaction lock cannot be reclaimed and a killed create rolls back
   assert.equal((await recoverProject(root)).state, 'none');
 });
 
-test('a crash after manifest commit finalizes without removing installed resources', async t => {
+test('a crash after manifest commit finalizes without removing installed resources', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const child = await crashAt(root, 'sync', 'manifest');
@@ -96,7 +120,7 @@ test('a crash after manifest commit finalizes without removing installed resourc
   assert.equal(await fs.readFile(skillPath(root), 'utf8'), contents);
 });
 
-test('interrupted removal restores exact managed bytes', async t => {
+test('interrupted removal restores exact managed bytes', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   await syncProject(root);
@@ -108,13 +132,13 @@ test('interrupted removal restores exact managed bytes', async t => {
   assert.deepEqual(await fs.readFile(skillPath(root)), before);
 });
 
-test('user edits after interruption are preserved and reported as recovery conflicts', async t => {
+test('user edits after interruption are preserved and reported as recovery conflicts', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const child = await crashAt(root, 'sync', 'resource:0');
   await killChild(child);
   await fs.writeFile(skillPath(root), '# user replacement\n');
-  await assert.rejects(recoverProject(root), error => {
+  await assert.rejects(recoverProject(root), (error) => {
     assert.equal(error.code, 'RECOVERY_CONFLICT');
     assert.equal(error.conflicts[0].path, '.agents/skills/latchkit-spec/SKILL.md');
     return true;
@@ -123,7 +147,7 @@ test('user edits after interruption are preserved and reported as recovery confl
   assert.equal(await exists(path.join(root, '.latchkit', 'transaction.json')), true);
 });
 
-test('malformed lock and journal metadata cannot trigger filesystem mutation', async t => {
+test('malformed lock and journal metadata cannot trigger filesystem mutation', async (t) => {
   const root = await temporaryProject(t);
   await fs.mkdir(path.join(root, '.latchkit'));
   await fs.writeFile(path.join(root, '.latchkit', 'lock'), '{broken');
@@ -133,19 +157,25 @@ test('malformed lock and journal metadata cannot trigger filesystem mutation', a
   assert.equal(await fs.readFile(path.join(root, '.latchkit', 'lock'), 'utf8'), before);
 
   await fs.unlink(path.join(root, '.latchkit', 'lock'));
-  await fs.writeFile(path.join(root, '.latchkit', 'transaction.json'), JSON.stringify({ schemaVersion: 1, resources: [{ resourceId: 'x', path: '../../outside' }] }));
+  await fs.writeFile(
+    path.join(root, '.latchkit', 'transaction.json'),
+    JSON.stringify({ schemaVersion: 1, resources: [{ resourceId: 'x', path: '../../outside' }] }),
+  );
   assert.equal((await inspectRecovery(root)).transaction.state, 'invalid');
   await assert.rejects(recoverProject(root));
   assert.equal(await exists(path.join(root, '..', 'outside')), false);
 });
 
-test('PID reuse cannot make an unrelated process appear to own a stale lock', async t => {
+test('PID reuse cannot make an unrelated process appear to own a stale lock', async (t) => {
   const root = await temporaryProject(t);
   await fs.mkdir(path.join(root, '.latchkit'));
   const probe = net.createServer();
-  await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(0, '127.0.0.1', resolve); });
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', resolve);
+  });
   const port = probe.address().port;
-  await new Promise(resolve => probe.close(resolve));
+  await new Promise((resolve) => probe.close(resolve));
   const { publicKey } = generateKeyPairSync('ed25519');
   const metadata = {
     schemaVersion: 1,
@@ -163,7 +193,7 @@ test('PID reuse cannot make an unrelated process appear to own a stale lock', as
   assert.equal((await inspectRecovery(root)).lock.state, 'none');
 });
 
-test('a junction introduced after interruption is refused during recovery', async t => {
+test('a junction introduced after interruption is refused during recovery', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const child = await crashAt(root, 'sync', 'resource:0');
@@ -173,16 +203,21 @@ test('a junction introduced after interruption is refused during recovery', asyn
   t.after(async () => fs.rm(outside, { recursive: true, force: true }));
   await fs.rm(path.join(root, '.agents'), { recursive: true, force: true });
   try {
-    await fs.symlink(outside, path.join(root, '.agents'), process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.symlink(
+      outside,
+      path.join(root, '.agents'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
   } catch (error) {
-    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) return t.skip(`Links unavailable (${error.code})`);
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code))
+      return t.skip(`Links unavailable (${error.code})`);
     throw error;
   }
   await assert.rejects(recoverProject(root), /symlink or junction/);
   assert.deepEqual(await fs.readdir(outside), []);
 });
 
-test('registered provider configuration uses the same bounded recovery engine', async t => {
+test('registered provider configuration uses the same bounded recovery engine', async (t) => {
   const root = await temporaryProject(t);
   const relative = '.provider/settings.json';
   const absolute = path.join(root, '.provider', 'settings.json');
@@ -191,28 +226,40 @@ test('registered provider configuration uses the same bounded recovery engine', 
   await fs.writeFile(absolute, original);
   const registry = createResourceRegistry([{ id: 'provider:test-settings', path: relative }]);
   const next = '{\n  "userSetting": true,\n  "managedImport": "latchkit"\n}\n';
-  await assert.rejects(withProjectLock(root, () => applyRegisteredTransaction(root, {
-    operation: 'provider-fixture',
-    registry,
-    changes: [{ resourceId: 'provider:test-settings', bytes: next }],
-    manifest: '{"provider-fixture":"after"}\n',
-    faultBoundary: async boundary => { if (boundary === 'resource:0') throw new Error('simulated interruption'); },
-  })), /simulated interruption/);
+  await assert.rejects(
+    withProjectLock(root, () =>
+      applyRegisteredTransaction(root, {
+        operation: 'provider-fixture',
+        registry,
+        changes: [{ resourceId: 'provider:test-settings', bytes: next }],
+        manifest: '{"provider-fixture":"after"}\n',
+        faultBoundary: async (boundary) => {
+          if (boundary === 'resource:0') throw new Error('simulated interruption');
+        },
+      }),
+    ),
+    /simulated interruption/,
+  );
   assert.equal(await fs.readFile(absolute, 'utf8'), original);
   assert.equal((await inspectTransaction(root, registry)).state, 'none');
 
-  await withProjectLock(root, () => applyRegisteredTransaction(root, {
-    operation: 'provider-fixture', registry,
-    changes: [{ resourceId: 'provider:test-settings', bytes: next }],
-    manifest: '{"provider-fixture":"after"}\n',
-  }));
+  await withProjectLock(root, () =>
+    applyRegisteredTransaction(root, {
+      operation: 'provider-fixture',
+      registry,
+      changes: [{ resourceId: 'provider:test-settings', bytes: next }],
+      manifest: '{"provider-fixture":"after"}\n',
+    }),
+  );
   assert.equal(await fs.readFile(absolute, 'utf8'), next);
   assert.equal((await inspectTransaction(root, registry)).state, 'none');
 });
 
-test('a killed provider configuration update restores unrelated user settings exactly', async t => {
+test('a killed provider configuration update restores unrelated user settings exactly', async (t) => {
   const root = await temporaryProject(t);
-  const registry = createResourceRegistry([{ id: 'provider:test-settings', path: '.provider/settings.json' }]);
+  const registry = createResourceRegistry([
+    { id: 'provider:test-settings', path: '.provider/settings.json' },
+  ]);
   const settings = path.join(root, '.provider', 'settings.json');
   const manifest = path.join(root, '.latchkit', 'manifest.json');
   await fs.mkdir(path.dirname(settings), { recursive: true });
@@ -220,8 +267,13 @@ test('a killed provider configuration update restores unrelated user settings ex
   const original = '{\n  "userSetting": true\n}\n';
   await fs.writeFile(settings, original);
   await fs.writeFile(manifest, '{"state":"before"}\n');
-  const child = fork(resourceCrashHelper, [root, 'resource:0'], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
-  await new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); });
+  const child = fork(resourceCrashHelper, [root, 'resource:0'], {
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  await new Promise((resolve, reject) => {
+    child.once('message', resolve);
+    child.once('error', reject);
+  });
   await killChild(child);
   const lock = await inspectProjectLock(root);
   assert.equal(lock.state, 'stale');
@@ -232,7 +284,7 @@ test('a killed provider configuration update restores unrelated user settings ex
   assert.equal(await fs.readFile(manifest, 'utf8'), '{"state":"before"}\n');
 });
 
-test('configuration saves remain intact across installer recovery', async t => {
+test('configuration saves remain intact across installer recovery', async (t) => {
   const root = await temporaryProject(t);
   const config = await initProject(root, { providers: ['codex'], skills: ['spec'] });
   await saveConfig(root, { ...config, providerSettings: { codex: { approvalPolicy: 'ask' } } });
@@ -243,18 +295,23 @@ test('configuration saves remain intact across installer recovery', async t => {
   assert.deepEqual(await fs.readFile(path.join(root, '.latchkit', 'config.json')), before);
 });
 
-test('CLI recovery preview is read-only and apply cleans interrupted metadata', async t => {
+test('CLI recovery preview is read-only and apply cleans interrupted metadata', async (t) => {
   const root = await temporaryProject(t);
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const child = await crashAt(root, 'sync', 'resource:0');
   await killChild(child);
   const journal = path.join(root, '.latchkit', 'transaction.json');
   const before = await fs.readFile(journal);
-  const preview = JSON.parse((await execFileAsync(process.execPath, [cli, 'recover', '--dry-run', '--project', root])).stdout);
+  const preview = JSON.parse(
+    (await execFileAsync(process.execPath, [cli, 'recover', '--dry-run', '--project', root]))
+      .stdout,
+  );
   assert.equal(preview.lock.state, 'stale');
   assert.equal(preview.transaction.state, 'pending');
   assert.deepEqual(await fs.readFile(journal), before);
-  const applied = JSON.parse((await execFileAsync(process.execPath, [cli, 'recover', '--project', root])).stdout);
+  const applied = JSON.parse(
+    (await execFileAsync(process.execPath, [cli, 'recover', '--project', root])).stdout,
+  );
   assert.equal(applied.state, 'rolled-back');
   assert.equal(await exists(journal), false);
 });
