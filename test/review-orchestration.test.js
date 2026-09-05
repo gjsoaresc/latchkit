@@ -176,13 +176,12 @@ test('parent cancellation aborts owned reviewers and records partial results', a
     reviewers: [{ providerId: 'fixture' }],
     executionAuthorized: true,
   });
-  for (let attempt = 0; !reviewId && attempt < 100; attempt += 1) {
-    const state = await orchestrator.inspect(root);
-    reviewId = state.reviews[0]?.id;
-    if (!reviewId) await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  assert.ok(reviewId);
+  // Launch occurs only after the review record is durably saved. Waiting for
+  // that boundary avoids a scheduler-dependent polling deadline on loaded CI.
   await launchedPromise;
+  const state = await orchestrator.inspect(root);
+  reviewId = state.reviews[0]?.id;
+  assert.ok(reviewId);
   await orchestrator.cancel({ reviewId });
   const result = await run;
   assert.equal(aborted, true);
