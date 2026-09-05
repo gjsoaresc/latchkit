@@ -17,6 +17,8 @@ import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.
 import { appendEvent, clearDiagnostics } from './diagnostics/logger.js';
 import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
+import { createTaskController } from './runtime/task-controller.js';
+import { listTasks } from './task-state/service.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 export const LOCAL_API_VERSION = 1;
@@ -96,6 +98,7 @@ export async function startServer(root, { port = 0 } = {}) {
   let origin;
   let host;
   let pendingMutation = Promise.resolve();
+  const taskController = createTaskController({ root });
   const serialize = (operation) => {
     const result = pendingMutation.then(operation);
     pendingMutation = result.catch(() => {});
@@ -174,6 +177,22 @@ export async function startServer(root, { port = 0 } = {}) {
           respond(res, 200, await serialize(() => exportSupportBundle(root)));
         } else if (pathname === '/api/diagnostics' && req.method === 'DELETE') {
           respond(res, 200, await serialize(() => clearDiagnostics(root)));
+        } else if (pathname === '/api/tasks' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('task');
+          respond(res, 200, taskId ? await taskController.inspect(taskId) : await listTasks(root));
+        } else if (pathname === '/api/tasks/start' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => taskController.start(body)));
+        } else if (pathname === '/api/tasks/resume' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => taskController.resume(body)));
+        } else if (pathname === '/api/tasks/cancel' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => taskController.cancel(body)));
+        } else if (pathname === '/api/tasks/events' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => taskController.observe(body)));
         } else {
           throw fail(404, 'API route or method not found.');
         }

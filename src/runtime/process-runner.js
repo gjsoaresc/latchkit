@@ -115,7 +115,6 @@ export async function runProviderProcess({
     });
 
   const launched = spawnArguments(command);
-  onEvent?.({ type: 'process-start', launch: redactLaunchMetadata(command) });
   let child;
   try {
     child = spawn(launched.executable, launched.args, {
@@ -127,6 +126,9 @@ export async function runProviderProcess({
       windowsVerbatimArguments: process.platform === 'win32' && isWindowsShim(command.executable),
       windowsHide: true,
     });
+    // The PID is process-local ownership evidence, not a session identifier.
+    // Callers may persist it for diagnostics but must not adopt it after restart.
+    onEvent?.({ type: 'process-start', pid: child.pid, launch: redactLaunchMetadata(command) });
   } catch (error) {
     return result('spawn-failed', { code: error.code ?? 'SPAWN_FAILED', message: error.message });
   }
