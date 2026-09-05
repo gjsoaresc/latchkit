@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { doctor, initProject, planSync, readConfig, removeProjectSkills, syncProject } from './core.js';
+import {
+  doctor,
+  initProject,
+  migrateConfig,
+  planConfigMigration,
+  planSync,
+  readConfig,
+  removeProjectSkills,
+  syncProject,
+} from './core.js';
 
 const usage = `Latchkit — Your agents. One workflow.
 
@@ -10,6 +19,7 @@ Usage: latchkit <command> [options]
   init       Create project configuration without replacing existing settings
   doctor     Detect host runtime and provider executables on PATH
   config     Print saved project configuration
+  migrate    Upgrade configuration; use --dry-run to preview
   sync       Install selected skills; use --dry-run to preview
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   ui         Start the local configuration console (Ctrl+C to stop)
@@ -19,7 +29,8 @@ Options:
   --providers <csv>   init: claude,codex,gemini,cursor,cursor-cli
   --skills <csv>      init: spec,fix,review,handoff
   --port <number>     ui: local port (default: automatically selected)
-  --dry-run          sync: show changes without writing skill files
+  --to <version>      migrate: target schema version (default: current)
+  --dry-run           migrate/sync: preview without writing files
   --help             Show this help
   --version          Show version
 
@@ -30,7 +41,7 @@ Skills guide agent behavior; this alpha does not enforce workflow hooks.
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     project: { type: 'string' }, providers: { type: 'string' }, skills: { type: 'string' },
-    port: { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' }, version: { type: 'boolean' },
+    port: { type: 'string' }, to: { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' }, version: { type: 'boolean' },
   } });
   if (values.version) console.log('0.1.0-alpha.1');
   else if (values.help || positionals.length === 0) console.log(usage);
@@ -39,7 +50,7 @@ try {
     if (extra.length) throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'], doctor: ['project'], config: ['project'],
-      sync: ['project', 'dry-run'], remove: ['project'], ui: ['project', 'port'],
+      migrate: ['project', 'to', 'dry-run'], sync: ['project', 'dry-run'], remove: ['project'], ui: ['project', 'port'],
     }[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
     for (const option of Object.keys(values)) if (!allowed.includes(option)) throw new Error(`--${option} is not valid for ${command}.`);
@@ -51,6 +62,10 @@ try {
     }));
     else if (command === 'doctor') print(await doctor(root));
     else if (command === 'config') print(await readConfig(root));
+    else if (command === 'migrate') {
+      const options = values.to === undefined ? {} : { toVersion: values.to };
+      print(await (values['dry-run'] ? planConfigMigration(root, options) : migrateConfig(root, options)));
+    }
     else if (command === 'sync') {
       const result = await (values['dry-run'] ? planSync(root) : syncProject(root));
       print(result);

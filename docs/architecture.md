@@ -17,6 +17,8 @@ The core targets Node.js 22 or newer and has no runtime package dependencies. No
 
 The frontend is served locally. It is a configuration surface, not an embedded terminal, hosted account service, or provider session viewer. Authentication and model selection remain in each provider's own tools.
 
+Project configuration and the ownership manifest are independently versioned contracts. Configuration reads never migrate files implicitly; supported schemas, provider extension boundaries, validation behavior, and explicit backup-backed migration are documented in [configuration contracts](configuration.md). Source-pack metadata and workflow state use separate future contracts rather than adding unrelated state to project configuration.
+
 ## Skill synchronization
 
 The configuration uses the skill IDs `spec`, `fix`, `review`, and `handoff`. They map to the folders `latchkit-spec`, `latchkit-fix`, `latchkit-review`, and `latchkit-handoff`.

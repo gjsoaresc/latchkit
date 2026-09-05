@@ -15,12 +15,16 @@ import {
 
 const providerIds = ['claude', 'codex', 'gemini', 'cursor', 'cursor-cli'];
 const skillIds = ['spec', 'fix', 'review', 'handoff'];
-const validConfig = (overrides = {}) => ({
-  schemaVersion: 1,
-  providers: [...providerIds],
-  skills: [...skillIds],
-  ...overrides,
-});
+const validConfig = (overrides = {}) => {
+  const schemaVersion = overrides.schemaVersion ?? 2;
+  return {
+    schemaVersion,
+    providers: [...providerIds],
+    skills: [...skillIds],
+    ...(schemaVersion === 2 ? { providerSettings: {} } : {}),
+    ...overrides,
+  };
+};
 
 async function temporaryProject(t) {
   const temporaryDirectory = path.resolve(os.tmpdir());

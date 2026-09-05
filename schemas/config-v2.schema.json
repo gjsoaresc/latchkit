@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/config-v2.schema.json",
+  "title": "Latchkit project configuration v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "providers", "skills", "providerSettings"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "providers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["claude", "codex", "gemini", "cursor", "cursor-cli"] }
+    },
+    "skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["spec", "fix", "review", "handoff"] }
+    },
+    "providerSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "claude": { "$ref": "#/$defs/settings" },
+        "codex": { "$ref": "#/$defs/settings" },
+        "gemini": { "$ref": "#/$defs/settings" },
+        "cursor": { "$ref": "#/$defs/settings" },
+        "cursor-cli": { "$ref": "#/$defs/settings" }
+      }
+    }
+  },
+  "$defs": {
+    "settings": {
+      "type": "object",
+      "description": "Provider-owned JSON settings. Provider contracts define their nested fields."
+    }
+  }
+}

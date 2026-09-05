@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "providers": ["codex"],
+  "skills": ["fix"],
+  "providerSettings": {
+    "codex": {
+      "approvalPolicy": "provider-controlled",
+      "nested": { "enabled": true }
+    }
+  }
+}
