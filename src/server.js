@@ -89,26 +89,38 @@ export async function startServer(root, { port = 0 } = {}) {
   };
 
   const server = http.createServer({ maxHeaderSize: 16 * 1024 }, async (req, res) => {
-    res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'");
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+    );
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     try {
-      if (req.headers.host !== host) throw fail(403, 'Unrecognized host. Open the URL printed by Latchkit.');
-      if (!req.url?.startsWith('/') || req.url.startsWith('//')) throw fail(400, 'Invalid request URL.');
-      if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) throw fail(413, 'Request body exceeds 64 KB.');
+      if (req.headers.host !== host)
+        throw fail(403, 'Unrecognized host. Open the URL printed by Latchkit.');
+      if (!req.url?.startsWith('/') || req.url.startsWith('//'))
+        throw fail(400, 'Invalid request URL.');
+      if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES)
+        throw fail(413, 'Request body exceeds 64 KB.');
       const requestUrl = new URL(req.url, origin);
       const pathname = requestUrl.pathname;
       if (pathname === '/api' || pathname.startsWith('/api/')) {
-        if (!authenticated(req, token)) throw fail(401, 'Session key missing or expired. Reopen the URL printed by Latchkit.');
+        if (!authenticated(req, token))
+          throw fail(401, 'Session key missing or expired. Reopen the URL printed by Latchkit.');
         if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin !== origin) {
           throw fail(403, 'Request origin must match this Latchkit session.');
         }
         if (pathname === '/api/state' && req.method === 'GET') {
           await pendingMutation;
-          respond(res, 200, { config: await readConfig(root), providers: PROVIDERS, skills: SKILLS, doctor: await doctor(root) });
+          respond(res, 200, {
+            config: await readConfig(root),
+            providers: PROVIDERS,
+            skills: SKILLS,
+            doctor: await doctor(root),
+          });
         } else if (pathname === '/api/plan' && req.method === 'GET') {
           await pendingMutation;
           respond(res, 200, await planSync(root));
@@ -122,9 +134,14 @@ export async function startServer(root, { port = 0 } = {}) {
           respond(res, 200, await planConfigMigration(root, { toVersion }));
         } else if (pathname === '/api/config/migration' && req.method === 'POST') {
           const body = await readJson(req);
-          respond(res, 200, await serialize(() => migrateConfig(root, { toVersion: body.toVersion })));
+          respond(
+            res,
+            200,
+            await serialize(() => migrateConfig(root, { toVersion: body.toVersion })),
+          );
         } else if (pathname === '/api/sync' && req.method === 'POST') {
-          if (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding']) await readJson(req);
+          if (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'])
+            await readJson(req);
           respond(res, 200, await serialize(() => syncProject(root)));
         } else {
           throw fail(404, 'API route or method not found.');

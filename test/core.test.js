@@ -112,9 +112,9 @@ test('preview is read-only and five providers share eight skill files', async (t
   assert.deepEqual(preview.conflicts, []);
   assert.deepEqual(await snapshot(root), before);
 
-  const expected = ['.claude', '.agents'].flatMap((directory) =>
-    skillIds.map((id) => `${directory}/skills/latchkit-${id}/SKILL.md`),
-  ).sort();
+  const expected = ['.claude', '.agents']
+    .flatMap((directory) => skillIds.map((id) => `${directory}/skills/latchkit-${id}/SKILL.md`))
+    .sort();
   assert.deepEqual(changedPaths(root, preview, 'create'), expected);
 
   const installed = await syncProject(root);
@@ -129,7 +129,10 @@ test('preview is read-only and five providers share eight skill files', async (t
   const repeated = await syncProject(root);
   assert.deepEqual(repeated.conflicts, []);
   assert.deepEqual(changedPaths(root, repeated, 'unchanged'), expected);
-  assert.deepEqual(repeated.changes.filter((change) => change.action !== 'unchanged'), []);
+  assert.deepEqual(
+    repeated.changes.filter((change) => change.action !== 'unchanged'),
+    [],
+  );
   assert.deepEqual(await snapshot(root), installedSnapshot);
 });
 
@@ -168,7 +171,10 @@ test('invalid configurations are rejected without replacing the saved config', a
 
 test('invalid configuration read from disk cannot trigger skill installation', async (t) => {
   const { root } = await temporaryProject(t);
-  await writeFile(path.join(root, '.latchkit', 'config.json'), JSON.stringify(validConfig({ skills: ['../escape'] })));
+  await writeFile(
+    path.join(root, '.latchkit', 'config.json'),
+    JSON.stringify(validConfig({ skills: ['../escape'] })),
+  );
   const before = await snapshot(root);
   await assert.rejects(async () => readConfig(root));
   await assert.rejects(async () => syncProject(root));
@@ -190,35 +196,47 @@ test('an unowned destination blocks the entire sync before any files change', as
   assert.equal(await exists(skillFile(root, '.agents', 'fix')), false);
 });
 
-test('a failed Windows manifest replacement rolls back the new file and permits retry', {
-  skip: process.platform !== 'win32' ? 'Uses the Windows read-only file attribute to force a manifest rename failure' : false,
-}, async (t) => {
-  const { root } = await temporaryProject(t);
-  await initProject(root, { providers: ['codex'], skills: ['spec'] });
-  await syncProject(root);
-  await saveConfig(root, validConfig({ providers: ['codex'], skills: ['spec', 'fix'] }));
-  const manifest = path.join(root, '.latchkit', 'manifest.json');
-  const originalManifest = await fs.readFile(manifest, 'utf8');
-  const existingSkill = await fs.readFile(skillFile(root, '.agents', 'spec'), 'utf8');
+test(
+  'a failed Windows manifest replacement rolls back the new file and permits retry',
+  {
+    skip:
+      process.platform !== 'win32'
+        ? 'Uses the Windows read-only file attribute to force a manifest rename failure'
+        : false,
+  },
+  async (t) => {
+    const { root } = await temporaryProject(t);
+    await initProject(root, { providers: ['codex'], skills: ['spec'] });
+    await syncProject(root);
+    await saveConfig(root, validConfig({ providers: ['codex'], skills: ['spec', 'fix'] }));
+    const manifest = path.join(root, '.latchkit', 'manifest.json');
+    const originalManifest = await fs.readFile(manifest, 'utf8');
+    const existingSkill = await fs.readFile(skillFile(root, '.agents', 'spec'), 'utf8');
 
-  await fs.chmod(manifest, 0o444);
-  try {
-    await assert.rejects(async () => syncProject(root));
-    assert.equal(await exists(skillFile(root, '.agents', 'fix')), false,
-      'A failed manifest write must not leave an unowned generated skill');
-    assert.equal(await fs.readFile(manifest, 'utf8'), originalManifest);
-    assert.equal(await fs.readFile(skillFile(root, '.agents', 'spec'), 'utf8'), existingSkill);
-  } finally {
-    await fs.chmod(manifest, 0o666);
-  }
+    await fs.chmod(manifest, 0o444);
+    try {
+      await assert.rejects(async () => syncProject(root));
+      assert.equal(
+        await exists(skillFile(root, '.agents', 'fix')),
+        false,
+        'A failed manifest write must not leave an unowned generated skill',
+      );
+      assert.equal(await fs.readFile(manifest, 'utf8'), originalManifest);
+      assert.equal(await fs.readFile(skillFile(root, '.agents', 'spec'), 'utf8'), existingSkill);
+    } finally {
+      await fs.chmod(manifest, 0o666);
+    }
 
-  const preview = await planSync(root);
-  assert.deepEqual(preview.conflicts, []);
-  assert.deepEqual(changedPaths(root, preview, 'create'), ['.agents/skills/latchkit-fix/SKILL.md']);
-  await syncProject(root);
-  assert.equal(await exists(skillFile(root, '.agents', 'fix')), true);
-  assert.deepEqual((await planSync(root)).conflicts, []);
-});
+    const preview = await planSync(root);
+    assert.deepEqual(preview.conflicts, []);
+    assert.deepEqual(changedPaths(root, preview, 'create'), [
+      '.agents/skills/latchkit-fix/SKILL.md',
+    ]);
+    await syncProject(root);
+    assert.equal(await exists(skillFile(root, '.agents', 'fix')), true);
+    assert.deepEqual((await planSync(root)).conflicts, []);
+  },
+);
 
 test('externally edited managed skills survive sync and uninstall', async (t) => {
   const { root } = await temporaryProject(t);
@@ -285,7 +303,11 @@ test('a directory symlink or Windows junction cannot redirect installation outsi
   await fs.mkdir(outside);
   await writeFile(path.join(outside, 'keep.txt'), 'Outside content\n');
   try {
-    await fs.symlink(outside, path.join(root, '.agents'), process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.symlink(
+      outside,
+      path.join(root, '.agents'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
   } catch (error) {
     if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
       t.skip(`This environment cannot create directory links (${error.code})`);

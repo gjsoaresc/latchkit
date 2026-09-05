@@ -4,7 +4,11 @@ import { CURRENT_CONFIG_SCHEMA_VERSION, ConfigContractError } from './contracts.
 export function normalizeMigrationTarget(value = CURRENT_CONFIG_SCHEMA_VERSION) {
   const target = Number(value);
   if (!Number.isInteger(target)) {
-    throw new ConfigContractError('Migration target must be an integer.', '$.toVersion', 'CONFIG_MIGRATION_UNSUPPORTED');
+    throw new ConfigContractError(
+      'Migration target must be an integer.',
+      '$.toVersion',
+      'CONFIG_MIGRATION_UNSUPPORTED',
+    );
   }
   return target;
 }
@@ -38,7 +42,12 @@ export function buildMigration(raw, config, requestedTarget = CURRENT_CONFIG_SCH
   let migrated = config;
   for (let version = fromVersion; version < toVersion; version += 1) {
     if (version === 1) migrated = { ...migrated, schemaVersion: 2, providerSettings: {} };
-    else throw new ConfigContractError(`No migration is available from version ${version}.`, '$.schemaVersion', 'CONFIG_MIGRATION_UNSUPPORTED');
+    else
+      throw new ConfigContractError(
+        `No migration is available from version ${version}.`,
+        '$.schemaVersion',
+        'CONFIG_MIGRATION_UNSUPPORTED',
+      );
   }
   const backupPath = backupPathFor(raw, fromVersion);
   return {

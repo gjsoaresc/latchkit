@@ -12,15 +12,22 @@ async function fixture(t) {
   await initProject(root, { providers: ['codex'], skills: ['spec'] });
   const { server, url, token } = await startServer(root);
   t.after(async () => {
-    await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+    await new Promise((resolve) => {
+      server.close(resolve);
+      server.closeAllConnections();
+    });
     await rm(root, { recursive: true, force: true });
   });
   const origin = new URL(url).origin;
-  const headers = { Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json' };
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: origin,
+    'Content-Type': 'application/json',
+  };
   return { root, origin, headers, server };
 }
 
-test('console binds to loopback and all API data requires a session token', async t => {
+test('console binds to loopback and all API data requires a session token', async (t) => {
   const { origin, headers, server } = await fixture(t);
   assert.equal(server.address().address, '127.0.0.1');
   const denied = await fetch(`${origin}/api/state`);
@@ -35,23 +42,32 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.headers.get('cache-control'), 'no-store');
 });
 
-test('configuration and sync API persist the selected skills with a read-only preview', async t => {
+test('configuration and sync API persist the selected skills with a read-only preview', async (t) => {
   const { root, origin, headers } = await fixture(t);
   const config = { schemaVersion: 1, providers: ['codex'], skills: ['fix', 'review'] };
-  const save = await fetch(`${origin}/api/config`, { method: 'PUT', headers, body: JSON.stringify(config) });
+  const save = await fetch(`${origin}/api/config`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(config),
+  });
   assert.equal(save.status, 200);
   assert.deepEqual(await readConfig(root), config);
   const preview = await (await fetch(`${origin}/api/plan`, { headers })).json();
-  assert.equal(preview.changes.filter(c => c.action === 'create').length, 2);
-  await assert.rejects(readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md')), { code: 'ENOENT' });
+  assert.equal(preview.changes.filter((c) => c.action === 'create').length, 2);
+  await assert.rejects(readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md')), {
+    code: 'ENOENT',
+  });
   const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers, body: '{}' });
   assert.equal(synced.status, 200);
-  assert.match(await readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md'), 'utf8'), /name: latchkit-fix/);
+  assert.match(
+    await readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md'), 'utf8'),
+    /name: latchkit-fix/,
+  );
   const repeated = await (await fetch(`${origin}/api/plan`, { headers })).json();
-  assert.ok(repeated.changes.every(c => c.action === 'unchanged'));
+  assert.ok(repeated.changes.every((c) => c.action === 'unchanged'));
 });
 
-test('configuration migration API previews without writing and preserves a v1 backup', async t => {
+test('configuration migration API previews without writing and preserves a v1 backup', async (t) => {
   const { root, origin, headers } = await fixture(t);
   const configPath = path.join(root, '.latchkit', 'config.json');
   const original = '{\n  "schemaVersion": 1,\n  "providers": ["codex"],\n  "skills": ["spec"]\n}\n';
@@ -79,7 +95,7 @@ test('configuration migration API previews without writing and preserves a v1 ba
   assert.equal((await readConfig(root)).schemaVersion, 2);
 });
 
-test('foreign origins, missing origins, invalid config and oversized requests cannot mutate configuration', async t => {
+test('foreign origins, missing origins, invalid config and oversized requests cannot mutate configuration', async (t) => {
   const { root, origin, headers } = await fixture(t);
   const original = await readConfig(root);
   const body = JSON.stringify({ schemaVersion: 1, providers: [], skills: [] });
@@ -87,22 +103,39 @@ test('foreign origins, missing origins, invalid config and oversized requests ca
     const requestHeaders = { ...headers };
     if (requestOrigin) requestHeaders.Origin = requestOrigin;
     else delete requestHeaders.Origin;
-    const response = await fetch(`${origin}/api/config`, { method: 'PUT', headers: requestHeaders, body });
+    const response = await fetch(`${origin}/api/config`, {
+      method: 'PUT',
+      headers: requestHeaders,
+      body,
+    });
     assert.equal(response.status, 403);
   }
-  const invalid = await fetch(`${origin}/api/config`, { method: 'PUT', headers, body: '{"schemaVersion":2}' });
+  const invalid = await fetch(`${origin}/api/config`, {
+    method: 'PUT',
+    headers,
+    body: '{"schemaVersion":2}',
+  });
   assert.equal(invalid.status, 400);
-  const large = await fetch(`${origin}/api/config`, { method: 'PUT', headers, body: JSON.stringify({ value: 'x'.repeat(70_000) }) });
+  const large = await fetch(`${origin}/api/config`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ value: 'x'.repeat(70_000) }),
+  });
   assert.equal(large.status, 413);
   assert.deepEqual(await readConfig(root), original);
 });
 
-test('configuration API exposes field-specific validation diagnostics', async t => {
+test('configuration API exposes field-specific validation diagnostics', async (t) => {
   const { origin, headers } = await fixture(t);
   const response = await fetch(`${origin}/api/config`, {
     method: 'PUT',
     headers,
-    body: JSON.stringify({ schemaVersion: 2, providers: ['missing'], skills: [], providerSettings: {} }),
+    body: JSON.stringify({
+      schemaVersion: 2,
+      providers: ['missing'],
+      skills: [],
+      providerSettings: {},
+    }),
   });
   assert.equal(response.status, 400);
   const error = await response.json();
@@ -110,16 +143,19 @@ test('configuration API exposes field-specific validation diagnostics', async t 
   assert.equal(error.path, '$.providers[0]');
 });
 
-test('untrusted host headers are rejected before serving the console', async t => {
+test('untrusted host headers are rejected before serving the console', async (t) => {
   const { origin } = await fixture(t);
   const status = await new Promise((resolve, reject) => {
-    const req = http.get(origin, { headers: { Host: 'attacker.example' } }, res => { res.resume(); resolve(res.statusCode); });
+    const req = http.get(origin, { headers: { Host: 'attacker.example' } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
     req.on('error', reject);
   });
   assert.equal(status, 403);
 });
 
-test('server cannot serve arbitrary project files', async t => {
+test('server cannot serve arbitrary project files', async (t) => {
   const { origin, headers } = await fixture(t);
   const response = await fetch(`${origin}/.latchkit/config.json`, { headers });
   assert.equal(response.status, 404);

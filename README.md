@@ -42,15 +42,15 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 
 ## What works today
 
-| Capability | Alpha behavior |
-| --- | --- |
-| Portable workflows | Four original skills: spec/build, fix, review, handoff |
-| Project configuration | Provider and skill selection in `.latchkit/config.json` |
-| Local console | Real configuration, executable discovery, install preview and sync |
-| Managed installation | Hash-based ownership checks; conflicts block changes |
-| Safe removal | Removes unmodified managed skill files; keeps notes and config |
-| Host diagnostics | Detects native vs WSL and executables on PATH |
-| Cross-platform checks | Node 22/24 CI on Windows, Linux, and macOS |
+| Capability            | Alpha behavior                                                     |
+| --------------------- | ------------------------------------------------------------------ |
+| Portable workflows    | Four original skills: spec/build, fix, review, handoff             |
+| Project configuration | Provider and skill selection in `.latchkit/config.json`            |
+| Local console         | Real configuration, executable discovery, install preview and sync |
+| Managed installation  | Hash-based ownership checks; conflicts block changes               |
+| Safe removal          | Removes unmodified managed skill files; keeps notes and config     |
+| Host diagnostics      | Detects native vs WSL and executables on PATH                      |
+| Cross-platform checks | Node 22/24 CI on Windows, Linux, and macOS                         |
 
 `doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates Latchkit's runtime and filesystem behavior; real provider sessions and a dedicated WSL test matrix remain on the [roadmap](docs/roadmap.md).
 

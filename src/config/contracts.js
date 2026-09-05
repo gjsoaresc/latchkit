@@ -27,7 +27,9 @@ function cloneJson(value, path) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map((item, index) => cloneJson(item, `${path}[${index}]`));
   if (record(value)) {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneJson(item, `${path}.${key}`)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, cloneJson(item, `${path}.${key}`)]),
+    );
   }
   throw new ConfigContractError('Expected a JSON value.', path);
 }
@@ -73,7 +75,8 @@ export function validateConfig(config, { providerIds, skillIds }) {
     if (!fields.has(key)) throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`);
   }
   for (const key of fields) {
-    if (!Object.hasOwn(config, key)) throw new ConfigContractError('Required field is missing.', `$.${key}`);
+    if (!Object.hasOwn(config, key))
+      throw new ConfigContractError('Required field is missing.', `$.${key}`);
   }
 
   const validated = {
@@ -83,13 +86,18 @@ export function validateConfig(config, { providerIds, skillIds }) {
   };
   if (config.schemaVersion === 2) {
     if (!record(config.providerSettings)) {
-      throw new ConfigContractError('Expected an object keyed by provider ID.', '$.providerSettings');
+      throw new ConfigContractError(
+        'Expected an object keyed by provider ID.',
+        '$.providerSettings',
+      );
     }
     const providerSettings = [];
     for (const [providerId, settings] of Object.entries(config.providerSettings)) {
       const settingsPath = `$.providerSettings.${providerId}`;
-      if (!providerIds.includes(providerId)) throw new ConfigContractError(`Unknown provider ID "${providerId}".`, settingsPath);
-      if (!record(settings)) throw new ConfigContractError('Expected a provider settings object.', settingsPath);
+      if (!providerIds.includes(providerId))
+        throw new ConfigContractError(`Unknown provider ID "${providerId}".`, settingsPath);
+      if (!record(settings))
+        throw new ConfigContractError('Expected a provider settings object.', settingsPath);
       providerSettings.push([providerId, cloneJson(settings, settingsPath)]);
     }
     validated.providerSettings = Object.fromEntries(providerSettings);
@@ -98,21 +106,33 @@ export function validateConfig(config, { providerIds, skillIds }) {
 }
 
 export function validateManifest(manifest, allowedPaths) {
-  if (!record(manifest)) throw new ConfigContractError('Expected an object.', '$', 'MANIFEST_INVALID');
+  if (!record(manifest))
+    throw new ConfigContractError('Expected an object.', '$', 'MANIFEST_INVALID');
   const fields = new Set(['schemaVersion', 'files']);
   for (const key of Object.keys(manifest)) {
-    if (!fields.has(key)) throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`, 'MANIFEST_INVALID');
+    if (!fields.has(key))
+      throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`, 'MANIFEST_INVALID');
   }
   if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
-    throw new ConfigContractError(`Expected schema version ${MANIFEST_SCHEMA_VERSION}.`, '$.schemaVersion', 'MANIFEST_INVALID');
+    throw new ConfigContractError(
+      `Expected schema version ${MANIFEST_SCHEMA_VERSION}.`,
+      '$.schemaVersion',
+      'MANIFEST_INVALID',
+    );
   }
-  if (!record(manifest.files)) throw new ConfigContractError('Expected an object.', '$.files', 'MANIFEST_INVALID');
+  if (!record(manifest.files))
+    throw new ConfigContractError('Expected an object.', '$.files', 'MANIFEST_INVALID');
   const files = {};
   for (const [relative, digest] of Object.entries(manifest.files)) {
     const entryPath = `$.files.${relative}`;
-    if (!allowedPaths.has(relative)) throw new ConfigContractError('Unknown managed file path.', entryPath, 'MANIFEST_INVALID');
+    if (!allowedPaths.has(relative))
+      throw new ConfigContractError('Unknown managed file path.', entryPath, 'MANIFEST_INVALID');
     if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) {
-      throw new ConfigContractError('Expected a lowercase SHA-256 digest.', entryPath, 'MANIFEST_INVALID');
+      throw new ConfigContractError(
+        'Expected a lowercase SHA-256 digest.',
+        entryPath,
+        'MANIFEST_INVALID',
+      );
     }
     files[relative] = digest;
   }
