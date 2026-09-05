@@ -99,6 +99,7 @@ Options:
   --line <number>     diff annotation: one-based line
   --side <side>       diff annotation: left or right
   --body <text>       diff annotation text
+  --expected-revision <id>  diff annotate: revision returned by inspect
   --evidence-id <id>  diff resolve: current task evidence ID
   --help             Show this help
   --version          Show version

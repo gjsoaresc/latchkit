@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { initProject, readConfig } from '../src/core.js';
 import { startServer } from '../src/server.js';
 import { createTask, resumeTask } from '../src/task-state/service.js';
+import { createTaskWorkspace } from '../src/workspaces/git.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -46,6 +47,49 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
+});
+
+test('authenticated API exposes a task-owned diff and revision-bound annotations', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  await execFile('git', ['init', root]);
+  await execFile('git', ['-C', root, 'config', 'user.email', 'test@example.test']);
+  await execFile('git', ['-C', root, 'config', 'user.name', 'Test']);
+  await writeFile(path.join(root, 'review.txt'), 'before\n');
+  await execFile('git', ['-C', root, 'add', 'review.txt']);
+  await execFile('git', ['-C', root, 'commit', '-m', 'base']);
+  const task = await createTask(root, { title: 'API diff review', criteria: [] });
+  const workspace = await createTaskWorkspace(root, { taskId: task.id });
+  await writeFile(path.join(workspace.path, 'review.txt'), 'after\n');
+
+  const diffResponse = await fetch(`${origin}/api/diff?taskId=${encodeURIComponent(task.id)}`, {
+    headers,
+  });
+  assert.equal(diffResponse.status, 200);
+  const diff = await diffResponse.json();
+  assert.match(diff.diff, /review\.txt/);
+
+  const createdResponse = await fetch(`${origin}/api/annotations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: task.id,
+      path: 'review.txt',
+      side: 'right',
+      line: 1,
+      body: 'Please verify this change.',
+      expectedRevision: diff.revision,
+      expectedStoreRevision: 0,
+    }),
+  });
+  assert.equal(createdResponse.status, 200);
+  const annotationsResponse = await fetch(
+    `${origin}/api/annotations?taskId=${encodeURIComponent(task.id)}`,
+    { headers },
+  );
+  assert.equal(annotationsResponse.status, 200);
+  const annotations = await annotationsResponse.json();
+  assert.equal(annotations.annotations[0].body, 'Please verify this change.');
+  assert.equal(annotations.annotations[0].status, 'open');
 });
 
 test('acceptance API runs declared checks and exposes only safe evidence locations to task consumers', async (t) => {
