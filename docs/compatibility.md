@@ -25,8 +25,8 @@ Pack previews report this possible cross-root discovery duplication before mutat
 | Capability | Claude Code | Codex | Gemini CLI | Cursor IDE / CLI |
 |---|---|---|---|---|
 | Portable skill export | Supported, documented | Supported, documented | Supported, documented | Supported, documented |
-| Invocation, resume, compaction, cancellation, usage | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter |
-| Lifecycle hooks and blocking decisions | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter |
+| Invocation, resume, compaction, cancellation, usage | Independently evidenced by adapter; usage unknown | Adapter evidence for invocation, resume, compaction and cancellation; usage unknown | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter |
+| Lifecycle hooks and blocking decisions | Independently evidenced by adapter | Version-aware command/MCP hook translation; prompt/agent skipped; trust review required | Unknown — no Latchkit adapter | Unknown — no Latchkit adapter |
 | Installed / authenticated / configured / end-to-end | Independently reported; only installation may be discovered | Independently reported; only installation may be discovered | Independently reported; only installation may be discovered | Independently reported; only installation may be discovered |
 
 Each capability has a `supported`, `partial`, `unsupported`, or `unknown` state, a reason, version range, and evidence URL. Unknown or an unrecognized provider version is not permission to infer support. Compatible skills remain exportable; requested unavailable enforcement is refused. A blocking decision may use an explicitly supported advisory fallback, but the result is labeled advisory and never reported as a passed gate. Missing usage is unknown, never zero. Provider selection is an installation choice, not an account, permission, or filesystem access boundary.
@@ -52,7 +52,7 @@ Latchkit now exports deterministic project instructions through documented file 
 | Provider | Latchkit instruction export | Hook surface |
 |---|---|---|
 | Claude Code | Scoped `.claude/rules/latchkit-*.md`, or narrow `CLAUDE.md` imports when sharing Codex `AGENTS.md`. [Memory](https://code.claude.com/docs/en/memory) | `.claude/settings.json`; provider event and command contracts. [Hooks](https://code.claude.com/docs/en/hooks) |
-| Codex | Owned sections in the root-to-scope `AGENTS.md` hierarchy; a same-directory `AGENTS.override.md` shadow is reported. [OpenAI guidance](https://developers.openai.com/codex/guides/agents-md/) | Native hooks require version-aware adapters. [OpenAI hooks](https://learn.chatgpt.com/docs/hooks) |
+| Codex | Owned sections in the root-to-scope `AGENTS.md` hierarchy; a same-directory `AGENTS.override.md` shadow is reported. [OpenAI guidance](https://developers.openai.com/codex/guides/agents-md/) | Version-aware adapter for `hooks.json`/inline TOML planning and lifecycle translation; trust review remains Codex-owned. See [Codex adapter](codex.md). [OpenAI hooks](https://learn.chatgpt.com/docs/hooks) |
 | Gemini CLI | Narrow `GEMINI.md` imports of shared `AGENTS.md` or separately owned canonical rules. A customized context filename can change discovery and must be reviewed. [Context](https://geminicli.com/docs/cli/gemini-md/) | `.gemini/settings.json`; Gemini event schemas. [Hooks](https://geminicli.com/docs/hooks/) |
 | Cursor IDE/CLI | Scoped `.cursor/rules/latchkit-*.mdc` with `description`, `globs`, and `alwaysApply`; omitted when selected Codex `AGENTS.md` is already shared. [Rules](https://cursor.com/docs/rules), [CLI](https://cursor.com/docs/cli/using) | `.cursor/hooks.json`; do not assume identical IDE/CLI event coverage. [Hooks](https://cursor.com/docs/hooks) |
 

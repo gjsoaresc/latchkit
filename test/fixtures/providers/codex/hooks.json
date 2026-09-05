@@ -1,0 +1,19 @@
+{
+  "description": "fixture",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [{ "type": "command", "command": "node handler.js" }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "prompt", "prompt": "unsupported fixture" },
+          { "type": "mcp_tool", "server": "fixture", "tool": "observe" }
+        ]
+      }
+    ]
+  }
+}
