@@ -121,10 +121,13 @@ test('two writers serialize and the stale revision loses without duplicating sta
       mutationId: eventId(),
       summary,
     });
-  const results = await Promise.allSettled([request('writer one'), request('writer two')]);
+  const results = await Promise.allSettled(
+    Array.from({ length: 8 }, (_, index) => request(`writer ${index + 1}`)),
+  );
   assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
-  const rejected = results.find((result) => result.status === 'rejected');
-  assert.equal(rejected.reason.code, 'TASK_REVISION_CONFLICT');
+  for (const rejected of results.filter((result) => result.status === 'rejected')) {
+    assert.equal(rejected.reason.code, 'TASK_REVISION_CONFLICT');
+  }
   const persisted = (await readTaskState(root)).tasks[0];
   assert.equal(persisted.checkpoints.length, 1);
 });

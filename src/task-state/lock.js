@@ -9,7 +9,7 @@ import {
   sign,
   verify,
 } from 'node:crypto';
-import { mkdir, open } from 'node:fs/promises';
+import { link, mkdir, open, unlink } from 'node:fs/promises';
 import { readOptional, removeFile, safePath } from '../storage.js';
 
 export const TASK_STATE_LOCK_PATH = '.latchkit/tasks/lock';
@@ -175,13 +175,17 @@ export async function acquireTaskStateLock(root) {
     };
     const raw = `${JSON.stringify(metadata, null, 2)}\n`;
     const target = await safePath(root, TASK_STATE_LOCK_PATH);
+    const temporary = `${target}.${randomUUID()}.tmp`;
     await mkdir(path.dirname(target), { recursive: true });
     let handle;
     try {
-      handle = await open(target, 'wx', 0o600);
+      handle = await open(temporary, 'wx', 0o600);
       await handle.writeFile(raw);
       await handle.sync();
       await handle.close();
+      handle = undefined;
+      await link(temporary, target);
+      await unlink(temporary);
       return {
         metadata,
         async release() {
@@ -195,6 +199,11 @@ export async function acquireTaskStateLock(root) {
       };
     } catch (error) {
       await handle?.close();
+      try {
+        await unlink(temporary);
+      } catch (cleanupError) {
+        if (cleanupError.code !== 'ENOENT') throw cleanupError;
+      }
       await new Promise((resolve) => server.close(resolve));
       if (error.code !== 'EEXIST') throw error;
       const existing = await inspectTaskStateLock(root);
@@ -205,6 +214,11 @@ export async function acquireTaskStateLock(root) {
         await removeFile(root, TASK_STATE_LOCK_PATH);
         continue;
       }
+      // A competing writer can release its lock after our exclusive-create attempt
+      // reports EEXIST but before inspection reads the file. There is no lock to
+      // validate in that case, so retry acquisition instead of reporting invalid
+      // metadata.
+      if (existing.state === 'none') continue;
       if (existing.state === 'live' && Date.now() < deadline) {
         await delay(20);
         continue;
