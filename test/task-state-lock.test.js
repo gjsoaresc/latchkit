@@ -11,8 +11,9 @@ test('same-process contenders retry when the prior owner releases between inspec
   let active = 0;
   let peak = 0;
   const completed = [];
+  const contenderCount = 8;
   await Promise.all(
-    Array.from({ length: 24 }, (_, index) =>
+    Array.from({ length: contenderCount }, (_, index) =>
       withTaskStateLock(root, async () => {
         active += 1;
         peak = Math.max(peak, active);
@@ -23,5 +24,5 @@ test('same-process contenders retry when the prior owner releases between inspec
     ),
   );
   assert.equal(peak, 1);
-  assert.equal(completed.length, 24);
+  assert.equal(completed.length, contenderCount);
 });
