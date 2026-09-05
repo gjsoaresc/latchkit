@@ -20,9 +20,16 @@ Latchkit gives your coding agents a shared set of development workflows, with a 
 
 **This is an early working foundation, not full Pilot Shell feature parity.** Skill installation and configuration work today. Claude Code has a version-aware, project-local hook adapter; enforced quality gates, persistent memory services, and session orchestration remain outside this release.
 
-## Try it
+## Install and try it
 
-Install [Node.js 22 or newer](https://nodejs.org/) and Git, then run these commands from PowerShell, Terminal, or a Linux shell:
+Install [Node.js 22 or newer](https://nodejs.org/) and Git, then install the released package:
+
+```sh
+npm install --global latchkit
+latchkit --version
+```
+
+For the current alpha, or when the package is not available from your registry, run these commands from PowerShell, Terminal, or a Linux shell:
 
 ```sh
 git clone https://github.com/gjsoaresc/latchkit.git
@@ -36,7 +43,7 @@ node src/cli.js ui --project "path/to/your/project"
 
 Replace the example path with an existing project directory. Open the local URL printed by `ui`. The console can select providers and skills, save configuration, preview changes, and apply them. Stop it with Ctrl+C.
 
-For a command available from any directory, run `npm link` in the clone, then use `latchkit init`, `latchkit sync`, and `latchkit ui` in your project. This alpha is distributed from GitHub; it has not been published to npm.
+For a command available from any directory in a source checkout, run `npm link` in the clone, then use `latchkit init`, `latchkit sync`, and `latchkit ui` in your project. See the [clean-machine quickstart](docs/getting-started.md) for package, native OS, and WSL paths.
 
 No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. Run Node inside WSL when you want a WSL environment. Install and authenticate your chosen coding tool separately.
 
@@ -113,6 +120,9 @@ npm pack --dry-run
 
 See [release and recovery procedures](docs/releases.md) for installable npm
 artifacts, dry-run evidence, controlled publication, upgrades, and rollback.
+
+For task-oriented operations, see [support and troubleshooting](docs/support.md)
+and [upgrade, migration, rollback, and removal](docs/migration.md).
 
 ## License and provenance
 
