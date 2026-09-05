@@ -295,7 +295,19 @@ async function main() {
       prompt: 'Read REQUIREMENTS.md only. Do not edit files or run commands.',
       executionAuthorized: true,
     });
-    await providerStarted;
+    let startTimer;
+    await Promise.race([
+      providerStarted,
+      interruptedRun.then(() => {
+        throw new Error('Provider process ended before its start boundary was observed.');
+      }),
+      new Promise((_, reject) => {
+        startTimer = setTimeout(
+          () => reject(new Error('Provider process did not reach its start boundary.')),
+          10_000,
+        );
+      }),
+    ]).finally(() => clearTimeout(startTimer));
     await terminateOwnedTree(interruptedPid);
     const interruptedResult = await interruptedRun;
     task = interruptedResult.task;
