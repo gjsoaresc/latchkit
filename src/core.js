@@ -1,10 +1,10 @@
-import { access, lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { access, lstat, readdir, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { SKILLS } from './catalog.js';
+import { loadPack } from './packs/index.js';
 import { PROVIDERS } from './providers/registry.js';
 import {
   CURRENT_CONFIG_SCHEMA_VERSION,
@@ -34,14 +34,7 @@ export {
 const stateDirectory = '.latchkit';
 const configPath = `${stateDirectory}/config.json`;
 const manifestPath = `${stateDirectory}/manifest.json`;
-const sourceRoot = fileURLToPath(new URL('../skills/', import.meta.url));
 const hash = (content) => createHash('sha256').update(content).digest('hex');
-const allSkillPaths = new Set(
-  PROVIDERS.flatMap((p) => SKILLS.map((s) => `${p.skillDirectory}/latchkit-${s.id}/SKILL.md`)),
-);
-const resourceRegistry = createResourceRegistry(
-  [...allSkillPaths].map((relative) => ({ id: `skill:${relative}`, path: relative })),
-);
 const resourceIdForPath = (relative) => `skill:${relative}`;
 const projectRoot = resolveProjectRoot;
 const withLock = withProjectLock;
@@ -71,6 +64,9 @@ export async function initProject(root, options = {}) {
       providers: options.providers ?? PROVIDERS.map((p) => p.id),
       skills: options.skills ?? SKILLS.map((s) => s.id),
       providerSettings: options.providerSettings ?? {},
+      packs: options.packs ?? [
+        { id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true },
+      ],
     });
     await writeAtomic(root, configPath, `${JSON.stringify(config, null, 2)}\n`);
     return config;
@@ -88,14 +84,14 @@ export async function saveConfig(root, config) {
 
 async function readManifest(root) {
   const raw = await readOptional(root, manifestPath);
-  if (raw === null) return { schemaVersion: 1, files: {} };
+  if (raw === null) return { schemaVersion: 2, files: {}, packs: [] };
   let manifest;
   try {
     manifest = JSON.parse(raw);
   } catch (error) {
     throw new ConfigContractError(`Invalid JSON (${error.message}).`, '$', 'MANIFEST_INVALID_JSON');
   }
-  return validateManifest(manifest, allSkillPaths);
+  return validateManifest(manifest);
 }
 
 export async function planConfigMigration(root, options = {}) {
@@ -154,16 +150,62 @@ export async function migrateConfig(root, options = {}) {
 }
 
 async function makePlan(root, removing = false) {
-  const config = removing ? { providers: [], skills: [] } : await readConfig(root);
+  const savedConfig = removing ? null : await readConfig(root);
+  const config = removing
+    ? { providers: [], skills: [], packs: [] }
+    : {
+        ...savedConfig,
+        packs: savedConfig.packs ?? [
+          { id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true },
+        ],
+      };
   const manifest = await readManifest(root);
   const desired = new Map();
   const directories = new Set(
     PROVIDERS.filter((p) => config.providers.includes(p.id)).map((p) => p.skillDirectory),
   );
-  for (const id of config.skills) {
-    const content = await readFile(path.join(sourceRoot, `latchkit-${id}`, 'SKILL.md'), 'utf8');
-    for (const directory of directories)
-      desired.set(`${directory}/latchkit-${id}/SKILL.md`, content);
+  const packMetadata = [];
+  const destinationOwners = new Map();
+  for (const selection of config.packs) {
+    const pack = await loadPack(selection);
+    if (pack.id !== selection.id || pack.version !== selection.version)
+      throw new Error(
+        `Requested pack ${selection.id}@${selection.version} does not match source ${pack.id}@${pack.version}.`,
+      );
+    if (!pack.compatibility.configSchemaVersions.includes(CURRENT_CONFIG_SCHEMA_VERSION))
+      throw new Error(
+        `Pack ${pack.id}@${pack.version} does not support configuration schema ${CURRENT_CONFIG_SCHEMA_VERSION}.`,
+      );
+    const unsupported = config.providers.filter((id) => !pack.compatibility.providers.includes(id));
+    if (unsupported.length)
+      throw new Error(
+        `Pack ${pack.id}@${pack.version} does not support selected providers: ${unsupported.join(', ')}.`,
+      );
+    packMetadata.push({
+      id: pack.id,
+      version: pack.version,
+      source: selection.source,
+      pinned: selection.pinned,
+      provenance: pack.provenance,
+    });
+    for (const file of pack.files) {
+      const parts = file.path.split('/');
+      if (parts.length !== 3 || parts[0] !== 'skills' || parts[2] !== 'SKILL.md')
+        throw new Error(`Pack ${pack.id} file is not a portable skill: ${file.path}`);
+      const skillName = parts[1];
+      if (
+        pack.id === 'latchkit-core' &&
+        !config.skills.includes(skillName.replace(/^latchkit-/, ''))
+      )
+        continue;
+      for (const directory of directories) {
+        const relative = `${directory}/${skillName}/SKILL.md`;
+        const owner = destinationOwners.get(relative);
+        if (owner) throw new Error(`Pack collision at ${relative}: ${owner} and ${pack.id}.`);
+        destinationOwners.set(relative, pack.id);
+        desired.set(relative, file.bytes.toString('utf8'));
+      }
+    }
   }
   const changes = [],
     conflicts = [];
@@ -198,13 +240,29 @@ async function makePlan(root, removing = false) {
             : 'update';
     changes.push({ action, path: relative });
   }
-  return { changes, conflicts, desired, manifest };
+  const duplicateDiscovery =
+    directories.has('.claude/skills') && directories.has('.agents/skills')
+      ? [
+          {
+            providers: config.providers,
+            reason:
+              'Claude and shared-root skills can both be discovered by Cursor; Latchkit will not remove either root.',
+          },
+        ]
+      : [];
+  return { changes, conflicts, desired, manifest, packMetadata, duplicateDiscovery };
 }
 
 export async function planSync(root) {
   root = await projectRoot(root);
-  const { changes, conflicts } = await makePlan(root);
-  return { changes, conflicts };
+  const plan = await makePlan(root);
+  return {
+    changes: plan.changes,
+    conflicts: plan.conflicts,
+    installedPacks: plan.manifest.packs,
+    desiredPacks: plan.packMetadata,
+    duplicateDiscovery: plan.duplicateDiscovery,
+  };
 }
 
 async function applySync(root, removing, options = {}) {
@@ -220,8 +278,9 @@ async function applySync(root, removing, options = {}) {
     }
     const transactionChanges = [];
     const nextManifest = {
-      schemaVersion: plan.manifest.schemaVersion,
+      schemaVersion: 2,
       files: { ...plan.manifest.files },
+      packs: plan.packMetadata,
     };
     for (const change of plan.changes) {
       if (change.action === 'unchanged') continue;
@@ -238,15 +297,27 @@ async function applySync(root, removing, options = {}) {
         nextManifest.files[change.path] = hash(content);
       }
     }
-    if (transactionChanges.length)
+    if (transactionChanges.length) {
+      const registry = createResourceRegistry(
+        [...new Set([...Object.keys(plan.manifest.files), ...plan.desired.keys()])].map(
+          (relative) => ({ id: resourceIdForPath(relative), path: relative }),
+        ),
+      );
       await applyRegisteredTransaction(root, {
         operation: removing ? 'remove' : 'sync',
-        registry: resourceRegistry,
+        registry,
         changes: transactionChanges,
         manifest: `${JSON.stringify(nextManifest, null, 2)}\n`,
         faultBoundary: options.faultBoundary,
       });
-    return { changes: plan.changes, conflicts: [] };
+    }
+    return {
+      changes: plan.changes,
+      conflicts: [],
+      installedPacks: plan.manifest.packs,
+      desiredPacks: plan.packMetadata,
+      duplicateDiscovery: plan.duplicateDiscovery,
+    };
   });
 }
 
@@ -255,9 +326,17 @@ export const removeProjectSkills = (root, options) => applySync(root, true, opti
 
 export async function inspectRecovery(root) {
   root = await projectRoot(root);
+  const manifest = await readManifest(root);
+  const plan = await makePlan(root).catch(() => ({ desired: new Map() }));
+  const registry = createResourceRegistry(
+    [...new Set([...Object.keys(manifest.files), ...plan.desired.keys()])].map((relative) => ({
+      id: resourceIdForPath(relative),
+      path: relative,
+    })),
+  );
   return {
     lock: await inspectProjectLock(root),
-    transaction: await inspectTransaction(root, resourceRegistry),
+    transaction: await inspectTransaction(root, registry),
   };
 }
 
@@ -278,7 +357,15 @@ export async function recoverProject(root) {
     await removeProvenStaleLock(root, inspection);
     cleanedLock = true;
   }
-  const result = await withProjectLock(root, () => recoverTransaction(root, resourceRegistry));
+  const manifest = await readManifest(root);
+  const plan = await makePlan(root).catch(() => ({ desired: new Map() }));
+  const registry = createResourceRegistry(
+    [...new Set([...Object.keys(manifest.files), ...plan.desired.keys()])].map((relative) => ({
+      id: resourceIdForPath(relative),
+      path: relative,
+    })),
+  );
+  const result = await withProjectLock(root, () => recoverTransaction(root, registry));
   return { ...result, cleanedLock };
 }
 

@@ -1,10 +1,11 @@
-export const CURRENT_CONFIG_SCHEMA_VERSION = 2;
-export const SUPPORTED_CONFIG_SCHEMA_VERSIONS = Object.freeze([1, 2]);
-export const MANIFEST_SCHEMA_VERSION = 1;
+export const CURRENT_CONFIG_SCHEMA_VERSION = 3;
+export const SUPPORTED_CONFIG_SCHEMA_VERSIONS = Object.freeze([1, 2, 3]);
+export const MANIFEST_SCHEMA_VERSION = 2;
 
 const CONFIG_FIELDS = new Map([
   [1, new Set(['schemaVersion', 'providers', 'skills'])],
   [2, new Set(['schemaVersion', 'providers', 'skills', 'providerSettings'])],
+  [3, new Set(['schemaVersion', 'providers', 'skills', 'providerSettings', 'packs'])],
 ]);
 
 export class ConfigContractError extends Error {
@@ -84,7 +85,7 @@ export function validateConfig(config, { providerIds, skillIds }) {
     providers: validateSelection(config, 'providers', new Set(providerIds)),
     skills: validateSelection(config, 'skills', new Set(skillIds)),
   };
-  if (config.schemaVersion === 2) {
+  if (config.schemaVersion >= 2) {
     if (!record(config.providerSettings)) {
       throw new ConfigContractError(
         'Expected an object keyed by provider ID.',
@@ -102,20 +103,63 @@ export function validateConfig(config, { providerIds, skillIds }) {
     }
     validated.providerSettings = Object.fromEntries(providerSettings);
   }
+  if (config.schemaVersion === 3) {
+    if (!Array.isArray(config.packs))
+      throw new ConfigContractError('Expected an array.', '$.packs');
+    const ids = new Set();
+    validated.packs = config.packs.map((pack, index) => {
+      const packPath = `$.packs[${index}]`;
+      if (
+        !record(pack) ||
+        !['id', 'version', 'source', 'pinned'].every((key) => Object.hasOwn(pack, key)) ||
+        Object.keys(pack).length !== 4
+      )
+        throw new ConfigContractError('Expected a complete pack selection.', packPath);
+      if (
+        typeof pack.id !== 'string' ||
+        !/^[a-z][a-z0-9-]{0,62}$/.test(pack.id) ||
+        ids.has(pack.id)
+      )
+        throw new ConfigContractError('Expected a unique portable pack ID.', `${packPath}.id`);
+      ids.add(pack.id);
+      if (
+        typeof pack.version !== 'string' ||
+        !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(pack.version)
+      )
+        throw new ConfigContractError('Expected a semantic version.', `${packPath}.version`);
+      if (!record(pack.source) || !Object.hasOwn(pack.source, 'type'))
+        throw new ConfigContractError('Expected a pack source.', `${packPath}.source`);
+      if (pack.source.type === 'local') {
+        if (
+          Object.keys(pack.source).length !== 2 ||
+          typeof pack.source.path !== 'string' ||
+          !pack.source.path
+        )
+          throw new ConfigContractError('Local packs require a source path.', `${packPath}.source`);
+      } else if (pack.source.type !== 'bundled' || Object.keys(pack.source).length !== 1)
+        throw new ConfigContractError(
+          'Expected a bundled or local pack source.',
+          `${packPath}.source`,
+        );
+      if (typeof pack.pinned !== 'boolean')
+        throw new ConfigContractError('Expected a boolean.', `${packPath}.pinned`);
+      return cloneJson(pack, packPath);
+    });
+  }
   return validated;
 }
 
 export function validateManifest(manifest, allowedPaths) {
   if (!record(manifest))
     throw new ConfigContractError('Expected an object.', '$', 'MANIFEST_INVALID');
-  const fields = new Set(['schemaVersion', 'files']);
+  const fields = new Set(['schemaVersion', 'files', 'packs']);
   for (const key of Object.keys(manifest)) {
     if (!fields.has(key))
       throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`, 'MANIFEST_INVALID');
   }
-  if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
+  if (![1, MANIFEST_SCHEMA_VERSION].includes(manifest.schemaVersion)) {
     throw new ConfigContractError(
-      `Expected schema version ${MANIFEST_SCHEMA_VERSION}.`,
+      `Expected schema version 1 or ${MANIFEST_SCHEMA_VERSION}.`,
       '$.schemaVersion',
       'MANIFEST_INVALID',
     );
@@ -125,7 +169,7 @@ export function validateManifest(manifest, allowedPaths) {
   const files = {};
   for (const [relative, digest] of Object.entries(manifest.files)) {
     const entryPath = `$.files.${relative}`;
-    if (!allowedPaths.has(relative))
+    if (allowedPaths && !allowedPaths.has(relative))
       throw new ConfigContractError('Unknown managed file path.', entryPath, 'MANIFEST_INVALID');
     if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest)) {
       throw new ConfigContractError(
@@ -136,5 +180,23 @@ export function validateManifest(manifest, allowedPaths) {
     }
     files[relative] = digest;
   }
-  return { schemaVersion: MANIFEST_SCHEMA_VERSION, files };
+  if (manifest.schemaVersion === 1)
+    return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs: [] };
+  if (!Array.isArray(manifest.packs))
+    throw new ConfigContractError('Expected an array.', '$.packs', 'MANIFEST_INVALID');
+  const packs = manifest.packs.map((pack, index) => {
+    if (
+      !record(pack) ||
+      typeof pack.id !== 'string' ||
+      typeof pack.version !== 'string' ||
+      !record(pack.source)
+    )
+      throw new ConfigContractError(
+        'Expected installed pack metadata.',
+        `$.packs[${index}]`,
+        'MANIFEST_INVALID',
+      );
+    return cloneJson(pack, `$.packs[${index}]`);
+  });
+  return { schemaVersion: MANIFEST_SCHEMA_VERSION, files, packs };
 }

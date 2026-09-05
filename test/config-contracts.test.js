@@ -41,7 +41,7 @@ test('published v1 and v2 fixtures validate without changing their shapes', asyn
   const v2 = JSON.parse(await fs.readFile(path.join(fixtures, 'config-v2.json'), 'utf8'));
   assert.deepEqual(validateConfig(v1), v1);
   assert.deepEqual(validateConfig(v2), v2);
-  assert.equal(CURRENT_CONFIG_SCHEMA_VERSION, 2);
+  assert.equal(CURRENT_CONFIG_SCHEMA_VERSION, 3);
 });
 
 test('configuration failures identify a stable code and exact field path', () => {
@@ -89,14 +89,15 @@ test('configuration failures identify a stable code and exact field path', () =>
   );
 });
 
-test('new projects use v2 and provider settings survive deselection and save', async (t) => {
+test('new projects use v3 pack selections and provider settings survive deselection and save', async (t) => {
   const root = await temporaryProject(t);
   const created = await initProject(root, { providers: ['codex'], skills: ['spec'] });
   assert.deepEqual(created, {
-    schemaVersion: 2,
+    schemaVersion: 3,
     providers: ['codex'],
     skills: ['spec'],
     providerSettings: {},
+    packs: [{ id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true }],
   });
   const configured = {
     ...created,
@@ -115,7 +116,7 @@ test('v1 migration preview is byte-stable and apply preserves exact original byt
   const preview = await planConfigMigration(root);
   assert.equal(preview.status, 'ready');
   assert.equal(preview.fromVersion, 1);
-  assert.equal(preview.toVersion, 2);
+  assert.equal(preview.toVersion, 3);
   assert.equal(await fs.readFile(configPath, 'utf8'), original);
 
   const applied = await migrateConfig(root);
@@ -125,10 +126,11 @@ test('v1 migration preview is byte-stable and apply preserves exact original byt
     original,
   );
   assert.deepEqual(await readConfig(root), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     providers: ['codex', 'claude'],
     skills: ['spec', 'review'],
     providerSettings: {},
+    packs: [{ id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true }],
   });
 
   const after = await fs.readFile(configPath, 'utf8');
@@ -229,10 +231,11 @@ test('competing CLI migration processes never produce a mixed configuration', as
   const results = await Promise.allSettled([command(), command()]);
   assert.ok(results.some((result) => result.status === 'fulfilled'));
   assert.deepEqual(await readConfig(root), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     providers: ['codex', 'claude'],
     skills: ['spec', 'review'],
     providerSettings: {},
+    packs: [{ id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true }],
   });
 });
 

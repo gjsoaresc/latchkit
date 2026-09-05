@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/skill-pack-v1.schema.json",
+  "title": "Latchkit local skill pack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "version", "provenance", "compatibility", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 }, "id": { "type": "string" }, "version": { "type": "string" },
+    "provenance": { "type": "string" }, "compatibility": { "type": "object" },
+    "files": { "type": "array", "minItems": 1 }
+  }
+}

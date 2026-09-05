@@ -42,6 +42,14 @@ export function buildMigration(raw, config, requestedTarget = CURRENT_CONFIG_SCH
   let migrated = config;
   for (let version = fromVersion; version < toVersion; version += 1) {
     if (version === 1) migrated = { ...migrated, schemaVersion: 2, providerSettings: {} };
+    else if (version === 2)
+      migrated = {
+        ...migrated,
+        schemaVersion: 3,
+        packs: [
+          { id: 'latchkit-core', version: '1.0.0', source: { type: 'bundled' }, pinned: true },
+        ],
+      };
     else
       throw new ConfigContractError(
         `No migration is available from version ${version}.`,

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/config-v3.schema.json",
+  "title": "Latchkit project configuration v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "providers", "skills", "providerSettings", "packs"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "providers": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "skills": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "providerSettings": { "type": "object" },
+    "packs": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "version", "source", "pinned"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+          "version": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$" },
+          "source": { "type": "object" }, "pinned": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

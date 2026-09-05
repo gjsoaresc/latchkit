@@ -78,6 +78,8 @@ latchkit remove
 
 If a managed file has local edits, sync stops and reports its path. Preserve or move your changes before trying again. There is no force-overwrite flag. Configuration saves and skill synchronization are separate actions.
 
+Skill packs are explicit, versioned configuration selections. The bundled core pack is pinned by default; Latchkit never performs background upgrades. A trusted local pack declares its identity, version, provenance, compatibility and checksums in `latchkit-pack.json`; review `sync --dry-run` before deliberately changing a selected version. Checksums confirm content integrity, not publisher identity.
+
 If a process stops during sync or removal, run `latchkit recover --dry-run` and review the proposed recovery before applying it. See [installer recovery](docs/recovery.md) for conflict and manual-recovery guidance.
 
 ## Build with us
