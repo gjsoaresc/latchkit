@@ -74,10 +74,41 @@ export function validateReviewResult(value) {
   };
 }
 
-function parseResult(stdout) {
+function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function reviewPayload(stdout, providerId) {
+  const direct = parseJson(stdout);
+  if (providerId === 'claude' && direct?.type === 'result' && typeof direct.result === 'string')
+    return direct.result;
+  if (direct) return direct;
+  if (providerId === 'codex') {
+    const records = String(stdout ?? '')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map(parseJson)
+      .filter(Boolean);
+    const message = records.findLast(
+      (record) =>
+        record.type === 'item.completed' &&
+        record.item?.type === 'agent_message' &&
+        typeof record.item.text === 'string',
+    );
+    if (message) return message.item.text;
+  }
+  return stdout;
+}
+
+function parseResult(stdout, providerId) {
   let value;
   try {
-    value = JSON.parse(stdout);
+    const payload = reviewPayload(stdout, providerId);
+    value = typeof payload === 'string' ? JSON.parse(payload) : payload;
   } catch {
     throw new ReviewOrchestrationError(
       'Reviewer output was not valid JSON.',
@@ -259,7 +290,7 @@ export function createReviewOrchestrator({
                 : 'completed';
           item.result =
             processResult.status === 'exited'
-              ? parseResult(processResult.stdout ?? '')
+              ? parseResult(processResult.stdout ?? '', item.providerId)
               : { schemaVersion: REVIEW_SCHEMA_VERSION, state: item.state, findings: [] };
         } catch (error) {
           item.state = abort.signal.aborted

@@ -34,7 +34,7 @@ export const CURSOR_CLI_PROVIDER = {
   schemaVersion: 1,
   id: 'cursor-cli',
   label: 'Cursor CLI',
-  command: 'agent',
+  command: 'cursor-agent',
   skillDirectory: '.agents/skills',
   capabilities: {
     skills: supported('Cursor CLI reads the shared .agents/skills directory.', '*', USING_URL),
@@ -91,21 +91,21 @@ export const CURSOR_CLI_PROVIDER = {
   },
 };
 
-const executableFor = (options = {}) => options.executable ?? 'agent';
+const executableFor = (options = {}) => options.executable ?? 'cursor-agent';
 const versionProbe = (executable) => ({ executable, args: ['--version'] });
 const helpProbe = (executable) => ({ executable, args: ['--help'] });
 
 function inspect(options = {}) {
   const executable = executableFor(options);
   const legacy = options.allowLegacy === true;
-  const candidates = legacy ? ['agent', 'cursor-agent'] : ['agent'];
+  const candidates = legacy ? ['cursor-agent', 'agent'] : ['cursor-agent'];
   return {
     provider: 'cursor-cli',
     executable,
     candidates,
     compatibility: legacy
-      ? 'cursor-agent is accepted only when allowLegacy is explicitly true; it is the documented legacy executable name.'
-      : 'Only the documented agent executable is selected by default.',
+      ? 'The older agent executable name is accepted only when allowLegacy is explicitly true.'
+      : 'Only the documented cursor-agent executable is selected by default.',
     probes: [versionProbe(executable), helpProbe(executable)].map((plan) => ({
       ...plan,
       timeoutMs: options.probeTimeoutMs ?? 2_000,

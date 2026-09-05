@@ -37,6 +37,7 @@
     "evaluate:skills": "node scripts/skill-evaluations.js",
     "check": "npm run format:check && npm run lint && node scripts/check.js",
     "verify:providers": "node scripts/provider-e2e.js",
+    "verify:lifecycle": "node scripts/live-lifecycle-evidence.js",
     "smoke:artifact": "node scripts/artifact-smoke.js",
     "release:artifacts": "node scripts/release-artifacts.js",
     "release:dry-run": "node scripts/release-artifacts.js --dry-run"

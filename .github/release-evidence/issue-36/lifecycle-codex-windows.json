@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "kind": "live-lifecycle-qualification",
+  "candidate": {
+    "commit": "508ffaf41629af043b5e2a7c6c503be738f02681",
+    "package": "latchkit@0.1.0-alpha.1",
+    "localArchiveSha256": "29a11dd2f24430cb4aab09bedb9632d77daf66fc0e9c547fe59eb73341a7a2e4"
+  },
+  "testedAt": "2026-09-06",
+  "runtime": {
+    "platform": "win32",
+    "architecture": "x64",
+    "node": "v26.8.1"
+  },
+  "provider": {
+    "id": "codex",
+    "version": "codex-cli 0.153.2",
+    "authenticatedTextTurnsObserved": true
+  },
+  "bounds": {
+    "processTimeoutMs": 120000,
+    "outputLimitBytes": 1048576,
+    "automaticRetries": 0
+  },
+  "results": {
+    "exactArchiveInstalledOutsideCheckout": true,
+    "bundledSkillsInstalled": true,
+    "initialVerification": "failed-as-required",
+    "failedEvidenceRejection": "TASK_NOT_VERIFIABLE",
+    "interruptedOwnedProcess": "passed",
+    "interruptedRunRecorded": true,
+    "taskRecoveryReachedImplementation": true,
+    "implementationProcess": "exited-0",
+    "implementationSourceChanged": false,
+    "implementationSpecNoteObserved": false,
+    "postImplementationTest": "failed",
+    "providerResumeVector": "passed",
+    "providerResumeEvents": ["thread.started", "turn.started", "item.completed", "turn.completed"],
+    "finalDisposition": "blocked"
+  },
+  "blocker": {
+    "classification": "nested-provider-write-environment",
+    "reason": "The bounded nested Codex process completed a text turn but made no filesystem change. The inherited host exposes Codex desktop/session control variables, so this run cannot establish a normal operator-terminal workspace-write policy without overriding provider settings.",
+    "operatorAction": "Run the documented verify:lifecycle command from a normal terminal outside an active Codex desktop task, using the existing authenticated Codex account and its reviewed workspace-write/approval policy. Do not use approval or sandbox bypass flags."
+  },
+  "privacy": {
+    "transcriptStored": false,
+    "commandArgumentsStored": false,
+    "credentialsStored": false,
+    "usageEstimateStored": false,
+    "disposableFixtureRetained": false
+  }
+}

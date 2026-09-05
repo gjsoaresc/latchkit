@@ -3,7 +3,6 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { validateCommandPlan, validateLifecycleEnvelope } from '../providers/contracts.js';
-import { providerById } from '../providers/registry.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
 import { codexAdapter } from '../providers/codex.js';
 import { createGeminiAdapter } from '../providers/gemini.js';
@@ -105,6 +104,43 @@ function resultSummary(result) {
   };
 }
 
+function jsonRecords(value) {
+  const records = [];
+  for (const line of String(value ?? '')
+    .split(/\r?\n/)
+    .filter(Boolean)) {
+    try {
+      const record = JSON.parse(line);
+      if (record && typeof record === 'object' && !Array.isArray(record)) records.push(record);
+    } catch {
+      // Provider text is untrusted output, not a session identity.
+    }
+  }
+  return records;
+}
+
+function providerSessionIdentity(providerId, result) {
+  if (typeof result?.sessionId === 'string' && result.sessionId.trim()) return result.sessionId;
+  const records = jsonRecords(result?.stdout);
+  if (providerId === 'codex') {
+    const started = records.find(
+      (record) => record.type === 'thread.started' && typeof record.thread_id === 'string',
+    );
+    return started?.thread_id ?? null;
+  }
+  if (providerId === 'claude') {
+    const completed = records.find(
+      (record) => record.type === 'result' && typeof record.session_id === 'string',
+    );
+    return completed?.session_id ?? null;
+  }
+  if (providerId === 'gemini' || providerId === 'cursor-cli') {
+    const correlated = records.find((record) => typeof record.session_id === 'string');
+    return correlated?.session_id ?? null;
+  }
+  return null;
+}
+
 /** A bounded coordinator for task-state ownership and adapter-backed sessions.
  * It deliberately never adopts a PID after restart: only the controller that
  * launched a child owns its AbortController and may terminate that child. */
@@ -154,7 +190,7 @@ export function createTaskController({
       );
     const adapter = adapterFor(providerId, adapters);
     capability(adapter, resumeSession ? 'resume' : 'invocation');
-    const provider = providerById(providerId) ?? adapter.contract;
+    const provider = adapter.contract;
     const before = await inspectTask(root, taskId);
     if (before.task.state === 'cancelled')
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');
@@ -209,8 +245,8 @@ export function createTaskController({
           void save(session);
         },
       });
-      if (typeof processResult.sessionId === 'string' && processResult.sessionId.trim())
-        session.providerSessionId = processResult.sessionId;
+      session.providerSessionId =
+        providerSessionIdentity(providerId, processResult) ?? session.providerSessionId;
       session.state = processResult.status === 'cancelled' ? 'cancelled' : 'finished';
       session.result = resultSummary(processResult);
       session.updatedAt = now();

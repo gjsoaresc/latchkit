@@ -1,18 +1,18 @@
 # Compatibility
 
-Provider documentation checked September 5, 2026. These references establish supported formats and upstream platform claims. They do not prove that every Latchkit/provider/OS combination has passed a real-agent session. The editor-specific [Cursor IDE adapter](providers/cursor-ide.md) documents its narrower evidence and manual smoke test.
+Provider documentation checked September 6, 2026. These references establish supported formats and upstream platform claims. They do not prove that every Latchkit/provider/OS combination has passed a real-agent session. The editor-specific [Cursor IDE adapter](providers/cursor-ide.md) documents its narrower evidence and manual smoke test.
 
 ## What the starter integrates
 
 Latchkit installs project-local `SKILL.md` files and stores provider/skill selections in `.latchkit/config.json`. It does not launch model sessions, install provider hooks, rewrite provider permissions, manage provider credentials, or automate Cursor's interface.
 
-| Provider    | Latchkit skill destination       | Official discovery evidence                                                                                                                                                           |
-| ----------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude Code | `.claude/skills/<name>/SKILL.md` | Project skills support automatic selection and slash invocation. [Claude skills](https://code.claude.com/docs/en/skills)                                                              |
-| Codex       | `.agents/skills/<name>/SKILL.md` | Codex discovers repository skills from the working directory up to the repository root; duplicate names can both appear. [OpenAI skills](https://learn.chatgpt.com/docs/build-skills) |
-| Gemini CLI  | `.agents/skills/<name>/SKILL.md` | `.agents/skills` is supported alongside `.gemini/skills`; activation and consent are managed by Gemini. [Gemini skills](https://geminicli.com/docs/cli/using-agent-skills/)           |
-| Cursor IDE  | `.agents/skills/<name>/SKILL.md` | Cursor supports shared skills and `.cursor/skills`, plus other providers' discovery directories. [Cursor skills](https://cursor.com/docs/skills)                                      |
-| Cursor CLI  | `.agents/skills/<name>/SKILL.md` | The CLI supports the editor's skills; upstream calls the executable `agent`. [Cursor 2.4](https://cursor.com/changelog/2-4), [CLI usage](https://cursor.com/docs/cli/using)           |
+| Provider    | Latchkit skill destination       | Official discovery evidence                                                                                                                                                                               |
+| ----------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code | `.claude/skills/<name>/SKILL.md` | Project skills support automatic selection and slash invocation. [Claude skills](https://code.claude.com/docs/en/skills)                                                                                  |
+| Codex       | `.agents/skills/<name>/SKILL.md` | Codex discovers repository skills from the working directory up to the repository root; duplicate names can both appear. [OpenAI skills](https://learn.chatgpt.com/docs/build-skills)                     |
+| Gemini CLI  | `.agents/skills/<name>/SKILL.md` | `.agents/skills` is supported alongside `.gemini/skills`; activation and consent are managed by Gemini. [Gemini skills](https://geminicli.com/docs/cli/using-agent-skills/)                               |
+| Cursor IDE  | `.agents/skills/<name>/SKILL.md` | Cursor supports shared skills and `.cursor/skills`, plus other providers' discovery directories. [Cursor skills](https://cursor.com/docs/skills)                                                          |
+| Cursor CLI  | `.agents/skills/<name>/SKILL.md` | The CLI supports the editor's skills; upstream calls the executable `cursor-agent`. [CLI parameters](https://docs.cursor.com/en/cli/reference/parameters), [CLI usage](https://cursor.com/docs/cli/using) |
 
 Gemini CLI adapter notes
 
@@ -49,7 +49,7 @@ The process runner is an adapter primitive, not evidence that a listed provider 
 | Codex       | Native Windows CLI/PowerShell and Windows sandbox; Windows 11 recommended, recent Windows 10 best effort. WSL is optional.   | Linux and macOS CLI.                                  | [Windows](https://learn.chatgpt.com/docs/windows/windows-sandbox), [CLI](https://developers.openai.com/codex/cli/) |
 | Gemini CLI  | Windows 11 24H2+ and PowerShell.                                                                                             | Ubuntu 20.04+, macOS 15+; upstream requires Node 20+. | [Installation](https://geminicli.com/docs/get-started/installation/)                                               |
 | Cursor IDE  | Windows 10+.                                                                                                                 | Linux packages/AppImage and macOS 12+.                | [Quickstart](https://prod.cursor.com/docs/get-started/quickstart)                                                  |
-| Cursor CLI  | Native Windows installer is documented; WSL also has an installation path.                                                   | Linux and macOS installers.                           | [Installation](https://prod.cursor.com/docs/cli/installation)                                                      |
+| Cursor CLI  | Upstream documents Windows support through WSL, not a native Windows installer.                                              | Linux and macOS installers.                           | [Installation](https://docs.cursor.com/en/cli/installation)                                                        |
 
 Latchkit's own runtime minimum is Node.js 22. Each selected provider retains its own installation requirements. On WSL, install and run Node and the chosen CLI inside the distribution; a working native Windows executable does not demonstrate a working WSL installation.
 
@@ -67,7 +67,7 @@ Latchkit now exports deterministic project instructions through documented file 
 Cursor IDE inspection reports editor installation, PATH launcher availability, project integration,
 and observed session evidence separately. Its hook export is explicit opt-in and never installs Tab
 or workspace-startup execution hooks. Cursor CLI retains a separate capability record; neither the
-IDE launcher nor `agent` substitutes for an editor Agent session.
+IDE launcher nor `cursor-agent` substitutes for an editor Agent session.
 
 ## Verification policy
 
