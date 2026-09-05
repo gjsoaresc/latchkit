@@ -14,9 +14,24 @@ import { readOptional, removeFile, safePath } from '../storage.js';
 
 export const TASK_STATE_LOCK_PATH = '.latchkit/tasks/lock';
 const WAIT_TIMEOUT_MS = 5_000;
+const WINDOWS_READ_RETRY_MS = 250;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function readLockOptional(root, retryUntil = 0) {
+  while (true) {
+    try {
+      return await readOptional(root, TASK_STATE_LOCK_PATH);
+    } catch (error) {
+      // Windows can transiently reject an open while another contender unlinks or
+      // publishes the hard-linked lock. Persistent permission errors still escape.
+      if (process.platform !== 'win32' || error.code !== 'EPERM' || Date.now() >= retryUntil)
+        throw error;
+      await delay(10);
+    }
+  }
+}
 
 function validate(value, raw) {
   const fields = ['schemaVersion', 'lockId', 'pid', 'startedAt', 'hostname', 'port', 'publicKey'];
@@ -101,8 +116,11 @@ async function challenge(metadata, publicKey) {
   });
 }
 
-export async function inspectTaskStateLock(root) {
-  const raw = await readOptional(root, TASK_STATE_LOCK_PATH);
+export async function inspectTaskStateLock(
+  root,
+  retryUntil = Date.now() + (process.platform === 'win32' ? WINDOWS_READ_RETRY_MS : 0),
+) {
+  const raw = await readLockOptional(root, retryUntil);
   if (raw === null) return { state: 'none' };
   let value;
   try {
@@ -190,7 +208,7 @@ export async function acquireTaskStateLock(root) {
         metadata,
         async release() {
           try {
-            if ((await readOptional(root, TASK_STATE_LOCK_PATH)) === raw)
+            if ((await readLockOptional(root, Date.now() + WINDOWS_READ_RETRY_MS)) === raw)
               await removeFile(root, TASK_STATE_LOCK_PATH);
           } finally {
             await new Promise((resolve) => server.close(resolve));
@@ -206,22 +224,31 @@ export async function acquireTaskStateLock(root) {
       }
       await new Promise((resolve) => server.close(resolve));
       if (error.code !== 'EEXIST') throw error;
-      let existing = await inspectTaskStateLock(root);
+      let existing = await inspectTaskStateLock(root, deadline);
       // Windows can briefly expose a just-published hard link with stale metadata
       // to a concurrent reader. Only retry inspection when those bytes change;
       // a stable malformed lock remains protected and is never reclaimed.
       if (existing.state === 'invalid') {
         const firstRaw = existing.raw;
         await delay(25);
-        const refreshed = await inspectTaskStateLock(root);
+        const refreshed = await inspectTaskStateLock(root, deadline);
         if (refreshed.state !== 'invalid' || refreshed.raw !== firstRaw) existing = refreshed;
       }
-      if (
-        existing.state === 'stale' &&
-        (await readOptional(root, TASK_STATE_LOCK_PATH)) === existing.raw
-      ) {
-        await removeFile(root, TASK_STATE_LOCK_PATH);
-        continue;
+      if (existing.state === 'stale') {
+        const current = await readLockOptional(root, deadline);
+        // The prior owner may remove the lock between our stale classification
+        // and this compare. That is successful release, so retry acquisition.
+        if (current === null) continue;
+        if (current === existing.raw) {
+          await removeFile(root, TASK_STATE_LOCK_PATH);
+          continue;
+        }
+        // A different owner published a new lock. Never remove it; retry the
+        // exclusive create and challenge that owner while the wait budget lasts.
+        if (Date.now() < deadline) {
+          await delay(20);
+          continue;
+        }
       }
       // A competing writer can release its lock after our exclusive-create attempt
       // reports EEXIST but before inspection reads the file. There is no lock to
