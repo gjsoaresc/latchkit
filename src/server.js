@@ -18,6 +18,7 @@ import { appendEvent, clearDiagnostics } from './diagnostics/logger.js';
 import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
 import { createTaskController } from './runtime/task-controller.js';
+import { createReviewOrchestrator } from './reviews/orchestrator.js';
 import { listTasks } from './task-state/service.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -99,6 +100,7 @@ export async function startServer(root, { port = 0 } = {}) {
   let host;
   let pendingMutation = Promise.resolve();
   const taskController = createTaskController({ root });
+  const reviewOrchestrator = createReviewOrchestrator({ root });
   const serialize = (operation) => {
     const result = pendingMutation.then(operation);
     pendingMutation = result.catch(() => {});
@@ -193,6 +195,12 @@ export async function startServer(root, { port = 0 } = {}) {
         } else if (pathname === '/api/tasks/events' && req.method === 'POST') {
           const body = await readJson(req);
           respond(res, 200, await serialize(() => taskController.observe(body)));
+        } else if (pathname === '/api/reviews' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => reviewOrchestrator.run(body)));
+        } else if (pathname === '/api/reviews/cancel' && req.method === 'POST') {
+          const body = await readJson(req);
+          respond(res, 200, await serialize(() => reviewOrchestrator.cancel(body)));
         } else {
           throw fail(404, 'API route or method not found.');
         }
