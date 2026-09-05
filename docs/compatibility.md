@@ -29,6 +29,8 @@ Latchkit writes the shared destination once when multiple selected providers use
 
 Each capability has a `supported`, `partial`, `unsupported`, or `unknown` state, a reason, version range, and evidence URL. Unknown or an unrecognized provider version is not permission to infer support. Compatible skills remain exportable; requested unavailable enforcement is refused. A blocking decision may use an explicitly supported advisory fallback, but the result is labeled advisory and never reported as a passed gate. Missing usage is unknown, never zero. Provider selection is an installation choice, not an account, permission, or filesystem access boundary.
 
+The process runner is an adapter primitive, not evidence that a listed provider can be invoked. It refuses execution unless an adapter's contract has invocation evidence and the caller explicitly authorizes the `host-local-authorized` profile. Host-local execution is not reported as provider-sandboxed, interactive/PTY execution is not emulated, and provider approval settings are never changed.
+
 ## Upstream platform requirements
 
 | Provider | Windows | Linux and macOS | Official source |
