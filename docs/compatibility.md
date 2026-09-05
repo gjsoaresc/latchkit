@@ -14,6 +14,14 @@ Latchkit installs project-local `SKILL.md` files and stores provider/skill selec
 | Cursor IDE | `.agents/skills/<name>/SKILL.md` | Cursor supports shared skills and `.cursor/skills`, plus other providers' discovery directories. [Cursor skills](https://cursor.com/docs/skills) |
 | Cursor CLI | `.agents/skills/<name>/SKILL.md` | The CLI supports the editor's skills; upstream calls the executable `agent`. [Cursor 2.4](https://cursor.com/changelog/2-4), [CLI usage](https://cursor.com/docs/cli/using) |
 
+Gemini CLI adapter notes
+
+The Gemini adapter uses the documented headless vector `gemini --prompt <text> --output-format json`; it does not select a model, change approvals, enable YOLO mode, or authenticate. Resume plans use `--resume <session-id>` and retain JSON output. Cancellation is supplied by Latchkit's explicitly authorized bounded host runner, so it is reported as partial provider evidence rather than a Gemini-native guarantee. Missing flags in an installed `gemini --help` result keep invocation or resume unknown.
+
+The opt-in hook bridge adds uniquely named entries to `.gemini/settings.json` for `SessionStart`, `SessionEnd`, `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`, and `PreCompress`. It preserves unknown settings and user hooks and can remove only unchanged `latchkit-*` entries through the registered-resource transaction workflow. Hook commands must emit exactly one JSON object on stdout; diagnostics belong on stderr. `SessionStart`, `SessionEnd`, and `PreCompress` remain advisory. `BeforeAgent`/`BeforeTool` may deny, and `AfterAgent` may request a finite retry or halt; no `Stop` alias or compaction block is inferred.
+
+After installing or changing hooks, use Gemini's `/hooks panel` and reload/restart the CLI as required by its settings scope. Skills remain in the shared `.agents/skills` directory; inspect the provider's skill listing to confirm discovery. A real-agent test still requires a user-authorized Google account and is intentionally not part of ordinary CI.
+
 Latchkit writes the shared destination once when multiple selected providers use it. It does not also create `.gemini/skills` or `.cursor/skills` copies. Provider selection determines export destinations, not visibility permissions: compatible tools may discover installed skills even when they are not selected. Cursor may discover duplicate names when Claude and shared-root copies coexist. Inspect the provider's skill listing when resolving duplicates.
 
 Pack previews report this possible cross-root discovery duplication before mutation. It is informational: Latchkit deduplicates an identical shared destination, but never removes a Claude-root or another tool's file merely to hide a provider discovery collision.

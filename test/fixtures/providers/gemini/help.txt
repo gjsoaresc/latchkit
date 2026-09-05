@@ -1,0 +1,4 @@
+Usage: gemini [query]
+  -p, --prompt <your_prompt>       Query non-interactively
+  -o, --output-format <format>     Choices: text, json, stream-json
+  -r, --resume [session_id]         Resume a previous session
