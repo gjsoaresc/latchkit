@@ -46,10 +46,10 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 | --------------------- | --------------------------------------------------------------------------------------------------------- |
 | Portable workflows    | Four original skills: spec/build, fix, review, handoff                                                    |
 | Project configuration | Provider and skill selection in `.latchkit/config.json`                                                   |
-| Project instructions  | Offline manifest discovery and scoped, reviewable provider exports                                          |
+| Project instructions  | Offline manifest discovery and scoped, reviewable provider exports                                        |
 | Local console         | Real configuration, executable discovery, install preview and sync                                        |
 | Managed installation  | Hash-based ownership checks; conflicts block changes                                                      |
-| Safe removal          | Removes unchanged owned files/sections; keeps user text and config                                       |
+| Safe removal          | Removes unchanged owned files/sections; keeps user text and config                                        |
 | Host diagnostics      | Detects native vs WSL and executables on PATH                                                             |
 | Cross-platform checks | Release-gating Node 22/24 installed-artifact smoke on native Windows, Linux, and macOS, plus WSL evidence |
 

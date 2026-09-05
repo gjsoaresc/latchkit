@@ -68,6 +68,19 @@ async function waitForServer(child) {
   });
 }
 
+async function stopChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  child.kill();
+  const stopped = await Promise.race([
+    exited.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+  ]);
+  if (!stopped && process.platform === 'win32') {
+    await run('taskkill', ['/PID', String(child.pid), '/T', '/F']);
+  }
+}
+
 async function assertArtifact(root, node, entry, label) {
   const fs = await import('node:fs/promises');
   await fs.mkdir(root, { recursive: true });
@@ -152,10 +165,9 @@ async function assertArtifact(root, node, entry, label) {
   const state = await fetch(`${origin}/api/state`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (state.status !== 200 || (await state.json()).config.schemaVersion !== 2)
+  if (state.status !== 200 || (await state.json()).config.schemaVersion !== 3)
     throw new Error(`${label}: installed configuration API failed`);
-  child.kill();
-  await new Promise((resolve) => child.once('exit', resolve));
+  await stopChild(child);
 }
 
 async function linkCapability(root, node, entry) {
@@ -288,7 +300,7 @@ async function main() {
       ),
     );
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    await rm(scratch, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
   }
 }
 
