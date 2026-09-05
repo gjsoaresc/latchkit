@@ -71,4 +71,10 @@ IDE launcher nor `agent` substitutes for an editor Agent session.
 
 ## Verification policy
 
-The native CLI and local UI target Windows, Linux and macOS; the repository's CI matrix is the place to collect platform evidence. A configured matrix is not a completed run. Real-agent smoke tests must additionally record provider version, OS, skill discovery, invocation, artifact creation, and any unavailable feature before a combination is described as end-to-end verified. WSL needs its own smoke test.
+The native CLI and local UI target Windows, Linux and macOS. The [cross-platform workflow](../.github/workflows/ci.yml) is the release gate: every Node 22/24 native OS cell runs `check`, the unit suite, `npm pack --dry-run`, and `npm run smoke:artifact` against a clean install of the produced tarball. The smoke records the runtime, artifact SHA-256, and verifies init, preview, sync, repeat sync, conflict handling, removal, CRLF and read-only user files, the configuration API, shutdown, and bundled UI/skill assets.
+
+Windows jobs require real junction and file-symlink creation. If a runner lacks those privileges, the required smoke fails with an explicit capability error; an unexplained skip is not release evidence. The smoke also exercises paths containing spaces and Unicode and a long-lived temporary installation outside the repository. Filesystem-specific guarantees remain bounded by the durability and link limitations documented in [architecture](architecture.md) and [recovery](recovery.md).
+
+WSL is a separate required workflow job, not inferred from an Ubuntu runner. It runs Linux Node inside an Ubuntu distribution, once in the WSL filesystem and once from a mounted Windows checkout, and records the WSL runtime plus the same artifact checksum/smoke result. Native Windows executable discovery must not be treated as WSL evidence. A missing distribution, Linux Node runtime, failed mounted-drive run, or failed smoke blocks the release gate.
+
+These checks verify Latchkit's distributable and filesystem/runtime behavior. They do not authenticate provider binaries or prove a real agent session; provider discovery and invocation still require separate credentialed evidence.

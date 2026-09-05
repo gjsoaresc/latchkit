@@ -24,3 +24,33 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm pack --dry-run
+      - name: Installed artifact smoke
+        run: npm run smoke:artifact -- --require-links
+        if: runner.os == 'Windows'
+      - name: Installed artifact smoke
+        run: npm run smoke:artifact
+        if: runner.os != 'Windows'
+
+  wsl-smoke:
+    name: WSL / Node 22 / mounted-drive artifact smoke
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require an actual WSL distribution
+        shell: pwsh
+        run: |
+          wsl --status
+          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
+          if ($distros -notmatch 'Ubuntu') { wsl --install --distribution Ubuntu --no-launch }
+          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
+          if ($distros -notmatch 'Ubuntu') { throw 'A WSL Ubuntu distribution is required; a Linux container is not an acceptable substitute.' }
+      - name: Install Node 22 in WSL when needed
+        shell: pwsh
+        run: |
+          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; if ! node --version | grep -Eq '^v(2[2-9]|[3-9][0-9])\\.'; then mkdir -p ~/.local; curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C ~/.local; fi; node --version; npm --version"
+      - name: Run WSL filesystem and mounted-drive smoke
+        shell: pwsh
+        run: |
+          $windowsRepo = '${{ github.workspace }}'.Replace('\', '/')
+          $repo = (wsl wslpath -a $windowsRepo).Trim()
+          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd '$repo'; npm ci --ignore-scripts; node scripts/artifact-smoke.js --require-wsl --require-links --mounted-project '$repo/.wsl-mounted-smoke'; rm -rf '$repo/.wsl-mounted-smoke'"
