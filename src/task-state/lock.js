@@ -206,7 +206,16 @@ export async function acquireTaskStateLock(root) {
       }
       await new Promise((resolve) => server.close(resolve));
       if (error.code !== 'EEXIST') throw error;
-      const existing = await inspectTaskStateLock(root);
+      let existing = await inspectTaskStateLock(root);
+      // Windows can briefly expose a just-published hard link with stale metadata
+      // to a concurrent reader. Only retry inspection when those bytes change;
+      // a stable malformed lock remains protected and is never reclaimed.
+      if (existing.state === 'invalid') {
+        const firstRaw = existing.raw;
+        await delay(25);
+        const refreshed = await inspectTaskStateLock(root);
+        if (refreshed.state !== 'invalid' || refreshed.raw !== firstRaw) existing = refreshed;
+      }
       if (
         existing.state === 'stale' &&
         (await readOptional(root, TASK_STATE_LOCK_PATH)) === existing.raw
