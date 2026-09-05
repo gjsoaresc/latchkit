@@ -1,0 +1,15 @@
+{
+  "permissions": { "allow": ["Read(*)"] },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "user-owned-hook", "timeout": 10 }]
+      }
+    ],
+    "Notification": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "keep-this-hook" }] }
+    ]
+  },
+  "customSetting": "preserve"
+}
