@@ -14,6 +14,8 @@ export const RUN_STATES = Object.freeze(['running', 'interrupted', 'cancelled', 
 export const EVIDENCE_OUTCOMES = Object.freeze([
   'passed',
   'failed',
+  'timed-out',
+  'cancelled',
   'skipped',
   'unsupported',
   'missing',
