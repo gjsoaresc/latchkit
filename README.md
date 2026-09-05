@@ -44,7 +44,7 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 
 | Capability               | Alpha behavior                                                                                            |
 | ------------------------ | --------------------------------------------------------------------------------------------------------- |
-| Portable workflows       | Four original skills: spec/build, fix, review, handoff                                                    |
+| Portable workflows       | Seven original skills: requirements, spec, build, fix, review, handoff, setup                             |
 | Project configuration    | Provider and skill selection in `.latchkit/config.json`                                                   |
 | Project instructions     | Offline manifest discovery and scoped, reviewable provider exports                                        |
 | Local console            | Real configuration, executable discovery, install preview and sync                                        |
@@ -60,10 +60,13 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 
 After syncing, restart your coding agent or reload its skills. Ask it to use:
 
-- `latchkit-spec` to plan and implement a feature with verification evidence.
+- `latchkit-requirements` to clarify the problem, scope, decisions, and acceptance criteria.
+- `latchkit-spec` to turn accepted requirements into a reviewable delivery plan.
+- `latchkit-build` to implement authorized work with bounded verification evidence.
 - `latchkit-fix` to reproduce and repair a defect.
 - `latchkit-review` to inspect changes for actionable issues.
 - `latchkit-handoff` to write a durable session handoff.
+- `latchkit-setup` to prepare scoped provider guidance and preview conflicts.
 
 Claude Code and Cursor expose slash invocation; Codex supports `$latchkit-spec` and the other skill names. Gemini discovers skills by description and manages activation through its skill system. See the current [provider notes](docs/compatibility.md).
 
@@ -88,11 +91,12 @@ If a process stops during sync or removal, run `latchkit recover --dry-run` and 
 
 ## Build with us
 
-The direction is an open engineering workflow layer: requirements → plan → implement → verify → review → handoff. Native Windows and transparent provider capabilities are first-class requirements.
+The direction is an open engineering workflow layer: requirements → plan → implement → verify → review → handoff. Native Windows and transparent provider capabilities are first-class requirements. The bundled workflows remain instruction-led: task state and quality gates contribute evidence only when their capabilities are available and explicitly invoked.
 
 - [Roadmap and Pilot Shell capability baseline](docs/roadmap.md)
 - [Architecture and reliability boundaries](docs/architecture.md)
 - [Compatibility and primary documentation](docs/compatibility.md)
+- [Workflow scenarios](docs/workflows.md)
 - [Contributing](CONTRIBUTING.md)
 
 ```sh

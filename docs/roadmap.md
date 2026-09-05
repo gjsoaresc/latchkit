@@ -4,23 +4,23 @@ Latchkit aims to provide a shared engineering workflow over Claude Code, Gemini 
 
 ## Initial foundation
 
-The starter contains a Node.js 22+ CLI, project configuration, a local configuration UI, provider skill destinations, and four original skills for specifications, repairs, reviews, and handoffs. The skills can produce durable Markdown notes; the core does not execute or enforce their instructions.
+The starter contains a Node.js 22+ CLI, project configuration, a local configuration UI, provider skill destinations, and seven original skills for requirements, specifications, builds, repairs, reviews, handoffs, and setup. The skills can produce durable Markdown notes; task-state and quality-gate services add evidence only when explicitly available and invoked; the core does not silently enforce skill instructions.
 
 Repository tests and platform CI validate the implementation as those checks run. End-to-end provider sessions and WSL verification remain separate acceptance work. Refer to [compatibility](compatibility.md) for the distinction between supported skill formats and verified integrations.
 
 ## Milestones
 
-| Milestone | Deliverables | Completion evidence |
-|---|---|---|
-| Reliable installation | Native Windows, Linux and macOS packages; optional WSL instructions; upgrades, conflict handling and removal. | Fresh-install, update, resync and removal tests on each platform, including paths with spaces and existing user files. |
-| Provider integrations | Versioned adapters for all five targets, original rule generation, capability discovery and explicit integration status. | A recorded real-agent session discovers and uses a skill on every supported target. |
-| Workflow execution | Requirements discovery, specification delivery, acceptance-driven build loops, diagnosis, review and handoff with durable state. | Interrupted work resumes accurately; completion reflects observed acceptance results; explicit user approval requirements persist. |
-| Quality enforcement | Optional hooks, targeted TDD guidance, lint/type/test/build checks and completion guards. | Contract tests per provider event; failed checks remain visible; unavailable hooks are reported as unavailable. |
-| Context and memory | Local durable decisions, project search, compaction recovery, session history and exportable team knowledge. | Relevant context survives restart and compaction; users can inspect, remove and export stored data. |
-| Parallel engineering | Worktree isolation, independent reviews, coordinated agent execution and cancellation. | Concurrent tasks cannot corrupt each other's work or claim one another's evidence. |
-| Evidence and tools | Real CLI/API/browser/device verification, optional MCP integrations, semantic code search, structural search and language tooling. | Each claimed verification links to an actual result and supported runtime environment. |
-| Expanded frontend | Session status, requirements/plans, diffs, annotations, evidence, memory, notifications, usage, extension management and configuration. | Changes in the interface persist and reach the intended task; stale or missing data is identified. |
-| Ecosystem | Versioned skill packs, provider plugin packaging, evaluations, team sync, optional scheduled automation and remote workflows. | Reproducible installs, documented permissions, tested upgrades and controllable background work. |
+| Milestone             | Deliverables                                                                                                                            | Completion evidence                                                                                                                |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Reliable installation | Native Windows, Linux and macOS packages; optional WSL instructions; upgrades, conflict handling and removal.                           | Fresh-install, update, resync and removal tests on each platform, including paths with spaces and existing user files.             |
+| Provider integrations | Versioned adapters for all five targets, original rule generation, capability discovery and explicit integration status.                | A recorded real-agent session discovers and uses a skill on every supported target.                                                |
+| Workflow execution    | Requirements discovery, specification delivery, acceptance-driven build loops, diagnosis, review and handoff with durable state.        | Interrupted work resumes accurately; completion reflects observed acceptance results; explicit user approval requirements persist. |
+| Quality enforcement   | Optional hooks, targeted TDD guidance, lint/type/test/build checks and completion guards.                                               | Contract tests per provider event; failed checks remain visible; unavailable hooks are reported as unavailable.                    |
+| Context and memory    | Local durable decisions, project search, compaction recovery, session history and exportable team knowledge.                            | Relevant context survives restart and compaction; users can inspect, remove and export stored data.                                |
+| Parallel engineering  | Worktree isolation, independent reviews, coordinated agent execution and cancellation.                                                  | Concurrent tasks cannot corrupt each other's work or claim one another's evidence.                                                 |
+| Evidence and tools    | Real CLI/API/browser/device verification, optional MCP integrations, semantic code search, structural search and language tooling.      | Each claimed verification links to an actual result and supported runtime environment.                                             |
+| Expanded frontend     | Session status, requirements/plans, diffs, annotations, evidence, memory, notifications, usage, extension management and configuration. | Changes in the interface persist and reach the intended task; stale or missing data is identified.                                 |
+| Ecosystem             | Versioned skill packs, provider plugin packaging, evaluations, team sync, optional scheduled automation and remote workflows.           | Reproducible installs, documented permissions, tested upgrades and controllable background work.                                   |
 
 ## Reference baseline: Pilot Shell v10.12.3
 
