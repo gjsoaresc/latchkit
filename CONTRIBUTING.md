@@ -10,6 +10,8 @@ Preserve users' existing files and permission settings. Keep skills focused on t
 
 Changes to `.latchkit/config.json` or `.latchkit/manifest.json` must update the published schema, shared runtime validator, fixtures, compatibility documentation, and an explicit forward migration where applicable. Ordinary reads must remain non-mutating. Never remove or reinterpret an existing field during migration without retaining the exact original bytes and documenting restoration.
 
+Managed filesystem changes must use the registered-resource transaction layer. Add deterministic fault-boundary and recovery tests for new resource types; serializers must preserve unrelated user content before passing whole-file bytes to the transaction core.
+
 The project is MIT-licensed. Submit original work or compatible contributions with required attribution. Do not copy Pilot Shell's proprietary source, skill text, documentation or visual assets.
 
 Pull requests should explain the user-visible change and relevant validation. New adapters, lifecycle hooks and process launchers should include failure-path tests, including cancellation and Windows argument handling where applicable.

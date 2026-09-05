@@ -71,11 +71,14 @@ Claude receives `.claude/skills/latchkit-*/SKILL.md`. Codex, Gemini and Cursor s
 latchkit doctor
 latchkit config
 latchkit migrate --dry-run
+latchkit recover --dry-run
 latchkit sync --dry-run
 latchkit remove
 ```
 
 If a managed file has local edits, sync stops and reports its path. Preserve or move your changes before trying again. There is no force-overwrite flag. Configuration saves and skill synchronization are separate actions.
+
+If a process stops during sync or removal, run `latchkit recover --dry-run` and review the proposed recovery before applying it. See [installer recovery](docs/recovery.md) for conflict and manual-recovery guidance.
 
 ## Build with us
 

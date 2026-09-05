@@ -4,10 +4,12 @@ import { parseArgs } from 'node:util';
 import {
   doctor,
   initProject,
+  inspectRecovery,
   migrateConfig,
   planConfigMigration,
   planSync,
   readConfig,
+  recoverProject,
   removeProjectSkills,
   syncProject,
 } from './core.js';
@@ -20,6 +22,7 @@ Usage: latchkit <command> [options]
   doctor     Detect host runtime and provider executables on PATH
   config     Print saved project configuration
   migrate    Upgrade configuration; use --dry-run to preview
+  recover    Inspect or recover an interrupted mutation
   sync       Install selected skills; use --dry-run to preview
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   ui         Start the local configuration console (Ctrl+C to stop)
@@ -30,7 +33,7 @@ Options:
   --skills <csv>      init: spec,fix,review,handoff
   --port <number>     ui: local port (default: automatically selected)
   --to <version>      migrate: target schema version (default: current)
-  --dry-run           migrate/sync: preview without writing files
+  --dry-run           migrate/recover/sync: preview without writing files
   --help             Show this help
   --version          Show version
 
@@ -50,7 +53,7 @@ try {
     if (extra.length) throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'], doctor: ['project'], config: ['project'],
-      migrate: ['project', 'to', 'dry-run'], sync: ['project', 'dry-run'], remove: ['project'], ui: ['project', 'port'],
+      migrate: ['project', 'to', 'dry-run'], recover: ['project', 'dry-run'], sync: ['project', 'dry-run'], remove: ['project'], ui: ['project', 'port'],
     }[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
     for (const option of Object.keys(values)) if (!allowed.includes(option)) throw new Error(`--${option} is not valid for ${command}.`);
@@ -66,6 +69,7 @@ try {
       const options = values.to === undefined ? {} : { toVersion: values.to };
       print(await (values['dry-run'] ? planConfigMigration(root, options) : migrateConfig(root, options)));
     }
+    else if (command === 'recover') print(await (values['dry-run'] ? inspectRecovery(root) : recoverProject(root)));
     else if (command === 'sync') {
       const result = await (values['dry-run'] ? planSync(root) : syncProject(root));
       print(result);
