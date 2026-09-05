@@ -4,16 +4,16 @@ Latchkit is an original open-source toolkit that adds shared engineering skills 
 
 ## Current components
 
-| Component | Responsibility |
-|---|---|
-| Node.js CLI | Project initialization, provider discovery, configuration, and skill synchronization. |
-| Project configuration | `.latchkit/config.json` records the selected providers and selected skill IDs. |
-| Canonical skills | `skills/latchkit-*/SKILL.md` contains original portable instructions. |
-| Provider destinations | Project-local copies in supported discovery roots. |
-| Provider contracts | Versioned capability evidence and non-executing adapter plans. |
-| Project rules | Bounded manifest discovery, canonical instruction data, and provider-native exports. |
-| Local UI | A browser interface for viewing providers and editing project configuration. |
-| Workflow notes | Agents following the skills write task evidence under `.latchkit/notes/`. |
+| Component             | Responsibility                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| Node.js CLI           | Project initialization, provider discovery, configuration, and skill synchronization. |
+| Project configuration | `.latchkit/config.json` records the selected providers and selected skill IDs.        |
+| Canonical skills      | `skills/latchkit-*/SKILL.md` contains original portable instructions.                 |
+| Provider destinations | Project-local copies in supported discovery roots.                                    |
+| Provider contracts    | Versioned capability evidence and non-executing adapter plans.                        |
+| Project rules         | Bounded manifest discovery, canonical instruction data, and provider-native exports.  |
+| Local UI              | A browser interface for viewing providers and editing project configuration.          |
+| Workflow notes        | Agents following the skills write task evidence under `.latchkit/notes/`.             |
 
 The core targets Node.js 22 or newer and has no runtime package dependencies. Node's filesystem, path, HTTP, and process facilities provide a common implementation for Windows, Linux, and macOS. WSL runs the Linux path; it is optional for native Windows use.
 
@@ -26,12 +26,12 @@ Project configuration and the ownership manifest are independently versioned con
 The configuration uses the skill IDs `spec`, `fix`, `review`, and `handoff`. They map to the folders `latchkit-spec`, `latchkit-fix`, `latchkit-review`, and `latchkit-handoff`.
 
 | Selected provider | Destination relative to the target project |
-|---|---|
-| Claude Code | `.claude/skills/` |
-| Codex | `.agents/skills/` |
-| Gemini CLI | `.agents/skills/` |
-| Cursor IDE | `.agents/skills/` |
-| Cursor CLI | `.agents/skills/` |
+| ----------------- | ------------------------------------------ |
+| Claude Code       | `.claude/skills/`                          |
+| Codex             | `.agents/skills/`                          |
+| Gemini CLI        | `.agents/skills/`                          |
+| Cursor IDE        | `.agents/skills/`                          |
+| Cursor CLI        | `.agents/skills/`                          |
 
 Shared destinations are deduplicated during synchronization. Generated copies are distribution artifacts; edit the canonical bundled skill to develop a new version.
 
@@ -71,9 +71,9 @@ Exporters preserve provider semantics. Codex receives scoped `AGENTS.md` section
 
 The HTTP server binds only to `127.0.0.1`, requires a per-launch bearer token for API calls, validates the host and mutation origin, and limits request bodies. The URL fragment carries the token so it is not sent as a normal HTTP URL or referrer. The console serves one fixed project and has no command-execution endpoint.
 
-Operational diagnostics are a separate local contract. Structured failures carry schema version, operation ID, timestamp, stable code, stage, and retry guidance while retaining human-readable messages. Error records are redacted before persistence, capped at 500 events/256 KiB in `.latchkit/diagnostics/events.ndjson`, and never include prompts, provider streams, credentials, authorization headers, full environment, or source contents by default. `latchkit diagnostics` previews an allowlisted bundle containing runtime/configuration metadata, summaries, and recovery evidence; `--export` writes it locally for manual review and never uploads it. Diagnostics can be deleted independently of configuration, installed skills, and future task state.
+Operational diagnostics are a separate local contract. Structured failures carry schema version, operation ID, timestamp, stable code, stage, and retry guidance while retaining human-readable messages. Error records are redacted before persistence, capped at 500 events/256 KiB in `.latchkit/diagnostics/events.ndjson`, and never include prompts, provider streams, credentials, authorization headers, full environment, or source contents by default. `latchkit diagnostics` previews an allowlisted bundle containing runtime/configuration metadata, summaries, and recovery evidence; `--export` writes it locally for manual review and never uploads it. Diagnostics can be deleted independently of configuration, installed skills, and task state.
 
-The skills request plans, meaningful regression tests, reviews, and evidence. They do not enforce those requests mechanically. Notes are ordinary Markdown files, not records in an implemented workflow state machine. No provider hooks, automatic stop guards, memory database, MCP server, background scheduler, or reviewer orchestration is installed by this initial version.
+The skills request plans, meaningful regression tests, reviews, and evidence. The local task-state service can persist that lifecycle and reject stale evidence, but it does not execute commands or install provider enforcement hooks. Notes remain ordinary user-owned Markdown and can be explicitly imported with provenance. No provider hooks, automatic stop guards, memory database, MCP server, background scheduler, or reviewer orchestration is installed by this version.
 
 Future enforcement belongs in separate provider adapters with executable integration tests. One provider's hook names, payloads, and approval behavior cannot be assumed valid in another. The [roadmap](roadmap.md) tracks those components separately from portable skill distribution.
 

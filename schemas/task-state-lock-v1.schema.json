@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/task-state-lock-v1.schema.json",
+  "title": "Latchkit task-state writer lock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "lockId", "pid", "startedAt", "hostname", "port", "publicKey"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "lockId": { "type": "string", "format": "uuid" },
+    "pid": { "type": "integer", "minimum": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "hostname": { "type": "string", "minLength": 1 },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "publicKey": { "type": "string", "contentEncoding": "base64" }
+  }
+}

@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/task-state-v1.schema.json",
+  "title": "Latchkit local task state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "revision", "createdAt", "updatedAt", "tasks"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/projectId" },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "createdAt": { "$ref": "#/$defs/timestamp" },
+    "updatedAt": { "$ref": "#/$defs/timestamp" },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
+  },
+  "$defs": {
+    "timestamp": { "type": "string", "format": "date-time" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nullableString": { "type": ["string", "null"] },
+    "projectId": { "type": "string", "pattern": "^project_[0-9a-fA-F-]{36}$" },
+    "taskId": { "type": "string", "pattern": "^task_[0-9a-fA-F-]{36}$" },
+    "runId": { "type": "string", "pattern": "^run_[0-9a-fA-F-]{36}$" },
+    "criterionId": { "type": "string", "pattern": "^criterion_[0-9a-fA-F-]{36}$" },
+    "ownerId": { "type": "string", "pattern": "^owner_[0-9a-fA-F-]{36}$" },
+    "authorizationId": { "type": "string", "pattern": "^authorization_[0-9a-fA-F-]{36}$" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirtyFingerprint"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/nullableString" },
+        "dirtyFingerprint": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "scope", "provenance", "grantedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/authorizationId" },
+        "source": { "const": "user" },
+        "scope": { "type": "string", "minLength": 1 },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reference"],
+          "properties": {
+            "kind": { "enum": ["direct-request", "explicit-cli"] },
+            "reference": { "type": "string", "minLength": 1 }
+          }
+        },
+        "grantedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "description",
+        "required",
+        "approvalRequired",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/criterionId" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "required": { "type": "boolean" },
+        "approvalRequired": { "type": "boolean" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "hostname", "platform", "runtime"],
+      "properties": {
+        "pid": { "type": "integer", "minimum": 1 },
+        "hostname": { "type": "string", "minLength": 1 },
+        "platform": { "type": "string", "minLength": 1 },
+        "runtime": { "type": "string", "minLength": 1 }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ownerId", "state", "startedAt", "endedAt", "process", "source"],
+      "properties": {
+        "id": { "$ref": "#/$defs/runId" },
+        "ownerId": { "$ref": "#/$defs/ownerId" },
+        "state": { "enum": ["running", "interrupted", "cancelled", "completed"] },
+        "startedAt": { "$ref": "#/$defs/timestamp" },
+        "endedAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] },
+        "process": { "$ref": "#/$defs/process" },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    },
+    "owner": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runId", "ownerId", "revision", "acquiredAt"],
+          "properties": {
+            "runId": { "$ref": "#/$defs/runId" },
+            "ownerId": { "$ref": "#/$defs/ownerId" },
+            "revision": { "type": "integer", "minimum": 1 },
+            "acquiredAt": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      ]
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runId", "taskRevision", "summary", "source", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^checkpoint_[0-9a-fA-F-]{36}$" },
+        "runId": { "$ref": "#/$defs/runId" },
+        "taskRevision": { "type": "integer", "minimum": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "runtime", "node", "cwd", "details"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "runtime": { "type": "string", "minLength": 1 },
+        "node": { "type": "string", "minLength": 1 },
+        "cwd": { "type": "string", "minLength": 1 },
+        "details": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "criterionId",
+        "criterionRevision",
+        "runId",
+        "kind",
+        "command",
+        "environment",
+        "outcome",
+        "artifact",
+        "source",
+        "authorizationId",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^evidence_[0-9a-fA-F-]{36}$" },
+        "criterionId": { "$ref": "#/$defs/criterionId" },
+        "criterionRevision": { "type": "integer", "minimum": 1 },
+        "runId": { "$ref": "#/$defs/runId" },
+        "kind": { "enum": ["check", "approval"] },
+        "command": { "$ref": "#/$defs/nullableString" },
+        "environment": { "$ref": "#/$defs/environment" },
+        "outcome": { "enum": ["passed", "failed", "skipped", "unsupported", "missing"] },
+        "artifact": { "$ref": "#/$defs/nullableString" },
+        "source": { "$ref": "#/$defs/source" },
+        "authorizationId": { "oneOf": [{ "$ref": "#/$defs/authorizationId" }, { "type": "null" }] },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "requestHash", "taskRevision", "runId", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^event_[0-9a-fA-F-]{36}$" },
+        "type": { "type": "string", "minLength": 1 },
+        "requestHash": { "$ref": "#/$defs/sha256" },
+        "taskRevision": { "type": "integer", "minimum": 1 },
+        "runId": { "oneOf": [{ "$ref": "#/$defs/runId" }, { "type": "null" }] },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "import": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256", "importedAt"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^\\.latchkit/notes/.+\\.md$" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "importedAt": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      ]
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "state",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "authorizationRequired",
+        "authorizations",
+        "owner",
+        "criteria",
+        "runs",
+        "checkpoints",
+        "evidence",
+        "events",
+        "import"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/taskId" },
+        "title": { "type": "string", "minLength": 1 },
+        "state": {
+          "enum": [
+            "planned",
+            "running",
+            "awaiting-decision",
+            "blocked",
+            "cancelled",
+            "completed",
+            "verified"
+          ]
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" },
+        "authorizationRequired": { "type": "boolean" },
+        "authorizations": { "type": "array", "items": { "$ref": "#/$defs/authorization" } },
+        "owner": { "$ref": "#/$defs/owner" },
+        "criteria": { "type": "array", "items": { "$ref": "#/$defs/criterion" } },
+        "runs": { "type": "array", "items": { "$ref": "#/$defs/run" } },
+        "checkpoints": { "type": "array", "items": { "$ref": "#/$defs/checkpoint" } },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+        "import": { "$ref": "#/$defs/import" }
+      }
+    }
+  }
+}

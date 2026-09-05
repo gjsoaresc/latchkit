@@ -42,16 +42,17 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 
 ## What works today
 
-| Capability            | Alpha behavior                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------- |
-| Portable workflows    | Four original skills: spec/build, fix, review, handoff                                                    |
-| Project configuration | Provider and skill selection in `.latchkit/config.json`                                                   |
-| Project instructions  | Offline manifest discovery and scoped, reviewable provider exports                                        |
-| Local console         | Real configuration, executable discovery, install preview and sync                                        |
-| Managed installation  | Hash-based ownership checks; conflicts block changes                                                      |
-| Safe removal          | Removes unchanged owned files/sections; keeps user text and config                                        |
-| Host diagnostics      | Detects native vs WSL and executables on PATH                                                             |
-| Cross-platform checks | Release-gating Node 22/24 installed-artifact smoke on native Windows, Linux, and macOS, plus WSL evidence |
+| Capability               | Alpha behavior                                                                                            |
+| ------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Portable workflows       | Four original skills: spec/build, fix, review, handoff                                                    |
+| Project configuration    | Provider and skill selection in `.latchkit/config.json`                                                   |
+| Project instructions     | Offline manifest discovery and scoped, reviewable provider exports                                        |
+| Local console            | Real configuration, executable discovery, install preview and sync                                        |
+| Managed installation     | Hash-based ownership checks; conflicts block changes                                                      |
+| Safe removal             | Removes unchanged owned files/sections; keeps user text and config                                        |
+| Host diagnostics         | Detects native vs WSL and executables on PATH                                                             |
+| Resumable workflow state | Versioned local tasks, atomic checkpoints, evidence binding, and stale-writer protection                  |
+| Cross-platform checks    | Release-gating Node 22/24 installed-artifact smoke on native Windows, Linux, and macOS, plus WSL evidence |
 
 `doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates the installed distributable, runtime/filesystem behavior, and bundled assets; real provider sessions remain outside this release gate. Contributors can run `npm run smoke:artifact` locally. See the [Claude adapter notes](docs/providers/claude.md) for hook activation and capability limitations.
 
