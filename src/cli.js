@@ -23,6 +23,12 @@ import {
 import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
 import { appendEvent } from './diagnostics/logger.js';
 import { operationalError } from './diagnostics/errors.js';
+import {
+  cancelTaskWorkspace,
+  cleanupTaskWorkspace,
+  createTaskWorkspace,
+  inspectWorkspaceCapability,
+} from './workspaces/git.js';
 
 let cliValues = {};
 
@@ -39,6 +45,7 @@ Usage: latchkit <command> [options]
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Inspect, import, resume, or cancel durable workflow state
+  workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -51,6 +58,10 @@ Options:
   --task <id>         task: stable task identifier
   --expected-revision <n>  task resume/cancel: optimistic revision
   --mutation-id <id>  task mutation: retry-safe event identifier
+  --branch <name>     workspace create: explicit new branch name
+  --revision <ref>    workspace create: base commit (default: HEAD)
+  --mode <name>       workspace inspect/create: isolated or direct
+  --authorized        workspace cleanup: direct user authorization
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
   --help             Show this help
@@ -77,6 +88,10 @@ try {
       reason: { type: 'string' },
       note: { type: 'string' },
       title: { type: 'string' },
+      branch: { type: 'string' },
+      revision: { type: 'string' },
+      mode: { type: 'string' },
+      authorized: { type: 'boolean' },
       'authorization-scope': { type: 'string' },
       'authorization-reference': { type: 'string' },
       help: { type: 'boolean' },
@@ -90,7 +105,7 @@ try {
   else if (values.help || positionals.length === 0) console.log(usage);
   else {
     const [command, ...extra] = positionals;
-    if (command !== 'task' && extra.length)
+    if (!['task', 'workspace'].includes(command) && extra.length)
       throw new Error('Only one command is supported at a time.');
     const allowed = {
       init: ['project', 'providers', 'skills'],
@@ -114,6 +129,7 @@ try {
         'authorization-scope',
         'authorization-reference',
       ],
+      workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
     }[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
     for (const option of Object.keys(values))
@@ -216,6 +232,27 @@ try {
           }),
         );
       }
+    } else if (command === 'workspace') {
+      if (extra.length !== 1 || !['inspect', 'create', 'cancel', 'cleanup'].includes(extra[0])) {
+        throw new Error('Usage: latchkit workspace <inspect|create|cancel|cleanup> [options].');
+      }
+      const action = extra[0];
+      if (action === 'inspect')
+        print(await inspectWorkspaceCapability(root, { mode: values.mode }));
+      else if (action === 'create')
+        print(
+          await createTaskWorkspace(root, {
+            taskId: values.task,
+            ...(values.branch ? { branch: values.branch } : {}),
+            ...(values.revision ? { revision: values.revision } : {}),
+            ...(values.mode ? { mode: values.mode } : {}),
+          }),
+        );
+      else if (action === 'cancel') print(await cancelTaskWorkspace(root, { taskId: values.task }));
+      else
+        print(
+          await cleanupTaskWorkspace(root, { taskId: values.task, authorized: values.authorized }),
+        );
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)
