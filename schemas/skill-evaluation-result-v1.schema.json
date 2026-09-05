@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/skill-evaluation-result-v1.schema.json",
+  "title": "Latchkit skill evaluation result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "metadata", "counts", "scenarios"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string" },
+    "metadata": { "type": "object" },
+    "counts": { "type": "object", "required": ["passed", "failed", "skipped"] },
+    "scenarios": { "type": "array" }
+  }
+}

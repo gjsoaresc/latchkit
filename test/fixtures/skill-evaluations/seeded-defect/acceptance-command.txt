@@ -1,0 +1,1 @@
+Run `node acceptance.js` after repairing calculator.js. The command must report that add(2, 3) is 5.

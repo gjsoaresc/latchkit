@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/skill-evaluation-v1.schema.json",
+  "title": "Latchkit skill evaluation scenario v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "kind", "title", "fixture", "instructions", "environment", "expectations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["feature-delivery", "fix", "requirements-only", "review-only", "handoff-resume", "interrupted-verification", "unsupported-capability", "authorization-conflict"] },
+    "title": { "type": "string", "minLength": 1 },
+    "fixture": { "type": "string", "minLength": 1 },
+    "instructions": { "type": "string", "minLength": 1 },
+    "environment": { "type": "object", "required": ["requirements"], "properties": { "requirements": { "type": "array" } }, "additionalProperties": false },
+    "expectations": { "type": "object" }
+  }
+}
