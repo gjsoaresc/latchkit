@@ -32,7 +32,8 @@
     "format:check": "prettier --check src web scripts test package.json .github/workflows/ci.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
     "lint": "eslint src web scripts test",
     "check:skills": "node scripts/validate-skills.js",
-    "check": "npm run format:check && npm run lint && node scripts/check.js"
+    "check": "npm run format:check && npm run lint && node scripts/check.js",
+    "smoke:artifact": "node scripts/artifact-smoke.js"
   },
   "keywords": [
     "agent-skills",
