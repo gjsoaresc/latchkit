@@ -330,7 +330,7 @@ async function main() {
       providerId: 'codex',
       executionAuthorized: true,
       prompt:
-        'Use the installed $latchkit-requirements, $latchkit-spec, and $latchkit-build workflows. REQUIREMENTS.md is accepted. Inspect the failing test, write a concise implementation spec to .latchkit/notes/lifecycle-spec.md, implement only multiply in src/calculator.js, run npm test, and do not commit.',
+        'This is an explicitly authorized implementation request; do not stop after planning. REQUIREMENTS.md is accepted. Use the installed $latchkit-requirements, $latchkit-spec, and $latchkit-build workflows as applicable: inspect the failing test, write a concise implementation spec to .latchkit/notes/lifecycle-spec.md, directly implement only multiply in src/calculator.js, run npm test, and do not commit.',
     });
     if (implementation.process.status !== 'exited' || implementation.process.exitCode !== 0)
       throw new Error(`Codex implementation ended as ${implementation.process.status}.`);
@@ -341,7 +341,15 @@ async function main() {
       allowFailure: true,
       timeoutMs: 30_000,
     });
-    if (passingCheck.exitCode !== 0) throw new Error('Codex implementation did not pass the test.');
+    if (passingCheck.exitCode !== 0) {
+      const sourceChanged = Boolean((await git(root, ['status', '--porcelain=v1'])).stdout.trim());
+      const specNoteObserved = await fileExists(
+        path.join(root, '.latchkit', 'notes', 'lifecycle-spec.md'),
+      );
+      throw new Error(
+        `Codex implementation did not pass the test (exit=${passingCheck.exitCode}; sourceChanged=${sourceChanged}; specNoteObserved=${specNoteObserved}).`,
+      );
+    }
     if (!(await fileExists(path.join(root, '.latchkit', 'notes', 'lifecycle-spec.md'))))
       throw new Error('Codex implementation did not write the required spec note.');
     await git(root, ['add', '-A']);
