@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { initProject, readConfig } from '../src/core.js';
 import { startServer } from '../src/server.js';
+
+const execFile = promisify(execFileCallback);
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-api-'));
@@ -24,7 +28,8 @@ async function fixture(t) {
     Origin: origin,
     'Content-Type': 'application/json',
   };
-  return { root, origin, headers, server };
+  const state = await (await fetch(`${origin}/api/state`, { headers })).json();
+  return { root, origin, headers, server, revision: state.configRevision };
 }
 
 test('console binds to loopback and all API data requires a session token', async (t) => {
@@ -43,11 +48,11 @@ test('console binds to loopback and all API data requires a session token', asyn
 });
 
 test('configuration and sync API persist the selected skills with a read-only preview', async (t) => {
-  const { root, origin, headers } = await fixture(t);
+  const { root, origin, headers, revision } = await fixture(t);
   const config = { schemaVersion: 1, providers: ['codex'], skills: ['fix', 'review'] };
   const save = await fetch(`${origin}/api/config`, {
     method: 'PUT',
-    headers,
+    headers: { ...headers, 'If-Match': revision },
     body: JSON.stringify(config),
   });
   assert.equal(save.status, 200);
@@ -57,7 +62,11 @@ test('configuration and sync API persist the selected skills with a read-only pr
   await assert.rejects(readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md')), {
     code: 'ENOENT',
   });
-  const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers, body: '{}' });
+  const synced = await fetch(`${origin}/api/sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ planId: preview.planId }),
+  });
   assert.equal(synced.status, 200);
   assert.match(
     await readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md'), 'utf8'),
@@ -65,6 +74,74 @@ test('configuration and sync API persist the selected skills with a read-only pr
   );
   const repeated = await (await fetch(`${origin}/api/plan`, { headers })).json();
   assert.ok(repeated.changes.every((c) => c.action === 'unchanged'));
+});
+
+test('configuration compare-and-set rejects one of two saves made from the same revision', async (t) => {
+  const { root, origin, headers, revision } = await fixture(t);
+  const save = (skills) =>
+    fetch(`${origin}/api/config`, {
+      method: 'PUT',
+      headers: { ...headers, 'If-Match': revision },
+      body: JSON.stringify({ schemaVersion: 1, providers: ['codex'], skills }),
+    });
+  const responses = await Promise.all([save(['fix']), save(['review'])]);
+  assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
+  const conflict = await (
+    await Promise.all(responses.map((response) => response.json()))
+  ).find((body) => body.code === 'CONFIG_REVISION_CONFLICT');
+  assert.equal(conflict.apiVersion, 1);
+  assert.match(conflict.configRevision, /^"sha256:[a-f0-9]{64}"$/);
+  const saved = await readConfig(root);
+  assert.ok(
+    [['fix'], ['review']].some((skills) => JSON.stringify(skills) === JSON.stringify(saved.skills)),
+  );
+});
+
+test('configuration writes require the state revision and expose it as an ETag', async (t) => {
+  const { origin, headers } = await fixture(t);
+  const state = await fetch(`${origin}/api/state`, { headers });
+  assert.match(state.headers.get('etag'), /^"sha256:[a-f0-9]{64}"$/);
+  const response = await fetch(`${origin}/api/config`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ schemaVersion: 1, providers: ['codex'], skills: ['fix'] }),
+  });
+  assert.equal(response.status, 428);
+  assert.equal((await response.json()).apiVersion, 1);
+});
+
+test('sync rejects a preview made stale by an external CLI sync without applying it again', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  const preview = await (await fetch(`${origin}/api/plan`, { headers })).json();
+  await execFile(process.execPath, ['src/cli.js', 'sync', '--project', root], {
+    cwd: process.cwd(),
+  });
+  const response = await fetch(`${origin}/api/sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ planId: preview.planId }),
+  });
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.code, 'SYNC_PLAN_STALE');
+  assert.equal(body.apiVersion, 1);
+  assert.match(body.planId, /^sha256:[a-f0-9]{64}$/);
+});
+
+test('sync rejects a preview made stale by a managed destination change', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  const preview = await (await fetch(`${origin}/api/plan`, { headers })).json();
+  const managed = path.join(root, '.agents', 'skills', 'latchkit-spec', 'SKILL.md');
+  await mkdir(path.dirname(managed), { recursive: true });
+  await writeFile(managed, 'external edit');
+  const response = await fetch(`${origin}/api/sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ planId: preview.planId }),
+  });
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, 'SYNC_PLAN_STALE');
+  assert.equal(await readFile(managed, 'utf8'), 'external edit');
 });
 
 test('configuration migration API previews without writing and preserves a v1 backup', async (t) => {
@@ -96,7 +173,7 @@ test('configuration migration API previews without writing and preserves a v1 ba
 });
 
 test('foreign origins, missing origins, invalid config and oversized requests cannot mutate configuration', async (t) => {
-  const { root, origin, headers } = await fixture(t);
+  const { root, origin, headers, revision } = await fixture(t);
   const original = await readConfig(root);
   const body = JSON.stringify({ schemaVersion: 1, providers: [], skills: [] });
   for (const requestOrigin of ['https://example.com', undefined]) {
@@ -105,20 +182,20 @@ test('foreign origins, missing origins, invalid config and oversized requests ca
     else delete requestHeaders.Origin;
     const response = await fetch(`${origin}/api/config`, {
       method: 'PUT',
-      headers: requestHeaders,
+      headers: { ...requestHeaders, 'If-Match': revision },
       body,
     });
     assert.equal(response.status, 403);
   }
   const invalid = await fetch(`${origin}/api/config`, {
     method: 'PUT',
-    headers,
+    headers: { ...headers, 'If-Match': revision },
     body: '{"schemaVersion":2}',
   });
   assert.equal(invalid.status, 400);
   const large = await fetch(`${origin}/api/config`, {
     method: 'PUT',
-    headers,
+    headers: { ...headers, 'If-Match': revision },
     body: JSON.stringify({ value: 'x'.repeat(70_000) }),
   });
   assert.equal(large.status, 413);
@@ -126,10 +203,10 @@ test('foreign origins, missing origins, invalid config and oversized requests ca
 });
 
 test('configuration API exposes field-specific validation diagnostics', async (t) => {
-  const { origin, headers } = await fixture(t);
+  const { origin, headers, revision } = await fixture(t);
   const response = await fetch(`${origin}/api/config`, {
     method: 'PUT',
-    headers,
+    headers: { ...headers, 'If-Match': revision },
     body: JSON.stringify({
       schemaVersion: 2,
       providers: ['missing'],

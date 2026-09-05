@@ -12,6 +12,7 @@ if (/^[a-f0-9]{64}$/.test(fragment)) history.replaceState(null, '', location.pat
 
 let state;
 let savedConfig;
+let configRevision;
 let busy = false;
 let plan;
 const providerInitials = { claude: 'C', codex: 'O', gemini: 'G', cursor: '↗', 'cursor-cli': '>_' };
@@ -29,6 +30,7 @@ async function api(route, { method = 'GET', body } = {}) {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
+      ...(route === 'config' && method === 'PUT' ? { 'If-Match': configRevision } : {}),
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -39,7 +41,11 @@ async function api(route, { method = 'GET', body } = {}) {
   } catch {
     throw new Error('The local server returned an unreadable response.');
   }
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (${response.status}).`);
+    Object.assign(error, data);
+    throw error;
+  }
   return data;
 }
 
@@ -165,7 +171,11 @@ function renderState() {
 }
 
 function renderPlan(nextPlan) {
-  plan = { changes: nextPlan.changes || [], conflicts: nextPlan.conflicts || [] };
+  plan = {
+    changes: nextPlan.changes || [],
+    conflicts: nextPlan.conflicts || [],
+    planId: nextPlan.planId,
+  };
   const changes = plan.changes.filter((change) => change.action !== 'unchanged');
   const unchanged = plan.changes.length - changes.length;
   $('plan-summary').textContent = `${changes.length} pending · ${unchanged} unchanged`;
@@ -214,6 +224,15 @@ async function action(operation) {
   try {
     await operation();
   } catch (error) {
+    if (error.code === 'CONFIG_REVISION_CONFLICT' || error.code === 'SYNC_PLAN_STALE') {
+      await reloadState();
+      invalidatePlan();
+      showNotice(
+        'Workspace changed elsewhere. The current configuration was reloaded; review a new preview.',
+        true,
+      );
+      return;
+    }
     showNotice(error.message, true);
   } finally {
     busy = false;
@@ -225,6 +244,7 @@ $('save').addEventListener('click', () =>
   action(async () => {
     const data = await api('config', { method: 'PUT', body: selection() });
     savedConfig = data.config;
+    configRevision = data.configRevision;
     state.config = savedConfig;
     renderProviders();
     renderSkills();
@@ -246,11 +266,18 @@ $('preview').addEventListener('click', () =>
 
 $('apply').addEventListener('click', () =>
   action(async () => {
-    await api('sync', { method: 'POST', body: {} });
+    await api('sync', { method: 'POST', body: { planId: plan.planId } });
     renderPlan(await api('plan'));
     showNotice('Skills synced. Reload skills or restart your coding agent to pick up the changes.');
   }),
 );
+
+async function reloadState() {
+  state = await api('state');
+  savedConfig = state.config;
+  configRevision = state.configRevision;
+  renderState();
+}
 
 async function initialize() {
   if (!token) {
@@ -265,9 +292,7 @@ async function initialize() {
   }
   busy = true;
   try {
-    state = await api('state');
-    savedConfig = state.config;
-    renderState();
+    await reloadState();
   } catch (error) {
     showNotice(error.message, true);
     $('project-name').textContent = 'Unable to connect';

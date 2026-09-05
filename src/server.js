@@ -3,8 +3,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
-  readConfig,
-  saveConfig,
+  readConfigSnapshot,
+  saveConfigIfRevision,
   planConfigMigration,
   migrateConfig,
   planSync,
@@ -19,6 +19,7 @@ import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
+export const LOCAL_API_VERSION = 1;
 const WEB_ROOT = new URL('../web/', import.meta.url);
 const ASSETS = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -32,8 +33,17 @@ function fail(status, message) {
 }
 
 function respond(res, status, value) {
+  if (value?.configRevision) res.setHeader('ETag', value.configRevision);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(value));
+  res.end(JSON.stringify({ apiVersion: LOCAL_API_VERSION, ...value }));
+}
+
+function requiredRevision(req) {
+  const revision = req.headers['if-match'];
+  if (typeof revision !== 'string' || !/^"sha256:[a-f0-9]{64}"$/.test(revision)) {
+    throw fail(428, 'Send the current configuration revision in If-Match.');
+  }
+  return revision;
 }
 
 function authenticated(req, token) {
@@ -119,8 +129,10 @@ export async function startServer(root, { port = 0 } = {}) {
         }
         if (pathname === '/api/state' && req.method === 'GET') {
           await pendingMutation;
+          const snapshot = await readConfigSnapshot(root);
           respond(res, 200, {
-            config: await readConfig(root),
+            config: snapshot.config,
+            configRevision: snapshot.revision,
             providers: PROVIDERS,
             skills: SKILLS,
             doctor: await doctor(root),
@@ -130,8 +142,10 @@ export async function startServer(root, { port = 0 } = {}) {
           respond(res, 200, await planSync(root));
         } else if (pathname === '/api/config' && req.method === 'PUT') {
           const config = await readJson(req);
-          await serialize(() => saveConfig(root, config));
-          respond(res, 200, { config: await readConfig(root) });
+          const saved = await serialize(() =>
+            saveConfigIfRevision(root, config, requiredRevision(req)),
+          );
+          respond(res, 200, saved);
         } else if (pathname === '/api/config/migration' && req.method === 'GET') {
           await pendingMutation;
           const toVersion = requestUrl.searchParams.get('to') ?? undefined;
@@ -144,9 +158,15 @@ export async function startServer(root, { port = 0 } = {}) {
             await serialize(() => migrateConfig(root, { toVersion: body.toVersion })),
           );
         } else if (pathname === '/api/sync' && req.method === 'POST') {
-          if (Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'])
-            await readJson(req);
-          respond(res, 200, await serialize(() => syncProject(root)));
+          const body = await readJson(req);
+          if (
+            !body ||
+            typeof body !== 'object' ||
+            Array.isArray(body) ||
+            typeof body.planId !== 'string'
+          )
+            throw fail(400, 'Send the reviewed planId to apply a sync.');
+          respond(res, 200, await serialize(() => syncProject(root, { planId: body.planId })));
         } else if (pathname === '/api/diagnostics' && req.method === 'GET') {
           await pendingMutation;
           respond(res, 200, await previewSupportBundle(root));
@@ -177,6 +197,9 @@ export async function startServer(root, { port = 0 } = {}) {
         retry: diagnostic.retry,
         ...(error.path ? { path: error.path } : {}),
         ...(error.conflicts ? { conflicts: error.conflicts } : {}),
+        ...(error.revision ? { configRevision: error.revision } : {}),
+        ...(error.planId ? { planId: error.planId } : {}),
+        ...(error.configRevision ? { configRevision: error.configRevision } : {}),
       });
     }
   });
