@@ -1,0 +1,2 @@
+{"type":"assistant","sessionId":"chat-1","message":{"role":"assistant","content":"partial"}}
+{"type":"result","sessionId":"chat-1","result":"complete","isComplete":true}
