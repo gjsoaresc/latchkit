@@ -1,25 +1,29 @@
 # v1 release qualification: no-go
 
+> Current authoritative candidate: `main` at `5d64b803e464558604a73c42bfbacfe7d26b67bc`, packaged as `latchkit-0.1.0-alpha.1.tgz` with SHA-256 `c4d96cba6ad8c213b53139d5f176e2bf09f5d42e776394936ca37a0d12482a75`. The earlier candidate and digest retained below are historical evidence only.
+
 ## Candidate and decision
 
-- Candidate commit: `d7dfcf8a0804196e3f3737dafd3191acc1113546`
+- Candidate commit: `5d64b803e464558604a73c42bfbacfe7d26b67bc` (current `main`)
 - Package: `latchkit@0.1.0-alpha.1`
-- Exact archive SHA-256: `85722166cfb1985e0b6cbdaa57eec51bba5c31a34b5ef45f8b632249ab817bf2`
-- Qualification date: 2026-09-05 UTC
+- Exact archive SHA-256: `c4d96cba6ad8c213b53139d5f176e2bf09f5d42e776394936ca37a0d12482a75`
+- Qualification date: 2026-09-06 UTC
 - Decision: **NO-GO** for v1.0 publication
 
 The package/runtime, recovery, security, browser, evaluation, and exact-archive platform evidence is green. The candidate is not eligible for a production-ready claim because the required live provider evidence is incomplete and the package is still an alpha rather than an approved v1 release candidate. Issue #36 must remain open.
 
+The previous qualification record (`d7dfcf8` / `85722166…`) and the September 5/6 follow-up artifacts are retained as historical evidence. They do not supersede the exact `main` candidate and digest listed above.
+
 ## Reproducible evidence
 
-| Scope              | Evidence                                                                                                                                                                               | Result                                                                                                                                                            |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Exact-commit CI    | [Cross-platform run 33995374873](https://github.com/gjsoaresc/latchkit/actions/runs/33995374873) on `62d8de5`; no product/package files changed between that commit and this candidate | Node 22/24 on Windows, Ubuntu, and macOS; Chromium, Firefox, WebKit; WSL mounted-drive smoke all passed                                                           |
-| Controlled release | [Run 33995875765](https://github.com/gjsoaresc/latchkit/actions/runs/33995875765) on this candidate                                                                                    | Archive, checksum, SPDX SBOM, manifest, and installed-artifact smoke passed; publication job deliberately skipped                                                 |
-| One exact archive  | Same controlled-release run                                                                                                                                                            | The archive above passed Node 22/24 on native Windows, Ubuntu, and macOS, plus Node 22 in real WSL and a mounted Windows drive                                    |
-| Local suite        | Native Windows 10.0.26200, Node 26.8.1, npm 11.19.0                                                                                                                                    | `npm ci --ignore-scripts`, `npm run check`, `npm test`, `npm run smoke:artifact`, `npm run release:dry-run`, and `npm audit --omit=dev --audit-level=high` passed |
-| Skill evaluation   | Offline fixture harness, 2026-09-05T22:17:32Z                                                                                                                                          | 8 passed, 0 failed, 0 skipped; this is harness evidence, not provider-quality evidence                                                                            |
-| Security           | [Security audit](../../../docs/security-audit.md) and GitGuardian/check matrix                                                                                                         | No unresolved critical/high exploitable finding recorded; practical same-user, filesystem, and redaction limitations remain documented                            |
+| Scope              | Evidence                                                                                                  | Result                                                                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact-commit CI    | [Main push run 33998158086](https://github.com/gjsoaresc/latchkit/actions/runs/33998158086) on `5d64b803` | Node 22/24 on Windows, Ubuntu, and macOS; Chromium, Firefox, WebKit; WSL mounted-drive smoke all passed                                                           |
+| Controlled release | [Main dry-run 33998184838](https://github.com/gjsoaresc/latchkit/actions/runs/33998184838) on `5d64b803`  | Archive, checksum, SPDX SBOM, manifest, and installed-artifact smoke passed; publication job deliberately skipped                                                 |
+| One exact archive  | Same controlled-release dry-run                                                                           | The archive above passed Node 22/24 on native Windows, Ubuntu, and macOS, plus Node 22 in real WSL and a mounted Windows drive                                    |
+| Local suite        | Native Windows 10.0.26200, Node 26.8.1, npm 11.19.0                                                       | `npm ci --ignore-scripts`, `npm run check`, `npm test`, `npm run smoke:artifact`, `npm run release:dry-run`, and `npm audit --omit=dev --audit-level=high` passed |
+| Skill evaluation   | Offline fixture harness, 2026-09-05T22:17:32Z                                                             | 8 passed, 0 failed, 0 skipped; this is harness evidence, not provider-quality evidence                                                                            |
+| Security           | [Security audit](../../../docs/security-audit.md) and GitGuardian/check matrix                            | No unresolved critical/high exploitable finding recorded; practical same-user, filesystem, and redaction limitations remain documented                            |
 
 The local suite had one explained Windows file-symlink skip because that host denied file-symlink creation with `EPERM`. The release workflow exercised link protections on its Windows and WSL runners, so the skip is not used as substitute evidence. GitHub emitted non-failing action-runtime deprecation and transient cache-service warnings; no test retry was converted into a pass.
 
