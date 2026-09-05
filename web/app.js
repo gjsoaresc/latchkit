@@ -313,6 +313,133 @@ function renderAcceptance(tasks = []) {
   else container.append(el('p', 'section-note', 'No task evidence has been recorded.'));
 }
 
+function renderTasks(tasks = []) {
+  const container = $('task-list');
+  container.replaceChildren();
+  if (!tasks.length) {
+    container.append(
+      el('p', 'section-note', 'No durable tasks have been recorded in this project.'),
+    );
+    return;
+  }
+  for (const task of tasks) {
+    const card = el('details', 'task-card');
+    const summary = el('summary');
+    summary.append(el('span', '', task.title), el('span', `state-badge ${task.state}`, task.state));
+    card.append(summary);
+    const detail = el('div', 'task-detail');
+    detail.append(
+      el(
+        'p',
+        'section-note',
+        `Revision ${task.revision} · process ${task.reconciliation?.recordedProcess ?? 'unknown'}`,
+      ),
+    );
+    const criteria = el('ul');
+    for (const criterion of task.criteria || []) {
+      const evidence = [...(task.evidence || [])]
+        .reverse()
+        .find(
+          (item) =>
+            item.criterionId === criterion.id && item.criterionRevision === criterion.revision,
+        );
+      criteria.append(el('li', '', `${criterion.description} — ${evidence?.outcome ?? 'missing'}`));
+    }
+    detail.append(el('strong', '', 'Acceptance criteria'), criteria);
+    if (task.checkpoints?.length) {
+      const last = task.checkpoints.at(-1);
+      detail.append(el('p', 'section-note', `Latest checkpoint: ${last.summary}`));
+    }
+    if (task.state !== 'cancelled' && task.state !== 'verified') {
+      const actions = el('div', 'task-action-row');
+      const cancel = el('button', 'button button-secondary', 'Cancel task');
+      cancel.type = 'button';
+      cancel.addEventListener('click', () =>
+        action(async () => {
+          const result = await api('tasks/cancel', {
+            method: 'POST',
+            body: {
+              taskId: task.id,
+              expectedRevision: task.revision,
+              mutationId: crypto.randomUUID(),
+              reason: 'Cancelled from local workbench.',
+            },
+          });
+          showNotice(
+            result.cancelledProcess
+              ? 'Task and its owned local process were cancelled.'
+              : 'Task was cancelled; no owned process was running.',
+          );
+          await reloadWorkbench();
+        }),
+      );
+      actions.append(cancel);
+      detail.append(actions);
+    }
+    card.append(detail);
+    container.append(card);
+  }
+}
+
+function renderMemory(page) {
+  const container = $('memory-list');
+  container.replaceChildren();
+  if (!page.memories?.length) {
+    container.append(
+      el(
+        'p',
+        'section-note',
+        page.query ? 'No local memory matched that search.' : 'No local memory has been captured.',
+      ),
+    );
+    return;
+  }
+  for (const item of page.memories) {
+    const memory = item.memory;
+    const card = el('article', 'memory-card');
+    card.append(el('h3', '', memory.title), el('p', '', memory.text));
+    const footer = el('footer');
+    footer.append(el('span', 'section-note', `${memory.kind} · revision ${memory.revision}`));
+    const remove = el('button', 'button button-secondary', 'Delete');
+    remove.type = 'button';
+    remove.addEventListener('click', () =>
+      action(async () => {
+        await api(`memory/${memory.id}`, {
+          method: 'DELETE',
+          body: { expectedRevision: memory.revision },
+        });
+        showNotice('Memory deleted locally. Existing exports and Git history are not changed.');
+        await reloadWorkbench();
+      }),
+    );
+    footer.append(remove);
+    card.append(footer);
+    container.append(card);
+  }
+}
+
+async function reloadWorkbench() {
+  const data = await api('workbench');
+  renderTasks(data.tasks?.tasks || []);
+  renderMemory(data.memory);
+  renderAcceptance(data.tasks?.tasks || []);
+  $('workbench-status').textContent =
+    `Authoritative local state: task revision ${data.tasks?.revision ?? 0}, memory revision ${data.memory?.revision ?? 0}.`;
+  const selected = $('recovery-provider');
+  const prior = selected.value;
+  selected.replaceChildren();
+  for (const provider of state.providers.filter((item) =>
+    savedConfig.providers.includes(item.id),
+  )) {
+    const option = el('option', '', provider.label);
+    option.value = provider.id;
+    selected.append(option);
+  }
+  if (prior && [...selected.options].some((option) => option.value === prior))
+    selected.value = prior;
+  $('recover-memory').disabled = !selected.value;
+}
+
 async function action(operation) {
   if (busy) return;
   busy = true;
@@ -379,13 +506,74 @@ async function reloadState(options = {}) {
   savedConfig = state.config;
   configRevision = state.configRevision;
   renderState(options);
-  try {
-    renderAcceptance((await api('tasks')).tasks || []);
-  } catch (error) {
-    if (error.code === 'TASK_STATE_NOT_FOUND') renderAcceptance([]);
-    else throw error;
-  }
+  await reloadWorkbench();
 }
+
+$('refresh-workbench').addEventListener('click', () =>
+  action(async () => {
+    await reloadWorkbench();
+    showNotice('Local task and memory state refreshed.');
+  }),
+);
+
+$('memory-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  action(async () => {
+    await api('memory', {
+      method: 'POST',
+      body: {
+        title: $('memory-title').value,
+        kind: $('memory-kind').value,
+        text: $('memory-text').value,
+      },
+    });
+    $('memory-form').reset();
+    showNotice('Memory recorded locally.');
+    await reloadWorkbench();
+  });
+});
+
+$('search-memory').addEventListener('click', () =>
+  action(async () => {
+    const query = $('memory-query').value.trim();
+    renderMemory(await api(`memory?query=${encodeURIComponent(query)}`));
+  }),
+);
+
+$('recover-memory').addEventListener('click', () =>
+  action(async () => {
+    const result = await api('memory/recover', {
+      method: 'POST',
+      body: {
+        providerId: $('recovery-provider').value,
+        query: $('memory-query').value.trim(),
+        budget: 4000,
+      },
+    });
+    const output = $('recovery-context');
+    output.textContent = result.context || result.reason;
+    output.classList.remove('hidden');
+    showNotice(
+      result.mode === 'on-demand'
+        ? 'Bounded historical context was built; revalidate its sources.'
+        : result.reason,
+    );
+  }),
+);
+
+$('export-memory').addEventListener('click', () =>
+  action(async () => {
+    const exported = await api('memory/export');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(
+      new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' }),
+    );
+    link.download = 'latchkit-project-memory.json';
+    link.click();
+    URL.revokeObjectURL(link.href);
+    showNotice('Memory export downloaded for your review. It was not uploaded.');
+  }),
+);
 
 window.addEventListener('beforeunload', (event) => {
   if (!isDirty()) return;
@@ -394,7 +582,10 @@ window.addEventListener('beforeunload', (event) => {
 });
 
 window.addEventListener('online', () =>
-  showNotice('Connection restored. You can continue working.'),
+  action(async () => {
+    await reloadWorkbench();
+    showNotice('Connection restored and authoritative local state was refreshed.');
+  }),
 );
 window.addEventListener('offline', () =>
   showNotice('Connection lost. Your current edits are still on this page.', true),
@@ -425,3 +616,11 @@ async function initialize() {
 }
 
 initialize();
+
+setInterval(() => {
+  if (!token || busy || document.hidden) return;
+  reloadWorkbench().catch(() => {
+    $('workbench-status').textContent =
+      'Local state refresh is unavailable; the displayed state may be stale.';
+  });
+}, 10_000);

@@ -317,3 +317,83 @@ test('server cannot serve arbitrary project files', async (t) => {
   const response = await fetch(`${origin}/.latchkit/config.json`, { headers });
   assert.equal(response.status, 404);
 });
+
+test('workbench API paginates local memory, preserves revisions, and only reads task-bound artifacts', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  const added = await fetch(`${origin}/api/memory`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: 'Local decision',
+      kind: 'decision',
+      text: 'Keep recovery bounded.',
+    }),
+  });
+  assert.equal(added.status, 200);
+  const memory = await added.json();
+  const workbench = await (await fetch(`${origin}/api/workbench`, { headers })).json();
+  assert.equal(workbench.memory.memories[0].memory.id, memory.id);
+  assert.equal(workbench.memory.revision, 1);
+  const updated = await fetch(`${origin}/api/memory/${memory.id}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ expectedRevision: memory.revision, title: 'Updated local decision' }),
+  });
+  assert.equal(updated.status, 200);
+  const currentMemory = await updated.json();
+  const staleDelete = await fetch(`${origin}/api/memory/${memory.id}`, {
+    method: 'DELETE',
+    headers,
+    body: JSON.stringify({ expectedRevision: memory.revision }),
+  });
+  assert.equal(staleDelete.status, 409);
+  const removed = await fetch(`${origin}/api/memory/${memory.id}`, {
+    method: 'DELETE',
+    headers,
+    body: JSON.stringify({ expectedRevision: currentMemory.revision }),
+  });
+  assert.equal(removed.status, 200);
+
+  await writeFile(path.join(root, 'source.txt'), 'source\n');
+  let task = await createTask(root, {
+    title: 'Artifact scope',
+    authorization: { source: 'user', scope: 'test', reference: 'server test' },
+    criteria: [{ description: 'Bound artifact' }],
+  });
+  task = await resumeTask(root, { taskId: task.id, expectedRevision: task.revision });
+  const verification = await fetch(`${origin}/api/acceptance/verify`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: task.id,
+      executionAuthorized: true,
+      document: {
+        schemaVersion: 1,
+        checks: [
+          {
+            id: 'version',
+            criterionId: task.criteria[0].id,
+            label: 'node',
+            type: 'cli',
+            plan: { executable: process.execPath, args: ['--version'] },
+          },
+        ],
+      },
+    }),
+  });
+  assert.equal(verification.status, 200);
+  const evidenceId = (await (await fetch(`${origin}/api/tasks`, { headers })).json()).tasks.find(
+    (item) => item.id === task.id,
+  ).evidence[0].id;
+  const artifact = await fetch(
+    `${origin}/api/tasks/artifact?taskId=${encodeURIComponent(task.id)}&evidenceId=${encodeURIComponent(evidenceId)}`,
+    { headers },
+  );
+  assert.equal(artifact.status, 200);
+  assert.equal((await artifact.json()).evidenceId, evidenceId);
+  const foreign = await fetch(
+    `${origin}/api/tasks/artifact?taskId=${encodeURIComponent(task.id)}&evidenceId=evidence_00000000-0000-4000-8000-000000000000`,
+    { headers },
+  );
+  assert.equal(foreign.status, 404);
+});

@@ -600,6 +600,136 @@ input:disabled {
   overflow-wrap: anywhere;
   color: var(--muted);
 }
+.task-list,
+.memory-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.task-card,
+.memory-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  min-width: 0;
+}
+.task-card summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 650;
+}
+.task-card summary span:first-child {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.state-badge {
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  background: #eee9df;
+  color: #655c4b;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.state-badge.running,
+.state-badge.verified {
+  background: #dff4e7;
+  color: #176c3a;
+}
+.state-badge.blocked,
+.state-badge.awaiting-decision,
+.state-badge.cancelled {
+  background: #fbe4df;
+  color: #96351f;
+}
+.task-detail {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+.task-detail ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.task-detail li {
+  overflow-wrap: anywhere;
+  margin: 0.35rem 0;
+  font-size: 0.85rem;
+}
+.task-action-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.memory-form {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1fr) 10rem;
+  gap: 0.75rem;
+  align-items: end;
+}
+.memory-form label,
+.memory-controls label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.memory-text-label {
+  grid-column: 1 / -1;
+}
+.memory-form input,
+.memory-form select,
+.memory-form textarea,
+.memory-controls input,
+.memory-controls select {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.55rem;
+  color: var(--ink);
+  font: inherit;
+  background: #fff;
+}
+.memory-form textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+.memory-controls {
+  display: flex;
+  gap: 0.6rem;
+  align-items: end;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.memory-controls input {
+  min-width: 12rem;
+}
+.memory-card h3 {
+  margin-bottom: 0.25rem;
+}
+.memory-card p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.memory-card footer {
+  border: 0;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+.recovery-context {
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 20rem;
+  padding: 1rem;
+  background: #242f31;
+  color: #ecf0e6;
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
 .sync-toolbar {
   padding: 20px 22px;
   background: #e9edde;
@@ -1053,6 +1183,21 @@ footer {
   }
   .plan-panel {
     padding: 16px;
+  }
+  .memory-form {
+    grid-template-columns: 1fr;
+  }
+  .memory-form .button {
+    width: 100%;
+  }
+  .memory-controls {
+    align-items: stretch;
+  }
+  .memory-controls input,
+  .memory-controls label,
+  .memory-controls select,
+  .memory-controls .button {
+    width: 100%;
   }
   .plan-footer {
     align-items: flex-start;

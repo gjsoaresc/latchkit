@@ -10,6 +10,11 @@ const CODE_BY_ERROR = new Map([
   ['CONFIG_REVISION_CONFLICT', 'CONFIG_REVISION_CONFLICT'],
   ['SYNC_PLAN_STALE', 'SYNC_PLAN_STALE'],
   ['RECOVERY_LOCK_BLOCKED', 'RECOVERY_LOCK_BLOCKED'],
+  ['PROJECT_MEMORY_INVALID', 'PROJECT_MEMORY_INVALID'],
+  ['PROJECT_MEMORY_NOT_FOUND', 'PROJECT_MEMORY_NOT_FOUND'],
+  ['PROJECT_MEMORY_REVISION_CONFLICT', 'PROJECT_MEMORY_REVISION_CONFLICT'],
+  ['PROJECT_MEMORY_REDACTED', 'PROJECT_MEMORY_REDACTED'],
+  ['TASK_REVISION_CONFLICT', 'TASK_REVISION_CONFLICT'],
 ]);
 
 export function operationId() {
@@ -40,7 +45,9 @@ export function operationalError(error, { operation = 'unknown', stage = 'operat
 export function statusForError(error) {
   return (
     error?.status ??
-    (error?.conflicts || ['CONFIG_REVISION_CONFLICT', 'SYNC_PLAN_STALE'].includes(error?.code)
+    (error?.conflicts ||
+    /_REVISION_CONFLICT$/.test(error?.code ?? '') ||
+    ['SYNC_PLAN_STALE'].includes(error?.code)
       ? 409
       : 400)
   );
