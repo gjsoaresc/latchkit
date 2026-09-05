@@ -1,0 +1,13 @@
+{
+  "context": { "fileName": "CUSTOM.md" },
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": "write_.*",
+        "hooks": [{ "type": "command", "name": "user-hook", "command": "node user.js" }]
+      }
+    ]
+  },
+  "permissions": { "mode": "default" },
+  "unknownSetting": { "retained": true }
+}
