@@ -52,6 +52,7 @@ No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. R
 | Safe removal             | Removes unchanged owned files/sections; keeps user text and config                                        |
 | Host diagnostics         | Detects native vs WSL and executables on PATH                                                             |
 | Resumable workflow state | Versioned local tasks, atomic checkpoints, evidence binding, and stale-writer protection                  |
+| Local project memory     | Explicit, inspectable decisions and discoveries with bounded, capability-aware recovery                   |
 | Cross-platform checks    | Release-gating Node 22/24 installed-artifact smoke on native Windows, Linux, and macOS, plus WSL evidence |
 
 `doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates the installed distributable, runtime/filesystem behavior, and bundled assets; real provider sessions remain outside this release gate. Contributors can run `npm run smoke:artifact` locally. See the [Claude adapter notes](docs/providers/claude.md) for hook activation and capability limitations.
@@ -79,6 +80,9 @@ latchkit migrate --dry-run
 latchkit recover --dry-run
 latchkit sync --dry-run
 latchkit remove
+latchkit memory add --title "Why snapshots" --text "Keep memory locally inspectable."
+latchkit memory search --text "snapshots"
+latchkit memory recover --provider codex --budget 2000
 ```
 
 Sync preview includes the exact generated project-instruction sections, their provenance, declared command argument arrays, and provider discovery warnings. Latchkit never runs a discovered project command. It adds narrow owned sections to shared `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` files, or separately owned Claude/Cursor rule files, while preserving human-authored text and line endings. See [project instructions](docs/project-instructions.md).
@@ -88,6 +92,8 @@ If a managed file or managed instruction section has local edits, sync stops and
 Skill packs are explicit, versioned configuration selections. The bundled core pack is pinned by default; Latchkit never performs background upgrades. A trusted local pack declares its identity, version, provenance, compatibility and checksums in `latchkit-pack.json`; review `sync --dry-run` before deliberately changing a selected version. Checksums confirm content integrity, not publisher identity.
 
 If a process stops during sync or removal, run `latchkit recover --dry-run` and review the proposed recovery before applying it. See [installer recovery](docs/recovery.md) for conflict and manual-recovery guidance.
+
+Project memory is opt-in: `latchkit memory` stores concise decisions, discoveries, constraints, and resolved defects in `.latchkit/memory/state-v1.json`. It never ingests transcripts automatically. Search, inspection, and export are local; delete scrubs managed search material but cannot revoke older exports, backups, or Git history. Likely credentials and common secret-file paths are rejected, but this is a practical safeguard rather than a claim of perfect secret detection. Recovery selects only records within an explicit context budget and only returns an on-demand context block when the provider contract supports compaction; every block is labeled historical, untrusted context, not instructions or authorization.
 
 ## Build with us
 
