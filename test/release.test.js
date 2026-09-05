@@ -29,6 +29,11 @@ test('CLI version, release manifest, checksum, and SPDX inventory use the packag
     /^[a-f0-9]{64} {2}/,
   );
   assert.equal(sbom.packages[0].versionInfo, packageJson.version);
+  const artifact = path.relative(root, path.join(output, manifest.archive));
+  const smoke = await run(process.execPath, ['scripts/artifact-smoke.js', '--artifact', artifact], {
+    cwd: root,
+  });
+  assert.equal(JSON.parse(smoke.stdout).sha256, manifest.sha256);
 });
 
 test('release preparation refuses a tag that does not match package version', async () => {
@@ -36,4 +41,13 @@ test('release preparation refuses a tag that does not match package version', as
     run(process.execPath, ['scripts/release-artifacts.js', '--tag', 'v99.0.0'], { cwd: root }),
     /does not match package version/,
   );
+});
+
+test('controlled publication waits for the exact archive on every supported runtime', async () => {
+  const workflow = await readFile(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(workflow, /Exact archive \/ \$\{\{ matrix\.os \}\} \/ Node/);
+  assert.match(workflow, /os: \[windows-latest, ubuntu-latest, macos-latest\]/);
+  assert.match(workflow, /Exact archive \/ WSL \/ Node 22 \/ mounted drive/);
+  assert.match(workflow, /needs: \[prepare, smoke, wsl-artifact-smoke\]/);
+  assert.match(workflow, /--artifact ["']?release-artifacts\/latchkit-/);
 });

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "testedAt": "2026-09-05T22:28:01.548Z",
+  "commit": "d7dfcf8a0804196e3f3737dafd3191acc1113546",
+  "provider": "claude",
+  "providerVersion": "2.1.258",
+  "runtime": { "platform": "win32", "release": "10.0.26200", "node": "v26.8.1" },
+  "mode": "live",
+  "fixture": "issue-36-windows-native",
+  "bounds": { "timeoutMs": 30000, "maxTurns": 1, "maxRetries": 0 },
+  "configurationHash": "sha256:af95426ad17807f687dc04298b7f1188dc02468c19906e5ea859460d1ccc3324",
+  "result": {
+    "status": "blocked",
+    "reason": "Provider requested login, approval, or permission.",
+    "resultId": "sha256:3c3224133168d3b87780e76b48afa54657207c62a9d4c8e7b3cd3df65feefaaf"
+  },
+  "usage": { "state": "unknown", "value": null },
+  "artifacts": { "transcriptStored": false, "commandStored": false }
+}
