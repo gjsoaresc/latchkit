@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Latchkit — Your agents, in sync</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Workspace navigation">
+      <a class="brand" href="#workspace" aria-label="Latchkit workspace"><span class="brand-mark" aria-hidden="true">l<span>k</span></span><span>latchkit<span class="brand-dot">.</span></span></a>
+      <div class="sidebar-caption">DEVELOPER WORKSPACE</div>
+      <nav>
+        <a class="nav-item active" href="#workspace"><span aria-hidden="true">◈</span>Workspace</a>
+        <a class="nav-item" href="#configuration"><span aria-hidden="true">≡</span>Configuration</a>
+        <a class="nav-item" href="https://github.com/gjsoaresc/latchkit#readme" target="_blank" rel="noreferrer noopener"><span aria-hidden="true">↗</span>Documentation</a>
+      </nav>
+      <div class="sidebar-note"><span class="connection-dot" aria-hidden="true"></span>Local to your machine<p>One workflow.<br>Your choice of agent.</p><span class="version">OPEN SOURCE · EARLY PREVIEW</span></div>
+    </aside>
+
+    <main id="workspace">
+      <header class="topbar"><div><span class="breadcrumb">WORKSPACE</span><span class="slash">/</span><span>Overview</span></div><span class="local-pill"><span class="connection-dot" aria-hidden="true"></span>Loopback session</span></header>
+      <section class="intro">
+        <div><p class="eyebrow">LESS SETUP. MORE SHIPPING.</p><h1>Your agents,<br><span>in sync.</span></h1><p class="intro-copy">Give every coding agent a familiar workflow.<br> Choose your tools. Connect your skills. Keep building.</p></div>
+        <div class="workspace-card"><span class="mini-label">CURRENT PROJECT</span><strong id="project-name">Loading workspace…</strong><code id="project-path">Connecting to local configuration</code><div class="workspace-meta"><span id="platform-label">—</span><span id="runtime-label">—</span></div></div>
+      </section>
+
+      <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
+
+      <section class="summary-grid" aria-label="Workspace summary">
+        <div class="summary-card"><span class="mini-label">CONNECTED TOOLS</span><div><strong id="installed-count">—</strong><span>detected on this machine</span></div><span class="summary-icon" aria-hidden="true">↗</span></div>
+        <div class="summary-card"><span class="mini-label">YOUR WORKFLOW</span><div><strong id="skill-count">—</strong><span>skills selected</span></div><span class="summary-icon" aria-hidden="true">✳</span></div>
+        <div class="summary-card"><span class="mini-label">SYNC STATUS</span><div><strong class="status-word" id="sync-status">Ready</strong><span id="sync-caption">Preview before applying</span></div><span class="summary-icon" aria-hidden="true">⇄</span></div>
+      </section>
+
+      <section id="configuration" class="config-section">
+        <div class="section-heading"><div><p class="eyebrow">01 / YOUR TOOLBOX</p><h2>Meet your agents.</h2><p>Select the tools that should receive your workflow skills.</p></div><span class="subtle-tag">PROVIDER ADAPTERS</span></div>
+        <div id="providers" class="provider-grid" aria-label="Provider selection"></div>
+        <p class="section-note">Detection checks the current environment. Native Windows and WSL have separate tool installations.</p>
+      </section>
+
+      <section class="config-section skills-section">
+        <div class="section-heading"><div><p class="eyebrow">02 / YOUR PLAYBOOK</p><h2>A workflow that follows you.</h2><p>Portable instructions for the work you do every day.</p></div><span class="subtle-tag">SKILL.MD</span></div>
+        <div id="skills" class="skills-grid" aria-label="Skill selection"></div>
+        <p class="section-note">Skills guide the agent. They do not enforce hooks, permissions, or automatic quality gates.</p>
+      </section>
+
+      <section class="sync-section" aria-labelledby="sync-heading">
+        <div class="section-heading"><div><p class="eyebrow">03 / MAKE IT YOURS</p><h2 id="sync-heading">Everything in its place.</h2><p>Save your selection, review the file changes, then sync.</p></div></div>
+        <div class="sync-toolbar"><p id="selection-status">Loading configuration…</p><div class="button-row"><button id="save" class="button button-secondary" disabled>Save configuration</button><button id="preview" class="button button-primary" disabled>Preview sync <span aria-hidden="true">↗</span></button></div></div>
+        <div id="plan-panel" class="plan-panel hidden"><div class="plan-heading"><h3>File changes</h3><span id="plan-summary" class="mini-label"></span></div><div id="conflicts" class="conflicts hidden"></div><ul id="plan-changes" class="plan-changes"></ul><div class="plan-footer"><p id="plan-note">Only Latchkit-managed files are updated.</p><button id="apply" class="button button-primary" disabled>Apply sync <span aria-hidden="true">→</span></button></div></div>
+      </section>
+      <footer><span class="footer-brand">latchkit.</span><span>Built for the way you work.</span><span class="footer-right">Windows · Linux · macOS</span></footer>
+    </main>
+  </div>
+</body>
+</html>

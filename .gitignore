@@ -1,0 +1,11 @@
+node_modules/
+.latchkit/
+.agents/
+.claude/
+*.tgz
+coverage/
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
