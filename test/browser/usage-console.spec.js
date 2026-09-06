@@ -186,6 +186,8 @@ test('usage console distinguishes mixed providers and missing prices, and does n
   const { server, url } = await startServer(root);
   try {
     await page.goto(url);
+    // The session token is established at the root URL and carries over to /usage (issue #90).
+    await page.goto(`${new URL(url).origin}/usage`);
     const usage = page.locator('#usage');
     await expect(usage.getByRole('heading', { name: 'Understand each session.' })).toBeVisible();
     await expect(usage.getByRole('heading', { name: 'Totals and trends' })).toBeVisible();
