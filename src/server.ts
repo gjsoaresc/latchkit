@@ -87,6 +87,13 @@ import {
   updateVerificationPreference as updateOnboardingVerificationPreference,
   updateWorkspacePreference as updateOnboardingWorkspacePreference,
 } from './onboarding/service.js';
+import {
+  inspectProject,
+  listProjects,
+  registerProject,
+  removeProject,
+} from './projects/service.js';
+import { defaultProjectsRegistryRoot } from './projects/store.js';
 import { errorCode, errorRecord, isRecord } from './types.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -95,6 +102,9 @@ const WEB_ROOT = new URL('../web/', import.meta.url);
 const ASSETS = new Map<string, [string, string]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
+  // The multi-project overview (see web/projects.tsx) is client-side routed from the same
+  // single-page bundle; this entry only lets a direct load or refresh at /projects resolve.
+  ['/projects', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/docs/managed-fcc.md', ['../../docs/managed-fcc.md', 'text/plain; charset=utf-8']],
@@ -300,6 +310,13 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
   const taskController = createTaskController({ root });
   const reviewOrchestrator = createReviewOrchestrator({ root });
   const acceptanceVerifier = createAcceptanceVerifier({ root });
+  // Multi-project overview (issue #94): a user-local registry, independent of this server's
+  // single fixed `root`. Failures here never block the console this project actually needs —
+  // see docs/projects.md.
+  const projectsRegistryRoot = defaultProjectsRegistryRoot();
+  const touchProject = (source: 'ui-start' | 'task-run') =>
+    void registerProject(projectsRegistryRoot, { root, source }).catch(() => {});
+  touchProject('ui-start');
   const { createWorkflowController } = await import('./workflows/service.js');
   const { listWorkflows } = await import('./workflows/store.js');
   const workflowController = createWorkflowController({ root });
@@ -426,7 +443,9 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           const body = await readJson<Parameters<typeof workflowController.run>[0]>(req);
           if (body.executionAuthorized !== true)
             throw fail(400, 'Local coding-tool execution requires explicit authorization.');
-          respond(res, 202, { workflow: await workflowController.run(body) });
+          const workflow = await workflowController.run(body);
+          touchProject('task-run');
+          respond(res, 202, { workflow });
         } else if (
           ['/api/workflows/approve', '/api/workflows/resume', '/api/workflows/cancel'].includes(
             pathname,
@@ -621,7 +640,9 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           );
         } else if (pathname === '/api/tasks/start' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof taskController.start>[0]>(req);
-          respond(res, 200, await serialize(() => taskController.start(body)));
+          const started = await serialize(() => taskController.start(body));
+          touchProject('task-run');
+          respond(res, 200, started);
         } else if (pathname === '/api/tasks/resume' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof taskController.resume>[0]>(req);
           respond(res, 200, await serialize(() => taskController.resume(body)));
@@ -708,6 +729,28 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         } else if (pathname === '/api/acceptance/cancel' && req.method === 'POST') {
           const body = await readJson<{ taskId: string }>(req);
           respond(res, 200, acceptanceVerifier.cancel(body.taskId));
+        } else if (pathname === '/api/projects' && req.method === 'GET') {
+          respond(res, 200, await listProjects(projectsRegistryRoot));
+        } else if (pathname === '/api/projects' && req.method === 'POST') {
+          const body = await readJson<{ root?: string; displayName?: string }>(req);
+          respond(
+            res,
+            200,
+            await serialize(() =>
+              registerProject(projectsRegistryRoot, { ...body, source: 'manual' }),
+            ),
+          );
+        } else if (/^\/api\/projects\/project_[0-9a-f-]+$/i.test(pathname)) {
+          const id = pathname.slice('/api/projects/'.length);
+          if (req.method === 'GET') {
+            respond(
+              res,
+              200,
+              await inspectProject(projectsRegistryRoot, id, usageRangeOptions(requestUrl)),
+            );
+          } else if (req.method === 'DELETE') {
+            respond(res, 200, await serialize(() => removeProject(projectsRegistryRoot, id)));
+          } else throw fail(405, 'Method not allowed.');
         } else {
           throw fail(404, 'API route or method not found.');
         }

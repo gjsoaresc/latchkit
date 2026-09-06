@@ -7,6 +7,7 @@ import { exportMemory, MemoryConsole } from './memory.js';
 import { OnboardingConsole } from './onboarding.js';
 import { ThemeToggle } from './theme.js';
 import { UsageConsole } from './usage.js';
+import { ProjectsConsole } from './projects.js';
 import type { ConsoleState, WorkspacePreference } from './types.js';
 import { AcceptanceEvidence, TaskList } from './workbench.js';
 import { WorkflowConsole } from './workflows.js';
@@ -330,6 +331,9 @@ function Console() {
           <a className="nav-item" href="#configuration">
             <span aria-hidden="true">≡</span>Configuration
           </a>
+          <a className="nav-item" href="/projects">
+            <span aria-hidden="true">▤</span>Projects
+          </a>
           <a
             className="nav-item"
             href="https://github.com/willahealm/latchkit#readme"
@@ -578,4 +582,7 @@ function Console() {
 
 const mount = document.getElementById('root');
 if (!mount) throw new Error('The console root is missing.');
-createRoot(mount).render(<Console />);
+// The multi-project overview (issue #94) is a second top-level page in the same bundle,
+// addressed by path so a direct load or refresh at /projects resolves it (see the /projects
+// entry in src/server.ts's ASSETS map) — see web/projects.tsx.
+createRoot(mount).render(location.pathname === '/projects' ? <ProjectsConsole /> : <Console />);

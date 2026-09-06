@@ -1,6 +1,6 @@
 # Local workflow workbench
 
-`latchkit ui` is a loopback-only, launch-token-protected local console. Its workbench reads the durable task state, acceptance evidence, and project-memory services; it does not create a second workflow database or a remote account.
+`latchkit ui` is a loopback-only, launch-token-protected local console. Its workbench reads the durable task state, acceptance evidence, and project-memory services; it does not create a second workflow database or a remote account. The workbench always reflects the one project this server instance was started against; see [the multi-project overview](projects.md) for the separate `/projects` page that lists every project Latchkit knows about and links into each one's own workbench-equivalent detail.
 
 ## Tasks and evidence
 

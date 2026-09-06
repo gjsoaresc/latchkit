@@ -111,6 +111,8 @@ import {
   updateVerificationPreference as updateOnboardingVerificationPreference,
   updateWorkspacePreference as updateOnboardingWorkspacePreference,
 } from './onboarding/service.js';
+import { listProjects, registerProject, removeProject } from './projects/service.js';
+import { defaultProjectsRegistryRoot } from './projects/store.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -152,6 +154,7 @@ Usage: latchkit <command> [options]
   mcp        Preview, apply, remove, inspect, recover, or health-check optional MCP configuration
   onboarding Inspect, drive, or resume the project/provider/workflow setup wizard (CLI fallback
              for the browser console's onboarding page); prints state and exits, no prompts
+  projects   List, add, or remove a project in the user-local multi-project overview registry
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -178,7 +181,7 @@ Options:
   --host-local-authorized  task start/resume: authorize host-local execution
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
-  --id <id>           memory: stable memory identifier
+  --id <id>           memory: stable memory identifier; also projects remove: registered project ID
   --text <text>       memory: concise memory text or search query; also spec decision-notes
                        and task result-approve/-notes: notes or acceptance text
   --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
@@ -210,7 +213,8 @@ Options:
   --resolution <decision> workflow resume: observed, abandon, or retry an interrupted action
   --action-id <id>    workflow resume: interrupted action being resolved
   --file <path>       workflow run: versioned acceptance checks
-  --title <text>      spec plan-path: desired plan title used to derive the filename
+  --title <text>      spec plan-path: desired plan title used to derive the filename; also
+                      projects add: optional display name (default: the folder name)
   --from <path>       spec migrate-plan: legacy .latchkit/notes/ source to migrate
   --to <path>         spec migrate-plan: explicit docs/plans/ destination (default: derived)
   --timezone <iana>   schedule create/edit: IANA timezone
@@ -335,6 +339,7 @@ try {
         'schedule',
         'tool',
         'onboarding',
+        'projects',
       ].includes(command) &&
       extra.length
     )
@@ -487,6 +492,7 @@ try {
         'worktree-root',
         'verification-mode',
       ],
+      projects: ['project', 'id', 'title'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -549,18 +555,22 @@ try {
           bundle: values.bundle,
         }),
       );
-    } else if (command === 'init')
-      print(
-        await initProject(root, {
-          ...(values.providers !== undefined
-            ? { providers: values.providers.split(',').filter(Boolean) }
-            : {}),
-          ...(values.skills !== undefined
-            ? { skills: values.skills.split(',').filter(Boolean) }
-            : {}),
-        }),
+    } else if (command === 'init') {
+      const initialized = await initProject(root, {
+        ...(values.providers !== undefined
+          ? { providers: values.providers.split(',').filter(Boolean) }
+          : {}),
+        ...(values.skills !== undefined
+          ? { skills: values.skills.split(',').filter(Boolean) }
+          : {}),
+      });
+      print(initialized);
+      // Multi-project overview (issue #94): capture every project a user initializes. A
+      // registry write failure never fails `init` itself; see docs/projects.md.
+      await registerProject(defaultProjectsRegistryRoot(), { root, source: 'init' }).catch(
+        () => {},
       );
-    else if (command === 'doctor') print(await doctor(root));
+    } else if (command === 'doctor') print(await doctor(root));
     else if (command === 'config') print(await readConfig(root));
     else if (command === 'migrate') {
       const options = values.to === undefined ? {} : { toVersion: values.to };
@@ -687,6 +697,11 @@ try {
               taskId: requiredOption(values.task, 'task'),
             });
           print(result);
+          if (action === 'run')
+            await registerProject(defaultProjectsRegistryRoot(), {
+              root,
+              source: 'task-run',
+            }).catch(() => {});
           if (action !== 'cancel') {
             const final = await controller.wait(result.taskId);
             if (final.revision !== result.revision) print(final);
@@ -759,6 +774,9 @@ try {
               : {}),
             ...(values['worktree-root'] ? { worktreeRoot: values['worktree-root'] } : {}),
           }),
+        );
+        await registerProject(defaultProjectsRegistryRoot(), { root, source: 'task-run' }).catch(
+          () => {},
         );
       } else if (action === 'resume' && (values.provider || values.session)) {
         if (!values.session) throw new Error('Provider session resume requires --session.');
@@ -1565,6 +1583,21 @@ try {
         print(await (action === 'skip' ? skipOnboardingStep : backOnboardingStep)(root, stepId));
       } else if (action === 'complete') print(await completeOnboarding(root));
       else print(await dismissOnboarding(root)); // 'dismiss' | 'cancel'
+    } else if (command === 'projects') {
+      const action = extra[0];
+      if (extra.length !== 1 || !action || !['list', 'add', 'remove'].includes(action))
+        throw new Error('Usage: latchkit projects <list|add|remove> [options].');
+      const registryRoot = defaultProjectsRegistryRoot();
+      if (action === 'list') print(await listProjects(registryRoot));
+      else if (action === 'add')
+        print(
+          await registerProject(registryRoot, {
+            root,
+            ...(values.title !== undefined ? { displayName: values.title } : {}),
+            source: 'manual',
+          }),
+        );
+      else print(await removeProject(registryRoot, requiredOption(values.id, 'id')));
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)
