@@ -49,7 +49,9 @@ export async function readCodegraphSettings(root: string): Promise<CodegraphSett
     item.schemaVersion !== 1 ||
     typeof item.enabled !== 'boolean' ||
     !Array.isArray(item.exclusions) ||
-    !item.exclusions.every(validExclusion)
+    !item.exclusions.every(validExclusion) ||
+    Object.keys(item).length !== 3 ||
+    !['schemaVersion', 'enabled', 'exclusions'].every((key) => Object.hasOwn(item, key))
   )
     throw new Error('Invalid CodeGraph settings.');
   return { schemaVersion: 1, enabled: item.enabled, exclusions: [...item.exclusions] };
@@ -123,7 +125,13 @@ export async function inspectCodegraph(root: string): Promise<Record<string, unk
   const settings = await readCodegraphSettings(project);
   const executable = await executableCapability();
   const index = await indexState(project);
-  const fingerprint = await sourceFingerprint(project, settings.exclusions);
+  let fingerprint: string | null = null;
+  let scanError: string | null = null;
+  try {
+    fingerprint = await sourceFingerprint(project, settings.exclusions);
+  } catch (error) {
+    scanError = error instanceof Error ? error.message : 'CodeGraph source scan failed.';
+  }
   const previous =
     index === 'present'
       ? await readOptional(project, '.codegraph/latchkit-source.sha256').catch(() => null)
@@ -135,8 +143,15 @@ export async function inspectCodegraph(root: string): Promise<Record<string, unk
     exclusions: settings.exclusions,
     executable,
     index,
-    freshness: index !== 'present' ? index : previous?.trim() === fingerprint ? 'current' : 'stale',
+    freshness: scanError
+      ? 'bounded-fallback'
+      : index !== 'present'
+        ? index
+        : previous?.trim() === fingerprint
+          ? 'current'
+          : 'stale',
     sourceFingerprint: fingerprint,
+    ...(scanError ? { scanError } : {}),
     fallback:
       'ordinary bounded source search remains required when CodeGraph is disabled, missing, stale, or fails; graph output is advisory only.',
   };
@@ -155,11 +170,15 @@ export async function syncCodegraph(root: string): Promise<Record<string, unknow
       windowsHide: true,
     });
     const after = await inspectCodegraph(root);
-    if (after.index !== 'present')
+    if (
+      after.index !== 'present' ||
+      after.freshness === 'bounded-fallback' ||
+      typeof after.sourceFingerprint !== 'string'
+    )
       return {
         ...after,
         result: 'fallback',
-        reason: 'CodeGraph sync did not create a safe local index.',
+        reason: 'CodeGraph sync did not produce a safe bounded local index snapshot.',
       };
     await writeAtomic(
       after.project as string,
