@@ -44,7 +44,7 @@ test('parseActivationKey tolerates hyphenated prerelease versions and rejects ma
   assert.equal(parseActivationKey('1.0.0-solaris-sparc'), null);
 });
 
-test('resolveOnboardingHandoff prints a hook-point next-step for interactive installs and a non-hanging status otherwise', () => {
+test('resolveOnboardingHandoff prints the onboarding CLI next-step for interactive installs and a non-hanging status otherwise', () => {
   const interactive = resolveOnboardingHandoff({
     root: 'C:/Users/example/AppData/Local/Latchkit',
     version: '1.0.0',
@@ -53,8 +53,11 @@ test('resolveOnboardingHandoff prints a hook-point next-step for interactive ins
   });
   assert.equal(interactive.interactive, true);
   assert.match(interactive.message, /Next: run/);
-  assert.match(interactive.message, /#100/);
-  assert.deepEqual(interactive.command.slice(1), ['ui', '--project', '<your-project-path>']);
+  assert.deepEqual(interactive.command.slice(1), [
+    'onboarding',
+    '--project',
+    '<your-project-path>',
+  ]);
 
   const nonInteractive = resolveOnboardingHandoff({
     root: '/home/example/.local/share/latchkit',
@@ -63,7 +66,7 @@ test('resolveOnboardingHandoff prints a hook-point next-step for interactive ins
     interactive: false,
   });
   assert.equal(nonInteractive.interactive, false);
-  assert.match(nonInteractive.message, /onboarding skipped/);
+  assert.match(nonInteractive.message, /onboarding deferred/);
   assert.doesNotMatch(nonInteractive.message, /Next: run/);
 });
 
@@ -125,7 +128,7 @@ test('a non-interactive entry install prints a clear, non-hanging status instead
   const parsed = JSON.parse(stdout);
   assert.equal(parsed.active, `${version}-${target}`);
   assert.match(stderr, /installed non-interactively/);
-  assert.match(stderr, /onboarding skipped/);
+  assert.match(stderr, /onboarding deferred/);
   assert.doesNotMatch(stderr, /Next: run/);
 });
 
@@ -146,7 +149,7 @@ test('entry install without a TTY defaults to non-interactive even without the e
     '--target',
     target,
   ]);
-  assert.match(stderr, /onboarding skipped/);
+  assert.match(stderr, /onboarding deferred/);
 });
 
 test('a forced-interactive entry install prints the onboarding hook-point next step', async (t) => {
@@ -166,8 +169,7 @@ test('a forced-interactive entry install prints the onboarding hook-point next s
     '--interactive',
   ]);
   assert.match(stderr, /Next: run/);
-  assert.match(stderr, /ui --project/);
-  assert.match(stderr, /#100/);
+  assert.match(stderr, /onboarding --project/);
 });
 
 test('rollback and inspect never print an onboarding hand-off', async (t) => {

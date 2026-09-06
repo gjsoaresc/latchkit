@@ -1565,3 +1565,72 @@ html.dark .fcc-state.is-running {
     flex: 1 1 140px;
   }
 }
+
+/* Onboarding (#100) */
+.onboarding-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 20px;
+}
+.onboarding-step {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--paper);
+}
+.onboarding-step.current {
+  border-color: var(--green);
+  color: var(--ink);
+  font-weight: 650;
+}
+.onboarding-step.done {
+  background: var(--mint);
+  color: var(--green);
+}
+.onboarding-step.skipped {
+  text-decoration: line-through;
+}
+.onboarding-card {
+  padding: 19px;
+  margin-top: 15px;
+}
+.onboarding-checklist {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.onboarding-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  cursor: pointer;
+}
+.onboarding-row input {
+  flex: 0 0 auto;
+}
+.onboarding-row .skill-description {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+}
+.onboarding-status {
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--mint);
+  color: var(--muted);
+}
+.onboarding-status-configured {
+  background: var(--mint);
+  color: var(--green);
+}
+.onboarding-status-unavailable {
+  color: var(--muted);
+}

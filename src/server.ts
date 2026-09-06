@@ -72,6 +72,21 @@ import {
   updateSavingsBaseline,
 } from './usage/baseline-service.js';
 import { inspectSavings, inspectUsageOverview } from './usage/overview-service.js';
+import {
+  applyOnboardingSetup,
+  backStep as backOnboardingStep,
+  completeOnboarding,
+  dismissOnboarding,
+  inspectOnboarding,
+  previewOnboardingSetup,
+  selectProject as selectOnboardingProject,
+  skipStep as skipOnboardingStep,
+  startOnboarding,
+  updateProjectSelection as updateOnboardingProjectSelection,
+  updateUsagePreference as updateOnboardingUsagePreference,
+  updateVerificationPreference as updateOnboardingVerificationPreference,
+  updateWorkspacePreference as updateOnboardingWorkspacePreference,
+} from './onboarding/service.js';
 import { errorCode, errorRecord, isRecord } from './types.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -530,6 +545,64 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           } else if (req.method === 'DELETE') {
             respond(res, 200, await serialize(() => deleteSavingsBaseline(root, id)));
           } else throw fail(405, 'Method not allowed.');
+          // --- Onboarding (#100): additive routes for the browser console's
+          // onboarding page (web/onboarding.tsx). Every mutation reuses an
+          // existing project primitive through src/onboarding/service.ts.
+        } else if (pathname === '/api/onboarding' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectOnboarding(root));
+        } else if (pathname === '/api/onboarding/start' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => startOnboarding(root)));
+        } else if (pathname === '/api/onboarding/project' && req.method === 'POST') {
+          const body = await readJson<{ providers?: string[]; skills?: string[] }>(req);
+          respond(res, 200, await serialize(() => selectOnboardingProject(root, body)));
+        } else if (pathname === '/api/onboarding/providers' && req.method === 'POST') {
+          const body = await readJson<{ providers?: string[]; skills?: string[] }>(req);
+          respond(res, 200, await serialize(() => updateOnboardingProjectSelection(root, body)));
+        } else if (pathname === '/api/onboarding/workspace' && req.method === 'POST') {
+          const body =
+            await readJson<Parameters<typeof updateOnboardingWorkspacePreference>[1]>(req);
+          respond(res, 200, await serialize(() => updateOnboardingWorkspacePreference(root, body)));
+        } else if (pathname === '/api/onboarding/verification' && req.method === 'POST') {
+          const body = await readJson<{ mode?: string }>(req);
+          if (body.mode !== 'fast' && body.mode !== 'standard')
+            throw fail(400, 'mode must be fast or standard.');
+          respond(
+            res,
+            200,
+            await serialize(() =>
+              updateOnboardingVerificationPreference(root, body.mode as 'fast' | 'standard'),
+            ),
+          );
+        } else if (pathname === '/api/onboarding/usage' && req.method === 'POST') {
+          const body = await readJson<{ enabled?: boolean }>(req);
+          if (typeof body.enabled !== 'boolean') throw fail(400, 'enabled must be a boolean.');
+          const enabled = body.enabled;
+          respond(res, 200, await serialize(() => updateOnboardingUsagePreference(root, enabled)));
+        } else if (pathname === '/api/onboarding/preview' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => previewOnboardingSetup(root)));
+        } else if (pathname === '/api/onboarding/apply' && req.method === 'POST') {
+          const body = await readJson<{ planId?: string }>(req);
+          respond(res, 200, await serialize(() => applyOnboardingSetup(root, body)));
+        } else if (
+          (pathname === '/api/onboarding/skip' || pathname === '/api/onboarding/back') &&
+          req.method === 'POST'
+        ) {
+          const body = await readJson<{ stepId?: string }>(req);
+          if (typeof body.stepId !== 'string') throw fail(400, 'stepId is required.');
+          respond(
+            res,
+            200,
+            await serialize(() =>
+              pathname.endsWith('/skip')
+                ? skipOnboardingStep(root, body.stepId!)
+                : backOnboardingStep(root, body.stepId!),
+            ),
+          );
+        } else if (pathname === '/api/onboarding/complete' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => completeOnboarding(root)));
+        } else if (pathname === '/api/onboarding/dismiss' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => dismissOnboarding(root)));
         } else if (pathname === '/api/tasks/artifact' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('taskId');

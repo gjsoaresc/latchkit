@@ -48,6 +48,20 @@ Restart or reload the selected provider so it discovers the new skills. Exported
 
 Open the printed loopback URL. The console edits project configuration, previews installation, and applies synchronization. It is not a hosted account service or terminal. Stop it with Ctrl+C.
 
+## Finish setup with onboarding
+
+A successful interactive install suggests `latchkit onboarding` as the next command. It is a resumable wizard — select or initialize a project, discover agents, choose skills, set the worktree and fast/standard verification preferences, decide on local usage collection, preview the exact files a sync would change, then apply:
+
+```powershell
+& $latchkit onboarding --project "C:/path/to/project"
+& $latchkit onboarding project --project "C:/path/to/project"
+& $latchkit onboarding providers --project "C:/path/to/project" --providers 'claude,codex' --skills 'spec,build'
+& $latchkit onboarding preview --project "C:/path/to/project"
+& $latchkit onboarding apply --project "C:/path/to/project"
+```
+
+Every action prints JSON and exits — there is no prompt to answer, so this also works unattended. The same wizard is available step-by-step in the browser console's onboarding section. Dismissing or interrupting it never discards already-saved configuration; running any step again resumes from where it left off. See [installation](installation.md#onboarding) for the full action list and honest provider-state definitions (installed/configured/unavailable, and authentication always reported as unknown).
+
 ## First verified fixture check
 
 The following is a credential-free check of Latchkit's filesystem behavior. It does not verify a live provider session:
