@@ -2,46 +2,63 @@
   "schemaVersion": 1,
   "kind": "live-lifecycle-qualification",
   "candidate": {
-    "commit": "508ffaf41629af043b5e2a7c6c503be738f02681",
-    "package": "latchkit@0.1.0-alpha.1",
-    "localArchiveSha256": "29a11dd2f24430cb4aab09bedb9632d77daf66fc0e9c547fe59eb73341a7a2e4"
+    "commit": "b12483fe449dcdd21bdcb2013ecbeafe3131f9c3",
+    "package": "latchkit@1.0.0-rc.1",
+    "archiveSha256": "7c2bab36b27f8928afffe2bc28c38595658dd4e91d04c5fa03864c948dafb682"
   },
-  "testedAt": "2026-09-06",
+  "testedAt": "2026-09-06T01:31:07.946Z",
+  "startedAt": "2026-09-06T01:28:25.882Z",
   "runtime": {
     "platform": "win32",
+    "release": "10.0.26200",
     "architecture": "x64",
-    "node": "v26.8.1"
+    "node": "v24.20.0"
   },
   "provider": {
     "id": "codex",
     "version": "codex-cli 0.153.2",
-    "authenticatedTextTurnsObserved": true
+    "authenticatedSessionObserved": true
   },
   "bounds": {
     "processTimeoutMs": 120000,
     "outputLimitBytes": 1048576,
-    "automaticRetries": 0
+    "maximumProviderProcesses": 4,
+    "retries": 0
   },
   "results": {
     "exactArchiveInstalledOutsideCheckout": true,
-    "bundledSkillsInstalled": true,
+    "installedSkills": "passed",
     "initialVerification": "failed-as-required",
     "failedEvidenceRejection": "TASK_NOT_VERIFIABLE",
-    "interruptedOwnedProcess": "passed",
-    "interruptedRunRecorded": true,
-    "taskRecoveryReachedImplementation": true,
-    "implementationProcess": "exited-0",
-    "implementationSourceChanged": false,
-    "implementationSpecNoteObserved": false,
-    "postImplementationTest": "failed",
-    "providerResumeVector": "passed",
-    "providerResumeEvents": ["thread.started", "turn.started", "item.completed", "turn.completed"],
-    "finalDisposition": "blocked"
-  },
-  "blocker": {
-    "classification": "nested-provider-write-environment",
-    "reason": "The bounded nested Codex process completed a text turn but made no filesystem change. The inherited host exposes Codex desktop/session control variables, so this run cannot establish a normal operator-terminal workspace-write policy without overriding provider settings.",
-    "operatorAction": "Run the documented verify:lifecycle command from a normal terminal outside an active Codex desktop task, using the existing authenticated Codex account and its reviewed workspace-write/approval policy. Do not use approval or sandbox bypass flags."
+    "interruption": {
+      "state": "passed",
+      "interruptedRunRecorded": true,
+      "ownedProcessTerminated": true
+    },
+    "implementation": {
+      "state": "passed",
+      "resumableIdentityObserved": true,
+      "testsPassed": true,
+      "specNoteObserved": true
+    },
+    "handoffResume": {
+      "state": "passed",
+      "handoffNoteObserved": true
+    },
+    "independentReview": {
+      "state": "completed",
+      "findingCounts": {
+        "blocker": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "info": 0
+      }
+    },
+    "finalTaskState": "verified",
+    "unauthorizedRejection": "TASK_AUTHORIZATION_REQUIRED",
+    "unsupportedRejection": "TASK_NOT_VERIFIABLE",
+    "liveOwnedProcessesAfterCleanup": 0
   },
   "privacy": {
     "transcriptStored": false,
