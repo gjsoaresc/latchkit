@@ -101,6 +101,7 @@ import {
   authorizeManagedMcp,
   inspectManagedMcp,
   inspectManagedMcpRecovery,
+  managedMcpSnapshotDigest,
   planManagedMcp,
   recoverManagedMcp,
 } from './integrations/mcp/managed.js';
@@ -327,7 +328,16 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
   let pendingMutation: Promise<unknown> = Promise.resolve();
   // Preview IDs are launch-session scoped and bind mutation to the exact reviewed input. They
   // carry no authorization and expire when this local console exits.
-  const mcpPreviews = new Map<string, { digest: string; expiresAt: number }>();
+  const mcpPreviews = new Map<
+    string,
+    {
+      digest: string;
+      snapshotDigest: string;
+      planDigest: string;
+      reviewsActivation: boolean;
+      expiresAt: number;
+    }
+  >();
   const taskController = createTaskController({ root });
   const reviewOrchestrator = createReviewOrchestrator({ root });
   const acceptanceVerifier = createAcceptanceVerifier({ root });
@@ -430,11 +440,19 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           const body = await readJson<{ definitions?: unknown; reviewActivation?: boolean }>(req);
           if (!Array.isArray(body.definitions) || body.definitions.length > 64)
             throw fail(400, 'Send 1–64 MCP definitions as an array.');
-          const grants = authorizeManagedMcp(body.definitions, body.reviewActivation === true);
+          await pendingMutation;
+          const snapshotDigest = await managedMcpSnapshotDigest(root);
+          const reviewsActivation = body.reviewActivation === true;
+          const grants = authorizeManagedMcp(body.definitions, reviewsActivation);
           const plan = await planManagedMcp(root, body.definitions, grants);
+          if (snapshotDigest !== (await managedMcpSnapshotDigest(root)))
+            throw fail(409, 'Managed MCP configuration changed during preview. Review it again.');
           const previewId = randomBytes(24).toString('hex');
           mcpPreviews.set(previewId, {
             digest: entryHash(body.definitions),
+            snapshotDigest,
+            planDigest: entryHash(plan),
+            reviewsActivation,
             expiresAt: Date.now() + 10 * 60 * 1000,
           });
           respond(res, 200, { previewId, plan });
@@ -459,17 +477,28 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
             );
           if (body.authorized !== true)
             throw fail(400, 'Explicit local activation confirmation is required.');
+          if (!reviewed.reviewsActivation)
+            throw fail(400, 'Review activation implications before applying this MCP definition.');
           const reviewedDefinitions: unknown[] = body.definitions;
           respond(
             res,
             200,
-            await serialize(() =>
-              applyManagedMcp(
+            await serialize(async () => {
+              if (reviewed.snapshotDigest !== (await managedMcpSnapshotDigest(root)))
+                throw fail(
+                  409,
+                  'The reviewed MCP preview no longer matches the managed configuration. Review it again.',
+                );
+              return applyManagedMcp(
                 root,
                 reviewedDefinitions,
                 authorizeManagedMcp(reviewedDefinitions, true),
-              ),
-            ),
+                {
+                  expectedSnapshotDigest: reviewed.snapshotDigest,
+                  expectedPlanDigest: reviewed.planDigest,
+                },
+              );
+            }),
           );
         } else if (pathname === '/api/mcp/remove' && req.method === 'POST') {
           respond(res, 200, await serialize(() => applyManagedMcp(root, [])));
