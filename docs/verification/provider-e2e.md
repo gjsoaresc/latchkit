@@ -55,7 +55,8 @@ checks, independent review, and handoff. Provider exit status alone is insuffici
 
 Claude Code, Cursor CLI, and Cursor IDE retain their implemented adapters and offline
 contract coverage. Their live sessions are not part of this candidate's release gate.
-Antigravity retains its documented limited print-mode capabilities. WSL, Linux, and
+Antigravity has credential-free fixtures for exact-version print-mode resume;
+live resume and hook integration remain unverified (see its [adapter notes](../providers/antigravity.md)). WSL, Linux, and
 macOS qualification is deferred. Historical evidence for a different archive or host
 does not establish current support.
 

@@ -6,7 +6,11 @@ import { validateCommandPlan, validateLifecycleEnvelope } from '../providers/con
 import type { LifecycleEnvelope, ProviderContract } from '../providers/contracts.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
 import { codexAdapter } from '../providers/codex.js';
-import { ANTIGRAVITY_ADAPTER } from '../providers/antigravity.js';
+import {
+  ANTIGRAVITY_ADAPTER,
+  parseAntigravitySessionIdentity,
+  parseAntigravityVersion,
+} from '../providers/antigravity.js';
 import { cursorIdeAdapter } from '../providers/cursor-ide.js';
 import { cursorCliAdapter } from '../providers/cursor-cli.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from './process-runner.js';
@@ -184,7 +188,16 @@ function jsonRecords(value: unknown): Array<Record<string, unknown>> {
   return records;
 }
 
-function providerSessionIdentity(providerId: string, result: ProcessRunResult): string | null {
+function providerSessionIdentity(
+  providerId: string,
+  result: ProcessRunResult,
+  providerVersion?: string | null,
+  expectedSessionId?: string | null,
+): string | null {
+  if (providerId === 'antigravity') {
+    if (result.status !== 'exited' || result.exitCode !== 0) return null;
+    return parseAntigravitySessionIdentity(result.stdout, { providerVersion, expectedSessionId });
+  }
   if (typeof result?.sessionId === 'string' && result.sessionId.trim()) return result.sessionId;
   const records = jsonRecords(result?.stdout);
   if (providerId === 'codex') {
@@ -199,7 +212,7 @@ function providerSessionIdentity(providerId: string, result: ProcessRunResult): 
     );
     return (completed?.session_id as string | undefined) ?? null;
   }
-  if (providerId === 'antigravity' || providerId === 'cursor-cli') {
+  if (providerId === 'cursor-cli') {
     const correlated = records.find((record) => typeof record.session_id === 'string');
     return (correlated?.session_id as string | undefined) ?? null;
   }
@@ -268,6 +281,20 @@ export function createTaskController({
     const before = await inspectTask(root, taskId);
     if (before.task.state === 'cancelled')
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');
+    // Version inspection is a bounded, model-free command only inside an
+    // explicitly authorized start/resume. Re-probe on resume after upgrades.
+    let providerVersion: string | null = null;
+    if (providerId === 'antigravity') {
+      const version = await launch({
+        provider,
+        plan: { executable: provider.command, args: ['--version'], cwd: root },
+        executionProfile,
+        timeoutMs: 5000,
+        outputLimitBytes: 4096,
+      });
+      if (version.status === 'exited' && version.exitCode === 0)
+        providerVersion = parseAntigravityVersion(version.stdout);
+    }
     const planResult = resumeSession
       ? adapter.operations.planResume({
           sessionId: resumeSession.providerSessionId,
@@ -275,6 +302,7 @@ export function createTaskController({
           cwd: root,
           sandbox,
           approvalPolicy,
+          ...(providerId === 'antigravity' ? { providerVersion } : {}),
         })
       : adapter.operations.planInvocation({
           prompt: prompt ?? before.task.title,
@@ -345,7 +373,12 @@ export function createTaskController({
           },
         });
         session.providerSessionId =
-          providerSessionIdentity(providerId, processResult) ?? session.providerSessionId;
+          providerSessionIdentity(
+            providerId,
+            processResult,
+            providerVersion,
+            session.providerSessionId,
+          ) ?? session.providerSessionId;
         session.state = processResult.status === 'cancelled' ? 'cancelled' : 'finished';
         session.result = resultSummary(processResult);
         session.updatedAt = now();

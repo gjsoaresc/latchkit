@@ -105,8 +105,9 @@ Future enforcement belongs in separate provider adapters with executable integra
 
 The current 1.0 work is a candidate under development. Open issues #19, #24, #25, and #32
 (MCP management, team packs, scheduling, and usage accounting) remain post-1.0 scope. Antigravity
-resume and lifecycle support remains limited to the documented print-mode invocation; its
-non-interactive resume and stable hook contract are unknown (issue #76). Issue #86 is a separate
+supports documented print-mode invocation and exact-version conversation resume with fixture
+coverage. Live resume and hook integration remain unverified or unimplemented (issue #76);
+see the [Antigravity adapter](providers/antigravity.md). Issue #86 is a separate
 optional enhanced specs/tools/workers umbrella and remains outside this release scope.
 
 The Cursor IDE adapter is the first editor-specific boundary. Its opt-in project hooks use native
