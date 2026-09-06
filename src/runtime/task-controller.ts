@@ -33,9 +33,21 @@ import type { Task } from '../task-state/contracts.js';
 import { recordProviderUsage } from '../usage/service.js';
 import { readUsageState } from '../usage/store.js';
 import { writeAtomic } from '../storage.js';
+import { createTaskWorkspace } from '../workspaces/git.js';
+import { resolveExecutionChoice, type WorkspaceExecutionChoice } from '../workspaces/preference.js';
+import {
+  DEFAULT_WORKSPACE_EXECUTION_PREFERENCE,
+  type WorkspaceExecutionPreference,
+} from '../config/contracts.js';
 
 export const TASK_SESSION_PATH = '.latchkit/tasks/sessions-v1.json';
 const SESSION_SCHEMA_VERSION = 1;
+/** The implementation workspace a session actually ran in. Recorded once at
+ * first start and reused verbatim on resume, so resuming a task never
+ * re-decides or moves its workspace even if the project preference changes
+ * later. Absent on sessions persisted before this field existed; those are
+ * treated as direct (their only possible prior behavior). */
+type SessionWorkspace = { mode: 'isolated' | 'direct'; path: string };
 type TaskSession = {
   id: string;
   providerSessionId: string | null;
@@ -47,6 +59,7 @@ type TaskSession = {
   process: { pid: number | null; hostname: string; platform: NodeJS.Platform } | null;
   eventIds: string[];
   result: ReturnType<typeof resultSummary> | null;
+  workspace?: SessionWorkspace | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -70,6 +83,11 @@ type RunInput = {
   approvalPolicy?: string;
   executionAuthorized?: boolean;
   sessionId?: string;
+  /** An explicit per-task choice for a fresh start only; ignored on resume,
+   * which always reuses the session's recorded workspace. */
+  workspaceChoice?: WorkspaceExecutionChoice;
+  /** An explicit per-call worktree-root override for a fresh, isolated start. */
+  worktreeRoot?: string;
 };
 type TaskControllerOptions = {
   root: string;
@@ -156,6 +174,35 @@ async function readSessions(root: string): Promise<SessionDocument> {
 
 async function writeSessions(root: string, document: SessionDocument): Promise<void> {
   await writeAtomic(root, TASK_SESSION_PATH, `${JSON.stringify(document, null, 2)}\n`, 0o600);
+}
+
+/** Reads the project's persisted `workspace.executionPreference` without
+ * requiring an initialized or validated Latchkit project. A missing,
+ * unreadable, or malformed configuration falls back to the documented
+ * default ("direct"), which is also today's only actual behavior — so a
+ * project that never sets this preference sees no behavioral change. */
+async function projectExecutionPreference(root: string): Promise<WorkspaceExecutionPreference> {
+  try {
+    const raw = await readFile(path.join(root, '.latchkit', 'config.json'), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    const preference =
+      parsed && typeof parsed === 'object' && 'workspace' in parsed
+        ? (parsed as { workspace?: unknown }).workspace
+        : undefined;
+    const executionPreference =
+      preference && typeof preference === 'object' && 'executionPreference' in preference
+        ? (preference as { executionPreference?: unknown }).executionPreference
+        : undefined;
+    if (
+      executionPreference === 'ask' ||
+      executionPreference === 'always-worktree' ||
+      executionPreference === 'direct'
+    )
+      return executionPreference;
+  } catch {
+    // A missing or malformed project configuration keeps the safe default.
+  }
+  return DEFAULT_WORKSPACE_EXECUTION_PREFERENCE;
 }
 
 function resultSummary(result: ProcessRunResult) {
@@ -262,6 +309,8 @@ export function createTaskController({
     resumeSession,
     sandbox,
     approvalPolicy,
+    workspaceChoice,
+    worktreeRoot,
   }: RunInput) {
     assertId(taskId, 'taskId');
     assertId(providerId, 'providerId');
@@ -276,6 +325,42 @@ export function createTaskController({
     const before = await inspectTask(root, taskId);
     if (before.task.state === 'cancelled')
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');
+    // Resuming reuses whatever workspace (or lack of one) the session already
+    // recorded; it never re-decides, so an unrelated default change cannot
+    // move an active task's workspace. A session persisted before this field
+    // existed had no workspace concept, which was always direct execution.
+    // A fresh start resolves the project preference (or an explicit per-task
+    // override); "ask every time" with no override starts nothing.
+    const workspace: SessionWorkspace = resumeSession
+      ? (resumeSession.workspace ?? { mode: 'direct', path: root })
+      : await (async () => {
+          const choice = resolveExecutionChoice({
+            projectPreference: await projectExecutionPreference(root),
+            override: workspaceChoice,
+          });
+          if (choice.decision === 'undecided')
+            throw new TaskControllerError(
+              'This project asks for a worktree-or-direct choice before every new task. Pass an explicit workspaceChoice to start it.',
+              'WORKSPACE_CHOICE_REQUIRED',
+            );
+          if (choice.decision === 'direct') return { mode: 'direct', path: root };
+          const created = await createTaskWorkspace(root, {
+            taskId,
+            ...(worktreeRoot !== undefined ? { worktreeRoot } : {}),
+          });
+          if ('capability' in created && created.capability === 'unavailable')
+            throw new TaskControllerError(
+              `Worktree isolation is unavailable (${created.code}). Choose direct execution or resolve the Git environment.`,
+              'WORKSPACE_UNAVAILABLE',
+            );
+          if (!('path' in created))
+            throw new TaskControllerError(
+              'Worktree isolation did not return a workspace path.',
+              'WORKSPACE_UNAVAILABLE',
+            );
+          return { mode: 'isolated', path: created.path };
+        })();
+    const cwd = workspace.path;
     // Version inspection is a bounded, model-free command only inside an
     // explicitly authorized start/resume. Re-probe on resume after upgrades.
     let providerVersion: string | null = null;
@@ -306,14 +391,14 @@ export function createTaskController({
       ? adapter.operations.planResume({
           sessionId: resumeSession.providerSessionId,
           prompt: prompt ?? before.task.title,
-          cwd: root,
+          cwd,
           sandbox,
           approvalPolicy,
           ...(providerId === 'antigravity' ? { providerVersion } : {}),
         })
       : adapter.operations.planInvocation({
           prompt: prompt ?? before.task.title,
-          cwd: root,
+          cwd,
           sandbox,
           approvalPolicy,
         });
@@ -355,6 +440,7 @@ export function createTaskController({
         process: null,
         eventIds: [],
         result: null,
+        workspace,
         createdAt: now(),
         updatedAt: now(),
       };

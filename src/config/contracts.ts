@@ -30,12 +30,37 @@ export interface PackSelection {
   source: BundledPackSource | LocalPackSource | GitPackSource;
   pinned: boolean;
 }
+export type WorkspaceExecutionPreference = 'ask' | 'always-worktree' | 'direct';
+/** A project-persisted, provider-independent preference for whether a new task's
+ * implementation runs in an isolated Git worktree or directly in the project
+ * checkout, plus where new worktrees are created. It is independent of any
+ * reviewer isolation, which remains separately required. */
+export interface WorkspaceSettings {
+  executionPreference: WorkspaceExecutionPreference;
+  /** A portable project-relative path (forward slashes) or an explicit absolute
+   * path. Relative roots resolve against the main checkout, never a linked
+   * worktree, so starting from a worktree cannot nest worktree roots. */
+  worktreeRoot: string;
+}
+export const DEFAULT_WORKTREE_ROOT = '.latchkit/worktrees';
+/** "direct" preserves today's only behavior (every task runs in the project
+ * checkout) so a project without this setting sees no behavioral change. */
+export const DEFAULT_WORKSPACE_EXECUTION_PREFERENCE: WorkspaceExecutionPreference = 'direct';
+export const DEFAULT_WORKSPACE_SETTINGS: Readonly<WorkspaceSettings> = Object.freeze({
+  executionPreference: DEFAULT_WORKSPACE_EXECUTION_PREFERENCE,
+  worktreeRoot: DEFAULT_WORKTREE_ROOT,
+});
+
 export interface LatchkitConfig {
   schemaVersion: 1 | 2 | 3;
   providers: string[];
   skills: string[];
   providerSettings?: Record<string, JsonObject>;
   packs?: PackSelection[];
+  /** Optional on every supported schema version; absent means the documented
+   * defaults above apply. It is not part of any version's required field set,
+   * so existing configuration files remain valid without it. */
+  workspace?: WorkspaceSettings;
 }
 export interface ManifestSection {
   id: 'project-instructions';
@@ -109,6 +134,77 @@ function cloneJson(value: unknown, path: string): JsonValue {
   throw new ConfigContractError('Expected a JSON value.', path);
 }
 
+const WORKSPACE_EXECUTION_PREFERENCES: ReadonlySet<string> = new Set([
+  'ask',
+  'always-worktree',
+  'direct',
+]);
+const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+function isSafeWorktreeRootSegment(part: string): boolean {
+  return (
+    part !== '' &&
+    part !== '.' &&
+    part !== '..' &&
+    !/[<>:"|?*]/.test(part) &&
+    !RESERVED_WINDOWS_NAMES.test(part)
+  );
+}
+
+/** Accepts a portable project-relative path (POSIX separators only) or an
+ * explicit absolute native path. Containment and overlap with the project
+ * checkout require filesystem access and are enforced separately at
+ * workspace-creation time, not here. */
+export function validateWorktreeRoot(value: unknown, fieldPath = '$.worktreeRoot'): string {
+  if (typeof value !== 'string' || value.length === 0)
+    throw new ConfigContractError('Expected a non-empty path.', fieldPath);
+  if (value.length > 4096 || /[\r\n\0]/.test(value))
+    throw new ConfigContractError('Path is invalid.', fieldPath);
+  if (value !== value.normalize('NFC'))
+    throw new ConfigContractError('Path must be Unicode NFC-normalized.', fieldPath);
+  const isAbsolute = path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
+  if (isAbsolute) {
+    if (value.split(/[\\/]/).includes('..'))
+      throw new ConfigContractError('An absolute path must not contain "..".', fieldPath);
+    return value;
+  }
+  if (value.includes('\\'))
+    throw new ConfigContractError(
+      'A project-relative worktree root uses portable forward slashes.',
+      fieldPath,
+    );
+  if (!value.split('/').every(isSafeWorktreeRootSegment))
+    throw new ConfigContractError('Path has an empty, traversal, or reserved segment.', fieldPath);
+  return value;
+}
+
+export function validateWorkspaceSettings(
+  value: unknown,
+  fieldPath = '$.workspace',
+): WorkspaceSettings {
+  if (!record(value)) throw new ConfigContractError('Expected an object.', fieldPath);
+  const allowed = new Set(['executionPreference', 'worktreeRoot']);
+  for (const key of Object.keys(value))
+    if (!allowed.has(key))
+      throw new ConfigContractError(`Unknown field "${key}".`, `${fieldPath}.${key}`);
+  for (const key of allowed)
+    if (!Object.hasOwn(value, key))
+      throw new ConfigContractError('Required field is missing.', `${fieldPath}.${key}`);
+  const executionPreference = value.executionPreference;
+  if (
+    typeof executionPreference !== 'string' ||
+    !WORKSPACE_EXECUTION_PREFERENCES.has(executionPreference)
+  )
+    throw new ConfigContractError(
+      'Expected "ask", "always-worktree", or "direct".',
+      `${fieldPath}.executionPreference`,
+    );
+  return {
+    executionPreference: executionPreference as WorkspaceExecutionPreference,
+    worktreeRoot: validateWorktreeRoot(value.worktreeRoot, `${fieldPath}.worktreeRoot`),
+  };
+}
+
 function validateSelection(
   config: JsonObject,
   key: string,
@@ -159,7 +255,8 @@ export function validateConfig(
   const fields = CONFIG_FIELDS.get(schemaVersion);
   if (!fields) throw new ConfigContractError('Unsupported schema version.', '$.schemaVersion');
   for (const key of Object.keys(config))
-    if (!fields.has(key)) throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`);
+    if (!fields.has(key) && key !== 'workspace')
+      throw new ConfigContractError(`Unknown field "${key}".`, `$.${key}`);
   for (const key of fields)
     if (!Object.hasOwn(config, key))
       throw new ConfigContractError('Required field is missing.', `$.${key}`);
@@ -275,6 +372,8 @@ export function validateConfig(
       return { id: pack.id, version: pack.version, source, pinned: pack.pinned };
     });
   }
+  if (Object.hasOwn(config, 'workspace'))
+    validated.workspace = validateWorkspaceSettings(config.workspace);
   return validated;
 }
 

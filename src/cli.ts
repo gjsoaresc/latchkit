@@ -13,8 +13,10 @@ import {
   readConfig,
   recoverProject,
   removeProjectSkills,
+  saveConfig,
   syncProject,
 } from './core.js';
+import { DEFAULT_WORKSPACE_SETTINGS } from './config/contracts.js';
 import {
   importMarkdownTask,
   inspectTask,
@@ -214,6 +216,9 @@ try {
       revision: { type: 'string' },
       mode: { type: 'string' },
       'verification-mode': { type: 'string' },
+      'worktree-root': { type: 'string' },
+      'workspace-choice': { type: 'string' },
+      execution: { type: 'string' },
       authorized: { type: 'boolean' },
       'authorization-scope': { type: 'string' },
       'authorization-reference': { type: 'string' },
@@ -339,6 +344,8 @@ try {
         'session',
         'host-local-authorized',
         'verification-mode',
+        'workspace-choice',
+        'worktree-root',
       ],
       spec: [
         'project',
@@ -373,7 +380,16 @@ try {
         'base',
       ],
       acceptance: ['project', 'task', 'file', 'host-local-authorized'],
-      workspace: ['project', 'task', 'branch', 'revision', 'mode', 'authorized'],
+      workspace: [
+        'project',
+        'task',
+        'branch',
+        'revision',
+        'mode',
+        'authorized',
+        'worktree-root',
+        'execution',
+      ],
       memory: [
         'project',
         'id',
@@ -658,6 +674,11 @@ try {
         print(values.task ? await inspectTask(root, values.task) : await listTasks(root));
       else if (action === 'start') {
         if (!values.provider) throw new Error('task start requires --provider.');
+        if (
+          values['workspace-choice'] !== undefined &&
+          !['worktree', 'direct'].includes(values['workspace-choice'])
+        )
+          throw new Error('--workspace-choice must be worktree or direct.');
         print(
           await createTaskController({ root }).start({
             taskId: requiredOption(values.task, 'task'),
@@ -666,6 +687,10 @@ try {
             expectedRevision,
             mutationId: values['mutation-id'],
             executionAuthorized: values['host-local-authorized'] === true,
+            ...(values['workspace-choice']
+              ? { workspaceChoice: values['workspace-choice'] as 'worktree' | 'direct' }
+              : {}),
+            ...(values['worktree-root'] ? { worktreeRoot: values['worktree-root'] } : {}),
           }),
         );
       } else if (action === 'resume' && (values.provider || values.session)) {
@@ -947,13 +972,20 @@ try {
     } else if (command === 'workspace') {
       if (
         extra.length !== 1 ||
-        !['inspect', 'create', 'cancel', 'cleanup'].includes(extra[0] ?? '')
+        !['inspect', 'create', 'cancel', 'cleanup', 'preference'].includes(extra[0] ?? '')
       ) {
-        throw new Error('Usage: latchkit workspace <inspect|create|cancel|cleanup> [options].');
+        throw new Error(
+          'Usage: latchkit workspace <inspect|create|cancel|cleanup|preference> [options].',
+        );
       }
       const action = extra[0];
       if (action === 'inspect')
-        print(await inspectWorkspaceCapability(root, { mode: values.mode }));
+        print(
+          await inspectWorkspaceCapability(root, {
+            mode: values.mode,
+            ...(values['worktree-root'] ? { worktreeRoot: values['worktree-root'] } : {}),
+          }),
+        );
       else if (action === 'create')
         print(
           await createTaskWorkspace(root, {
@@ -961,16 +993,44 @@ try {
             ...(values.branch ? { branch: values.branch } : {}),
             ...(values.revision ? { revision: values.revision } : {}),
             ...(values.mode ? { mode: values.mode } : {}),
+            ...(values['worktree-root'] ? { worktreeRoot: values['worktree-root'] } : {}),
           }),
         );
       else if (action === 'cancel') print(await cancelTaskWorkspace(root, { taskId: values.task }));
-      else
+      else if (action === 'cleanup')
         print(
           await cleanupTaskWorkspace(root, {
             taskId: requiredOption(values.task, 'task'),
             authorized: values.authorized,
           }),
         );
+      else if (values.execution === undefined && values['worktree-root'] === undefined) {
+        // Read-only: report the effective, defaulted project preference.
+        let workspace: unknown;
+        try {
+          workspace = (await readConfig(root)).workspace;
+        } catch {
+          workspace = undefined;
+        }
+        print(workspace ?? DEFAULT_WORKSPACE_SETTINGS);
+      } else {
+        if (
+          values.execution !== undefined &&
+          !['ask', 'always-worktree', 'direct'].includes(values.execution)
+        )
+          throw new Error('--execution must be ask, always-worktree, or direct.');
+        const existing = await readConfig(root);
+        const current = existing.workspace ?? DEFAULT_WORKSPACE_SETTINGS;
+        print(
+          await saveConfig(root, {
+            ...existing,
+            workspace: {
+              executionPreference: values.execution ?? current.executionPreference,
+              worktreeRoot: values['worktree-root'] ?? current.worktreeRoot,
+            },
+          }),
+        );
+      }
     } else if (command === 'memory') {
       if (
         !['inspect', 'search', 'add', 'update', 'delete', 'export', 'import', 'recover'].includes(

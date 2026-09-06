@@ -6,11 +6,12 @@ import { FccConsole } from './fcc.js';
 import { exportMemory, MemoryConsole } from './memory.js';
 import { ThemeToggle } from './theme.js';
 import { UsageConsole } from './usage.js';
-import type { ConsoleState } from './types.js';
+import type { ConsoleState, WorkspacePreference } from './types.js';
 import { AcceptanceEvidence, TaskList } from './workbench.js';
 import { WorkflowConsole } from './workflows.js';
 import { Button } from './components/ui/button.js';
 import { Card } from './components/ui/card.js';
+import { Input, Label, NativeSelect } from './components/ui/fields.js';
 
 const store = createConsoleStore();
 
@@ -79,6 +80,85 @@ function SkillGrid({ state }: { state: ConsoleState }) {
         })}
       </div>
     </fieldset>
+  );
+}
+
+const DEFAULT_WORKSPACE: WorkspacePreference = {
+  executionPreference: 'direct',
+  worktreeRoot: '.latchkit/worktrees',
+};
+const EXECUTION_PREFERENCES: {
+  value: WorkspacePreference['executionPreference'];
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: 'ask',
+    label: 'Ask every time',
+    description: 'Present the worktree/direct choice before each new task starts.',
+  },
+  {
+    value: 'always-worktree',
+    label: 'Always use a worktree',
+    description: 'Isolate every new task without asking again.',
+  },
+  {
+    value: 'direct',
+    label: 'Work directly in the project',
+    description: 'Never create a worktree for a new task.',
+  },
+];
+
+function WorkspacePreferenceCard() {
+  const snapshot = store.getSnapshot();
+  const workspace = { ...DEFAULT_WORKSPACE, ...snapshot.selection.workspace };
+  return (
+    <Card className="workspace-preference-card">
+      <span className="mini-label">TASK WORKSPACE</span>
+      <p className="section-note">
+        Applies to new tasks only. Starting a task remains CLI/API-only; changing this default never
+        moves an active or resumed task's workspace, and never weakens provider permissions.
+      </p>
+      <fieldset className="selection-group" disabled={snapshot.busy}>
+        <legend className="sr-only">Task execution preference</legend>
+        <Label>
+          Execution preference
+          <NativeSelect
+            value={workspace.executionPreference}
+            onChange={(event) =>
+              store.setWorkspace({
+                executionPreference: event.target
+                  .value as WorkspacePreference['executionPreference'],
+              })
+            }
+          >
+            {EXECUTION_PREFERENCES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </Label>
+        <p className="section-note">
+          {
+            EXECUTION_PREFERENCES.find((option) => option.value === workspace.executionPreference)
+              ?.description
+          }
+        </p>
+        <Label>
+          Worktree root
+          <Input
+            type="text"
+            value={workspace.worktreeRoot}
+            onChange={(event) => store.setWorkspace({ worktreeRoot: event.target.value })}
+          />
+        </Label>
+        <p className="section-note">
+          Project-relative with forward slashes, or an absolute path. Defaults to a Git-ignored
+          folder inside the project; it cannot be the project checkout or its Git directory.
+        </p>
+      </fieldset>
+    </Card>
   );
 }
 
@@ -347,6 +427,16 @@ function Console() {
             Skills guide the agent. They do not enforce hooks, permissions, or automatic quality
             gates.
           </p>
+        </section>
+        <section className="config-section" aria-labelledby="workspace-preference-heading">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">TASK EXECUTION</p>
+              <h2 id="workspace-preference-heading">Choose how new tasks run.</h2>
+              <p>Ask each time, always isolate in a worktree, or always work directly.</p>
+            </div>
+          </div>
+          <WorkspacePreferenceCard />
         </section>
         <section className="sync-section" aria-labelledby="sync-heading">
           <div className="section-heading">

@@ -54,6 +54,15 @@ async function sourceSnapshot(root) {
   };
 }
 
+/** These fixtures never run `latchkit init`, so nothing has arranged a
+ * `.gitignore` entry for the default in-project worktree root. Tests that
+ * assert an exact, unaffected source `git status` explicitly opt an external
+ * root instead — this is a scope choice for these specific isolation/snapshot
+ * assertions, not a claim that the default root is always ignored. */
+function externalWorktreeRoot(root) {
+  return path.join(path.dirname(root), 'external-worktrees');
+}
+
 async function taskId(root) {
   return (
     await createTask(root, {
@@ -78,8 +87,9 @@ test('two task-owned worktrees are isolated and source dirty state is untouched'
   const firstTask = await taskId(root);
   const secondTask = await taskId(root);
   const before = await sourceSnapshot(root);
-  const first = await createTaskWorkspace(root, { taskId: firstTask });
-  const second = await createTaskWorkspace(root, { taskId: secondTask });
+  const worktreeRoot = externalWorktreeRoot(root);
+  const first = await createTaskWorkspace(root, { taskId: firstTask, worktreeRoot });
+  const second = await createTaskWorkspace(root, { taskId: secondTask, worktreeRoot });
   assert.equal(first.created, true);
   assert.equal(second.created, true);
   assert.notEqual(first.path, second.path);
@@ -98,7 +108,10 @@ test('review worktree materializes the exact tracked and untracked source snapsh
   await fs.writeFile(path.join(root, 'untracked.txt'), 'new implementation file\n');
   const reviewTaskId = await taskId(root);
   const before = await git(root, ['status', '--porcelain=v1', '--untracked-files=all']);
-  const workspace = await createReviewWorkspace(root, { taskId: reviewTaskId });
+  const workspace = await createReviewWorkspace(root, {
+    taskId: reviewTaskId,
+    worktreeRoot: externalWorktreeRoot(root),
+  });
   assert.match(workspace.snapshotDigest, /^[a-f0-9]{64}$/);
   assert.equal(
     await fs.readFile(path.join(workspace.path, 'tracked.txt'), 'utf8'),
@@ -252,4 +265,161 @@ test('reconciles an interrupted registry write only when deterministic Git owner
     createTaskWorkspace(root, { taskId: workspace.taskId }),
     (error) => error.code === 'WORKSPACE_PATH_OCCUPIED',
   );
+});
+
+test('the default worktree root resolves inside the project, and its effective location is visible before creation', async (t) => {
+  const root = await fixture(t);
+  const inspected = await inspectWorkspaceCapability(root);
+  assert.equal(inspected.workspaceRoot, path.join(root, '.latchkit', 'worktrees'));
+  const workspace = await createTaskWorkspace(root, { taskId: await taskId(root) });
+  assert.equal(workspace.path, path.join(root, '.latchkit', 'worktrees', workspace.taskId));
+});
+
+test('a persisted project worktree-root setting is honored without an explicit override', async (t) => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, '.latchkit'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, '.latchkit', 'config.json'),
+    JSON.stringify({
+      workspace: { executionPreference: 'direct', worktreeRoot: 'custom/nested-root' },
+    }),
+  );
+  const inspected = await inspectWorkspaceCapability(root);
+  assert.equal(inspected.workspaceRoot, path.join(root, 'custom', 'nested-root'));
+  const workspace = await createTaskWorkspace(root, { taskId: await taskId(root) });
+  assert.equal(workspace.path, path.join(root, 'custom', 'nested-root', workspace.taskId));
+});
+
+test('an explicit per-call worktree-root override wins over the persisted project setting', async (t) => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, '.latchkit'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, '.latchkit', 'config.json'),
+    JSON.stringify({
+      workspace: { executionPreference: 'direct', worktreeRoot: 'configured-root' },
+    }),
+  );
+  const override = path.join(path.dirname(root), 'override-root');
+  const inspected = await inspectWorkspaceCapability(root, { worktreeRoot: override });
+  assert.equal(inspected.workspaceRoot, override);
+});
+
+test('an absolute worktree root is honored verbatim', async (t) => {
+  const root = await fixture(t);
+  const absolute = path.join(path.dirname(root), 'external absolute root é');
+  const inspected = await inspectWorkspaceCapability(root, { worktreeRoot: absolute });
+  assert.equal(inspected.workspaceRoot, absolute);
+});
+
+test('an invalid worktree root is refused before any worktree is created', async (t) => {
+  const root = await fixture(t);
+  await assert.rejects(
+    inspectWorkspaceCapability(root, { worktreeRoot: root }),
+    (error) => error instanceof WorkspaceError && error.code === 'WORKSPACE_ROOT_INVALID',
+  );
+  await assert.rejects(
+    inspectWorkspaceCapability(root, { worktreeRoot: path.dirname(root) }),
+    (error) => error instanceof WorkspaceError && error.code === 'WORKSPACE_ROOT_INVALID',
+  );
+  const common = await git(root, ['rev-parse', '--git-common-dir']);
+  await assert.rejects(
+    inspectWorkspaceCapability(root, { worktreeRoot: path.resolve(root, common) }),
+    (error) => error instanceof WorkspaceError && error.code === 'WORKSPACE_ROOT_INVALID',
+  );
+  await assert.rejects(
+    inspectWorkspaceCapability(root, { worktreeRoot: '../escaping' }),
+    (error) => error instanceof WorkspaceError && error.code === 'WORKSPACE_ROOT_INVALID',
+  );
+});
+
+test('a project-relative default resolves against the stable main checkout, never a linked worktree', async (t) => {
+  const root = await fixture(t);
+  const first = await createTaskWorkspace(root, {
+    taskId: await taskId(root),
+    worktreeRoot: path.join(path.dirname(root), 'external-worktrees'),
+  });
+  // Inspecting from inside the linked worktree must still resolve the
+  // project-relative default against the original project, not nest a new
+  // worktree root inside this worktree.
+  const insideWorktree = await inspectWorkspaceCapability(first.path);
+  assert.equal(insideWorktree.workspaceRoot, path.join(root, '.latchkit', 'worktrees'));
+  assert.notEqual(insideWorktree.workspaceRoot, path.join(first.path, '.latchkit', 'worktrees'));
+});
+
+test('registry entries recorded at the legacy sibling location remain resumable after the default moves in-project', async (t) => {
+  const root = await fixture(t);
+  const task = await taskId(root);
+  const commonRelative = await git(root, ['rev-parse', '--git-common-dir']);
+  const commonDir = path.resolve(root, commonRelative);
+  const legacyRoot = path.join(path.dirname(root), '.legacy-latchkit-worktrees');
+  const branch = `latchkit/task/${task.slice('task_'.length)}`;
+  const target = path.join(legacyRoot, task);
+  await fs.mkdir(legacyRoot, { recursive: true });
+  const head = await git(root, ['rev-parse', 'HEAD']);
+  await git(root, ['worktree', 'add', '-b', branch, target, head]);
+  const registryPath = path.join(commonDir, 'latchkit', 'workspaces-v1.json');
+  await fs.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.writeFile(
+    registryPath,
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        workspaces: [
+          {
+            taskId: task,
+            repositoryCommonDir: commonDir,
+            sourceRoot: root,
+            workspaceRoot: legacyRoot,
+            path: target,
+            branch,
+            baseRevision: head,
+            state: 'active',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  // The current default resolves inside the project, yet the legacy record
+  // is unaffected: it still resolves, reconciles, and cancels correctly.
+  const reconciled = await createTaskWorkspace(root, { taskId: task });
+  assert.equal(reconciled.path, target);
+  assert.equal(reconciled.reconciled, true);
+  const cancelled = await cancelTaskWorkspace(root, { taskId: task });
+  assert.equal(cancelled.path, target);
+  assert.equal(cancelled.state, 'cancelled');
+});
+
+test('CLI workspace preference reports and persists the execution preference and worktree root', async (t) => {
+  const root = await fixture(t);
+  const cli = path.resolve('dist', 'src', 'cli.js');
+  const runCli = async (args) => {
+    const { stdout } = await execFileAsync(process.execPath, [cli, ...args, '--project', root], {
+      windowsHide: true,
+    });
+    return JSON.parse(stdout);
+  };
+  assert.deepEqual(await runCli(['workspace', 'preference']), {
+    executionPreference: 'direct',
+    worktreeRoot: '.latchkit/worktrees',
+  });
+  await execFileAsync(process.execPath, [cli, 'init', '--project', root], { windowsHide: true });
+  const set = await runCli([
+    'workspace',
+    'preference',
+    '--execution',
+    'always-worktree',
+    '--worktree-root',
+    'custom/worktrees',
+  ]);
+  assert.equal(set.workspace.executionPreference, 'always-worktree');
+  assert.equal(set.workspace.worktreeRoot, 'custom/worktrees');
+  assert.deepEqual(await runCli(['workspace', 'preference']), {
+    executionPreference: 'always-worktree',
+    worktreeRoot: 'custom/worktrees',
+  });
+  const inspected = await runCli(['workspace', 'inspect']);
+  assert.equal(inspected.workspaceRoot, path.join(root, 'custom', 'worktrees'));
 });

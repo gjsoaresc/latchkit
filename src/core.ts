@@ -10,6 +10,7 @@ import { PROVIDERS } from './providers/registry.js';
 import {
   CURRENT_CONFIG_SCHEMA_VERSION,
   SUPPORTED_CONFIG_SCHEMA_VERSIONS,
+  DEFAULT_WORKTREE_ROOT,
   ConfigContractError,
   parseConfig,
   validateConfig as validateConfigContract,
@@ -18,6 +19,7 @@ import {
   type LatchkitManifest,
   type PackSelection,
 } from './config/contracts.js';
+import { ensureProjectPathIgnored } from './workspaces/ignore.js';
 import { buildMigration, executeMigration, normalizeMigrationTarget } from './config/migrations.js';
 import { readOptional, resolveProjectRoot, statIfExists, writeAtomic } from './storage.js';
 import { inspectProjectLock, removeProvenStaleLock, withProjectLock } from './installer/lock.js';
@@ -185,6 +187,12 @@ export async function readConfigSnapshot(
 export async function initProject(root: Root, options: InitOptions = {}): Promise<LatchkitConfig> {
   root = await projectRoot(root);
   return withLock(root, async () => {
+    // The documented default worktree root applies whether or not a
+    // `workspace` setting is ever explicitly persisted, so it is kept out of
+    // Git status/staging from project setup on, idempotently, even for an
+    // already-initialized project. This is an explicit configuration-time
+    // action; worktree creation itself never touches the source checkout.
+    await ensureProjectPathIgnored(root, path.join(root, ...DEFAULT_WORKTREE_ROOT.split('/')));
     const raw = await readOptional(root, configPath);
     if (raw !== null) return parseProjectConfig(raw);
     const config = validateConfig({
@@ -201,10 +209,26 @@ export async function initProject(root: Root, options: InitOptions = {}): Promis
   });
 }
 
+/** An explicit configuration save, not worktree creation, so keeping an
+ * in-project worktree root out of Git status here does not violate the
+ * guarantee that creating a worktree never touches the source checkout. */
+async function ensureConfiguredWorktreeRootIgnored(
+  root: Root,
+  config: LatchkitConfig,
+): Promise<void> {
+  const worktreeRoot = config.workspace?.worktreeRoot;
+  if (!worktreeRoot) return;
+  await ensureProjectPathIgnored(
+    root,
+    path.isAbsolute(worktreeRoot) ? worktreeRoot : path.resolve(root, ...worktreeRoot.split('/')),
+  );
+}
+
 export async function saveConfig(root: Root, config: unknown): Promise<LatchkitConfig> {
   root = await projectRoot(root);
   const validated = validateConfig(config);
   return withLock(root, async () => {
+    await ensureConfiguredWorktreeRootIgnored(root, validated);
     await writeAtomic(root, configPath, `${JSON.stringify(validated, null, 2)}\n`);
     return validated;
   });
@@ -228,6 +252,7 @@ export async function saveConfigIfRevision(
         { code: 'CONFIG_REVISION_CONFLICT', revision: currentRevision },
       );
     }
+    await ensureConfiguredWorktreeRootIgnored(root, validated);
     const next = `${JSON.stringify(validated, null, 2)}\n`;
     await writeAtomic(root, configPath, next);
     return { config: validated, revision: configRevision(next) };

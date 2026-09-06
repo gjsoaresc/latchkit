@@ -278,3 +278,115 @@ test('malformed JSON is rejected before migration with a field-aware error', asy
   });
   await assert.rejects(planConfigMigration(root), { code: 'CONFIG_INVALID_JSON' });
 });
+
+test('the optional workspace setting validates on every supported schema version and stays absent by default', async () => {
+  const v1 = JSON.parse(await fs.readFile(path.join(fixtures, 'config-v1.json'), 'utf8'));
+  assert.equal(validateConfig(v1).workspace, undefined);
+  const withWorkspace = {
+    ...v1,
+    workspace: { executionPreference: 'ask', worktreeRoot: '.latchkit/worktrees' },
+  };
+  assert.deepEqual(validateConfig(withWorkspace).workspace, withWorkspace.workspace);
+  const v2 = JSON.parse(await fs.readFile(path.join(fixtures, 'config-v2.json'), 'utf8'));
+  assert.deepEqual(
+    validateConfig({
+      ...v2,
+      workspace: { executionPreference: 'always-worktree', worktreeRoot: 'custom/root' },
+    }).workspace,
+    { executionPreference: 'always-worktree', worktreeRoot: 'custom/root' },
+  );
+});
+
+test('workspace setting rejects an unknown execution preference, unsafe root, and missing fields', () => {
+  const base = { schemaVersion: 1, providers: [], skills: [] };
+  const cases = [
+    [
+      { ...base, workspace: { executionPreference: 'always', worktreeRoot: 'x' } },
+      '$.workspace.executionPreference',
+    ],
+    [{ ...base, workspace: { executionPreference: 'ask' } }, '$.workspace.worktreeRoot'],
+    [
+      { ...base, workspace: { executionPreference: 'ask', worktreeRoot: '' } },
+      '$.workspace.worktreeRoot',
+    ],
+    [
+      { ...base, workspace: { executionPreference: 'ask', worktreeRoot: '../outside' } },
+      '$.workspace.worktreeRoot',
+    ],
+    [
+      { ...base, workspace: { executionPreference: 'ask', worktreeRoot: 'a\\b' } },
+      '$.workspace.worktreeRoot',
+    ],
+    [
+      { ...base, workspace: { executionPreference: 'ask', worktreeRoot: 'a/CON/b' } },
+      '$.workspace.worktreeRoot',
+    ],
+    [
+      {
+        ...base,
+        workspace: { executionPreference: 'ask', worktreeRoot: 'C:\\Users\\me\\..\\other' },
+      },
+      '$.workspace.worktreeRoot',
+    ],
+    [
+      { ...base, workspace: { executionPreference: 'ask', worktreeRoot: 'ok', extra: true } },
+      '$.workspace.extra',
+    ],
+  ];
+  for (const [config, expectedPath] of cases) {
+    assert.throws(
+      () => validateConfig(config),
+      (error) => {
+        assert.equal(error.code, 'CONFIG_INVALID');
+        assert.equal(error.path, expectedPath);
+        return true;
+      },
+    );
+  }
+});
+
+test('workspace setting accepts an absolute native root and rejects a relative Windows-reserved segment', () => {
+  const config = {
+    schemaVersion: 1,
+    providers: [],
+    skills: [],
+    workspace: {
+      executionPreference: 'direct',
+      worktreeRoot: 'C:\\Users\\me\\worktrees',
+    },
+  };
+  assert.deepEqual(validateConfig(config).workspace, config.workspace);
+});
+
+test('saving a workspace setting round-trips through readConfig without disturbing other fields', async (t) => {
+  const root = await temporaryProject(t);
+  const created = await initProject(root, { providers: ['codex'], skills: ['spec'] });
+  assert.equal(created.workspace, undefined);
+  const saved = await saveConfig(root, {
+    ...created,
+    workspace: { executionPreference: 'always-worktree', worktreeRoot: '.latchkit/worktrees' },
+  });
+  assert.deepEqual(saved.workspace, {
+    executionPreference: 'always-worktree',
+    worktreeRoot: '.latchkit/worktrees',
+  });
+  assert.deepEqual((await readConfig(root)).workspace, saved.workspace);
+  assert.deepEqual((await readConfig(root)).providers, created.providers);
+});
+
+test('init and a later matching worktree-root save keep exactly one owned .gitignore exclusion', async (t) => {
+  const root = await temporaryProject(t);
+  await fs.writeFile(path.join(root, '.gitignore'), 'node_modules/\n');
+  const created = await initProject(root, { providers: ['codex'], skills: ['spec'] });
+  const afterInit = await fs.readFile(path.join(root, '.gitignore'), 'utf8');
+  assert.equal(afterInit, 'node_modules/\n.latchkit/worktrees/\n');
+  await saveConfig(root, {
+    ...created,
+    workspace: { executionPreference: 'direct', worktreeRoot: '.latchkit/worktrees' },
+  });
+  assert.equal(
+    await fs.readFile(path.join(root, '.gitignore'), 'utf8'),
+    'node_modules/\n.latchkit/worktrees/\n',
+    'saving the same configured root must not duplicate the exclusion line',
+  );
+});

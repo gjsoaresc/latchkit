@@ -1,6 +1,11 @@
+export interface WorkspacePreference {
+  executionPreference: 'ask' | 'always-worktree' | 'direct';
+  worktreeRoot: string;
+}
 export interface Selection {
   providers: string[];
   skills: string[];
+  workspace?: WorkspacePreference;
   [key: string]: unknown;
 }
 export interface ConsoleState {

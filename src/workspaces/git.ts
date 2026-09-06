@@ -7,11 +7,18 @@ import { readOptional, writeAtomic } from '../storage.js';
 import { validateStableId } from '../task-state/contracts.js';
 import { inspectTask } from '../task-state/service.js';
 import { errorCode, errorMessage, isRecord } from '../types.js';
+import {
+  ConfigContractError,
+  DEFAULT_WORKTREE_ROOT,
+  validateWorktreeRoot,
+} from '../config/contracts.js';
 
 const execFileAsync = promisify(execFile);
 /** Relative to Git's common directory, never the user's checkout. */
 export const WORKSPACE_REGISTRY_PATH = 'latchkit/workspaces-v1.json';
 export const WORKSPACE_SCHEMA_VERSION = 1;
+/** Relative to the stable main project checkout. */
+const PROJECT_CONFIG_PATH = '.latchkit/config.json';
 
 type WorkspaceRecord = {
   taskId: string;
@@ -34,8 +41,14 @@ type Repository =
       commonDir: string;
       workspaceRoot: string;
     };
-type CapabilityOptions = { mode?: unknown };
-type WorkspaceInput = { taskId?: unknown; mode?: unknown; revision?: unknown; branch?: unknown };
+type CapabilityOptions = { mode?: unknown; worktreeRoot?: unknown };
+type WorkspaceInput = {
+  taskId?: unknown;
+  mode?: unknown;
+  revision?: unknown;
+  branch?: unknown;
+  worktreeRoot?: unknown;
+};
 type CleanupInput = { taskId?: unknown; authorized?: unknown };
 
 export class WorkspaceError extends Error {
@@ -80,10 +93,6 @@ async function gitRaw(root: string, args: string[]): Promise<string> {
     const stderr = isRecord(error) && typeof error.stderr === 'string' ? error.stderr.trim() : '';
     throw new WorkspaceError(stderr || errorMessage(error), 'GIT_COMMAND_FAILED');
   }
-}
-
-function digest(value: string): string {
-  return createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
 function canonicalPath(value: string): string {
@@ -301,9 +310,92 @@ async function writeRegistry(root: string, registry: WorkspaceRegistry): Promise
   await writeAtomic(root, WORKSPACE_REGISTRY_PATH, `${JSON.stringify(registry, null, 2)}\n`);
 }
 
+/** The main checkout's absolute path, resolved via Git's own worktree listing
+ * (its first entry is always the main worktree) rather than the current
+ * working directory. This gives a stable project identity: running a
+ * workspace operation from inside a linked worktree still resolves a
+ * project-relative worktree root against the original project, so it can
+ * never nest a worktree root inside another worktree. */
+async function mainCheckoutRoot(sourceRoot: string): Promise<string> {
+  const output = await gitRaw(sourceRoot, ['worktree', 'list', '--porcelain']);
+  const match = /^worktree (.+)$/m.exec(output);
+  if (!match?.[1]) return sourceRoot;
+  try {
+    return await realpath(match[1]);
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return sourceRoot;
+    throw error;
+  }
+}
+
+/** Reads the project's persisted worktree-root setting without requiring an
+ * initialized Latchkit project. A missing, unreadable, or malformed
+ * configuration never blocks workspace creation; the documented default
+ * still applies, and full shape validation still runs on the returned value. */
+async function readConfiguredWorktreeRoot(mainRoot: string): Promise<string | undefined> {
+  const raw = await readOptional(mainRoot, PROJECT_CONFIG_PATH);
+  if (raw === null) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      isRecord(parsed) &&
+      isRecord(parsed.workspace) &&
+      typeof parsed.workspace.worktreeRoot === 'string'
+    )
+      return parsed.workspace.worktreeRoot;
+  } catch {
+    // A malformed project configuration never blocks workspace creation.
+  }
+  return undefined;
+}
+
+/** Resolves and validates the effective worktree root: shape-validates the
+ * configured or overridden path, resolves a project-relative path against the
+ * stable main checkout (never the caller's cwd), and refuses a root that is,
+ * contains, or sits inside the project checkout or its Git directory. */
+function resolveWorktreeRootPath(
+  rawRoot: unknown,
+  { mainRoot, sourceRoot, commonDir }: { mainRoot: string; sourceRoot: string; commonDir: string },
+): string {
+  let validated: string;
+  try {
+    validated = validateWorktreeRoot(rawRoot);
+  } catch (error) {
+    if (error instanceof ConfigContractError)
+      throw new WorkspaceError(error.message, 'WORKSPACE_ROOT_INVALID');
+    throw error;
+  }
+  const isAbsolute = path.win32.isAbsolute(validated) || path.posix.isAbsolute(validated);
+  const resolved = isAbsolute
+    ? path.resolve(validated)
+    : path.resolve(mainRoot, ...validated.split('/'));
+  for (const guard of new Set([mainRoot, sourceRoot])) {
+    if (canonicalPath(resolved) === canonicalPath(guard))
+      throw new WorkspaceError(
+        'Worktree root must not be the project checkout itself.',
+        'WORKSPACE_ROOT_INVALID',
+      );
+    if (isContained(resolved, guard))
+      throw new WorkspaceError(
+        'Worktree root must not contain the project checkout.',
+        'WORKSPACE_ROOT_INVALID',
+      );
+  }
+  if (
+    canonicalPath(resolved) === canonicalPath(commonDir) ||
+    isContained(resolved, commonDir) ||
+    isContained(commonDir, resolved)
+  )
+    throw new WorkspaceError(
+      'Worktree root must not overlap the Git directory.',
+      'WORKSPACE_ROOT_INVALID',
+    );
+  return resolved;
+}
+
 async function repository(
   root: string,
-  { mode = 'isolated' }: CapabilityOptions = {},
+  { mode = 'isolated', worktreeRoot }: CapabilityOptions = {},
 ): Promise<Repository> {
   if (mode !== 'isolated' && mode !== 'direct')
     throw new WorkspaceError(
@@ -328,13 +420,16 @@ async function repository(
       workspaceRoot: sourceRoot,
     };
   }
-  const rootName = `latchkit-worktrees-${digest(canonicalPath(commonDir))}`;
+  const mainRoot = await mainCheckoutRoot(sourceRoot);
+  const configuredRoot =
+    worktreeRoot === undefined ? await readConfiguredWorktreeRoot(mainRoot) : undefined;
+  const rawRoot = worktreeRoot ?? configuredRoot ?? DEFAULT_WORKTREE_ROOT;
   return {
     capability: 'available',
     mode: 'isolated',
     sourceRoot,
     commonDir,
-    workspaceRoot: path.join(path.dirname(sourceRoot), `.${rootName}`),
+    workspaceRoot: resolveWorktreeRootPath(rawRoot, { mainRoot, sourceRoot, commonDir }),
   };
 }
 
@@ -416,7 +511,10 @@ export async function createTaskWorkspace(root: string, input: WorkspaceInput = 
   const projectRoot = await realpath(path.resolve(root));
   const taskId = validateStableId(input.taskId, 'task', '$.taskId');
   await requireRecordedTask(projectRoot, taskId);
-  const info = await repository(projectRoot, { mode: input.mode ?? 'isolated' });
+  const info = await repository(projectRoot, {
+    mode: input.mode ?? 'isolated',
+    worktreeRoot: input.worktreeRoot,
+  });
   if (info.capability !== 'available') return info;
   if (info.mode === 'direct') {
     return { ...info, taskId, created: false, reason: 'direct-workspace-mode' };
