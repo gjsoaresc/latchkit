@@ -23,6 +23,7 @@ export type ContractVersion = {
 };
 export type ContractAssociation = {
   id: string;
+  revision: number;
   producerTaskId: string;
   consumerTaskId: string;
   producerRecordId: string;
@@ -143,6 +144,7 @@ export async function createContractAssociation(
     const now = new Date().toISOString();
     const association: ContractAssociation = {
       id: `contract_${randomUUID()}`,
+      revision: 1,
       producerTaskId: input.producerTaskId,
       consumerTaskId: input.consumerTaskId,
       producerRecordId: input.producerRecordId,
@@ -176,6 +178,7 @@ export async function proposeContractRevision(
   root: string,
   input: {
     associationId: string;
+    expectedAssociationRevision: number;
     expectedProducerRevision: number;
     provenance: string;
     accept?: boolean;
@@ -192,6 +195,12 @@ export async function proposeContractRevision(
         'TASK_NOT_FOUND',
         '$.associationId',
       );
+    if (a.revision !== input.expectedAssociationRevision)
+      throw new TaskStateError(
+        'Contract association revision changed.',
+        'TASK_REVISION_CONFLICT',
+        '$.expectedAssociationRevision',
+      );
     if (task(state, a.producerTaskId).revision !== input.expectedProducerRevision)
       throw new TaskStateError(
         'Producer revision changed.',
@@ -204,6 +213,7 @@ export async function proposeContractRevision(
     // recorded separately by the consumer before a new dispatch is permitted.
     if (current.digest === digest && current.status === 'pending' && input.accept !== false) {
       current.status = 'accepted';
+      a.revision += 1;
       a.reconciliation = 'pending';
       a.updatedAt = new Date().toISOString();
       await write(root, document);
@@ -211,6 +221,7 @@ export async function proposeContractRevision(
     }
     if (current.digest === digest && input.accept !== false) return structuredClone(a);
     current.status = 'superseded';
+    a.revision += 1;
     const now = new Date().toISOString();
     a.versions.push({
       revision: current.revision + 1,
@@ -242,7 +253,12 @@ export async function proposeContractRevision(
  * It never changes a task, approves a result, or establishes that the consumer is correct. */
 export async function acknowledgeContractReceipt(
   root: string,
-  input: { associationId: string; expectedConsumerRevision: number; contractDigest: string },
+  input: {
+    associationId: string;
+    expectedAssociationRevision: number;
+    expectedConsumerRevision: number;
+    contractDigest: string;
+  },
 ) {
   root = await resolveProjectRoot(root);
   return withTaskStateLock(root, async () => {
@@ -254,6 +270,12 @@ export async function acknowledgeContractReceipt(
         'Contract association was not found.',
         'TASK_NOT_FOUND',
         '$.associationId',
+      );
+    if (association.revision !== input.expectedAssociationRevision)
+      throw new TaskStateError(
+        'Contract association revision changed.',
+        'TASK_REVISION_CONFLICT',
+        '$.expectedAssociationRevision',
       );
     const consumer = task(state, association.consumerTaskId);
     if (consumer.revision !== input.expectedConsumerRevision)
@@ -270,6 +292,7 @@ export async function acknowledgeContractReceipt(
         '$.contractDigest',
       );
     association.consumerAcknowledgedDigest = version.digest;
+    association.revision += 1;
     association.consumerAcknowledgedRevision = consumer.revision;
     association.reconciliation = version.status === 'accepted' ? 'current' : 'pending';
     association.updatedAt = new Date().toISOString();

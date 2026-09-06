@@ -1477,6 +1477,7 @@ try {
         print(
           await proposeContractRevision(root, {
             associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedAssociationRevision: Number(requiredOption(values.revision, 'revision')),
             expectedProducerRevision: producerRevision,
             provenance: requiredOption(values.reference, 'reference'),
             ...(values.status === 'pending' ? { accept: false } : {}),
@@ -1491,6 +1492,7 @@ try {
         print(
           await acknowledgeContractReceipt(root, {
             associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedAssociationRevision: Number(requiredOption(values.revision, 'revision')),
             expectedConsumerRevision: consumerRevision,
             contractDigest: requiredOption(values['contract-digest'], 'contract-digest'),
           }),

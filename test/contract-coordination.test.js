@@ -62,6 +62,7 @@ test('explicit association retains accepted history and identifies an old consum
   assert.equal(association.versions[0].status, 'accepted');
   const pending = await proposeContractRevision(root, {
     associationId: association.id,
+    expectedAssociationRevision: association.revision,
     expectedProducerRevision: p.task.revision,
     provenance: 'proposed breaking field',
     accept: false,
@@ -80,12 +81,14 @@ test('explicit association retains accepted history and identifies an old consum
   );
   const accepted = await proposeContractRevision(root, {
     associationId: association.id,
+    expectedAssociationRevision: pending.revision,
     expectedProducerRevision: p.task.revision,
     provenance: 'coordinator accepts the proposal',
   });
   assert.equal(accepted.versions.at(-1).status, 'accepted');
   const receipt = await acknowledgeContractReceipt(root, {
     associationId: association.id,
+    expectedAssociationRevision: accepted.revision,
     expectedConsumerRevision: c.task.revision,
     contractDigest: accepted.versions.at(-1).digest,
   });
