@@ -194,7 +194,16 @@ async function acquireLock(target) {
       return { handle, lock };
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      const stat = await fs.promises.lstat(lock);
+      let stat;
+      try {
+        stat = await fs.promises.lstat(lock);
+      } catch (statError) {
+        // The prior owner can release the lock between the failed exclusive
+        // open and this inspection. That is normal contention, so retry the
+        // exclusive create instead of failing the hook invocation.
+        if (statError.code === 'ENOENT') continue;
+        throw statError;
+      }
       if (stat.isSymbolicLink() || !stat.isFile())
         throw new Error('Cursor hook evidence lock is not a regular file.', { cause: error });
       if (Date.now() - stat.mtimeMs > 30_000) {
