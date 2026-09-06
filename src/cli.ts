@@ -143,6 +143,7 @@ import {
   inspectCodegraph,
   readCodegraphSettings,
   saveCodegraphSettings,
+  syncCodegraph,
 } from './integrations/codegraph/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
@@ -2135,12 +2136,13 @@ try {
       if (
         extra.length !== 1 ||
         !action ||
-        !['inspect', 'enable', 'disable', 'explore'].includes(action)
+        !['inspect', 'enable', 'disable', 'sync', 'explore'].includes(action)
       )
         throw new Error(
-          'Usage: latchkit codegraph <inspect|enable|disable|explore> [--query <text>].',
+          'Usage: latchkit codegraph <inspect|enable|disable|sync|explore> [--query <text>].',
         );
       if (action === 'inspect') print(await inspectCodegraph(root));
+      else if (action === 'sync') print(await syncCodegraph(root));
       else if (action === 'explore')
         print(await exploreCodegraph(root, requiredOption(values.query, 'query')));
       else {

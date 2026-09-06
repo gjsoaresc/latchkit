@@ -1,10 +1,10 @@
 /** Optional adapter for colbymchenry/codegraph.  It never installs or configures CodeGraph. */
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { access, lstat, readdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { readOptional, writeAtomic } from '../../storage.js';
+import { readOptional, safePath, writeAtomic } from '../../storage.js';
 
 const run = promisify(execFile);
 const CONFIG = '.latchkit/codegraph-v1.json';
@@ -26,7 +26,7 @@ export interface CodegraphSettings {
 const defaults = (): CodegraphSettings => ({
   schemaVersion: 1,
   enabled: false,
-  exclusions: ['.git/**', '.codegraph/**', 'node_modules/**'],
+  exclusions: ['.git/**', '.codegraph/**', '.latchkit/**', 'node_modules/**'],
 });
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 function validExclusion(value: unknown): value is string {
@@ -62,14 +62,8 @@ export async function saveCodegraphSettings(
   await writeAtomic(root, CONFIG, `${JSON.stringify(settings, null, 2)}\n`);
   return settings;
 }
-async function exists(target: string): Promise<boolean> {
-  try {
-    await access(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const MAX_FILES = 2_000;
+const MAX_BYTES = 32 * 1024 * 1024;
 async function executableCapability(): Promise<{
   status: 'ready' | 'missing' | 'unsupported';
   version?: string;
@@ -90,6 +84,8 @@ async function executableCapability(): Promise<{
 }
 async function sourceFingerprint(root: string, exclusions: readonly string[]): Promise<string> {
   const rows: string[] = [];
+  let files = 0;
+  let bytes = 0;
   async function walk(directory: string): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const rel = path.relative(root, path.join(directory, entry.name)).split(path.sep).join('/');
@@ -103,34 +99,79 @@ async function sourceFingerprint(root: string, exclusions: readonly string[]): P
       if (entry.isDirectory()) await walk(path.join(directory, entry.name));
       else if (entry.isFile()) {
         const stat = await lstat(path.join(directory, entry.name));
-        rows.push(`${rel}:${stat.size}:${stat.mtimeMs}`);
+        if (++files > MAX_FILES || (bytes += stat.size) > MAX_BYTES)
+          throw new Error('CodeGraph freshness scan exceeds 2,000 files or 32 MiB.');
+        rows.push(
+          `${rel}:${digest((await readFile(path.join(directory, entry.name))).toString('base64'))}`,
+        );
       }
     }
   }
   await walk(root);
   return digest(rows.sort().join('\n'));
 }
+async function indexState(root: string): Promise<'present' | 'missing' | 'unsafe'> {
+  try {
+    const stat = await lstat(await safePath(root, '.codegraph/codegraph.db'));
+    return stat.isFile() && !stat.isSymbolicLink() ? 'present' : 'unsafe';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe';
+  }
+}
 export async function inspectCodegraph(root: string): Promise<Record<string, unknown>> {
   const project = await realpath(root);
   const settings = await readCodegraphSettings(project);
   const executable = await executableCapability();
-  const index = path.join(project, '.codegraph', 'codegraph.db');
-  const indexed = await exists(index);
+  const index = await indexState(project);
   const fingerprint = await sourceFingerprint(project, settings.exclusions);
-  const marker = path.join(project, '.codegraph', 'latchkit-source.sha256');
-  const previous = indexed ? await readFile(marker, 'utf8').catch(() => null) : null;
+  const previous =
+    index === 'present'
+      ? await readOptional(project, '.codegraph/latchkit-source.sha256').catch(() => null)
+      : null;
   return {
     contract: CODEGRAPH_CONTRACT,
     project,
     enabled: settings.enabled,
     exclusions: settings.exclusions,
     executable,
-    index: indexed ? 'present' : 'missing',
-    freshness: !indexed ? 'missing' : previous?.trim() === fingerprint ? 'current' : 'stale',
+    index,
+    freshness: index !== 'present' ? index : previous?.trim() === fingerprint ? 'current' : 'stale',
     sourceFingerprint: fingerprint,
     fallback:
       'ordinary bounded source search remains required when CodeGraph is disabled, missing, stale, or fails; graph output is advisory only.',
   };
+}
+export async function syncCodegraph(root: string): Promise<Record<string, unknown>> {
+  const before = await inspectCodegraph(root);
+  if (!before.enabled || (before.executable as { status?: string }).status !== 'ready')
+    return { ...before, result: 'fallback', reason: 'CodeGraph is not enabled and supported.' };
+  try {
+    await run('codegraph', ['sync'], {
+      cwd: before.project as string,
+      timeout: 30_000,
+      maxBuffer: MAX_OUTPUT,
+      windowsHide: true,
+    });
+    const after = await inspectCodegraph(root);
+    if (after.index !== 'present')
+      return {
+        ...after,
+        result: 'fallback',
+        reason: 'CodeGraph sync did not create a safe local index.',
+      };
+    await writeAtomic(
+      after.project as string,
+      '.codegraph/latchkit-source.sha256',
+      `${after.sourceFingerprint as string}\n`,
+    );
+    return { ...(await inspectCodegraph(root)), result: 'synced' };
+  } catch (error) {
+    return {
+      ...before,
+      result: 'fallback',
+      reason: `CodeGraph sync failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
 }
 export async function exploreCodegraph(
   root: string,
