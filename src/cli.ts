@@ -620,6 +620,7 @@ try {
         'onboarding',
         'projects',
         'spec-import',
+        'codegraph',
         'update',
       ].includes(command) &&
       extra.length
