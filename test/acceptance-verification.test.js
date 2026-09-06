@@ -8,6 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { createAcceptanceVerifier } from '../src/acceptance/service.js';
 import { validateAcceptanceDocument } from '../src/acceptance/contracts.js';
+import { runProviderProcess } from '../src/runtime/process-runner.js';
 import { createTask, resumeTask } from '../src/task-state/service.js';
 
 const fixtureApp = path.resolve('test/fixtures/acceptance/fixture-app.js');
@@ -150,10 +151,22 @@ test('timeout, missing runtime, cancellation, and port conflict remain distinct 
   await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
   t.after(() => blocker.close());
   const occupied = blocker.address().port;
-  const verifier = createAcceptanceVerifier({ root });
+  let markProcessStarted;
+  const processStarted = new Promise((resolve) => {
+    markProcessStarted = resolve;
+  });
+  const verifier = createAcceptanceVerifier({
+    root,
+    launch: (options) =>
+      runProviderProcess({
+        ...options,
+        onEvent(event) {
+          if (event.type === 'process-start') markProcessStarted();
+        },
+      }),
+  });
   const controller = new AbortController();
-  const delayedAbort = setTimeout(() => controller.abort(), 100);
-  const cancelled = await verifier.verify({
+  const cancellation = verifier.verify({
     taskId: task.id,
     executionAuthorized: true,
     signal: controller.signal,
@@ -168,7 +181,9 @@ test('timeout, missing runtime, cancellation, and port conflict remain distinct 
       },
     ]),
   });
-  clearTimeout(delayedAbort);
+  await processStarted;
+  controller.abort();
+  const cancelled = await cancellation;
   assert.equal(cancelled.results[0].status, 'cancelled');
 
   const outcomes = await verifier.verify({

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "kind": "cursor-ide-event-qualification",
+  "candidate": {
+    "commit": "783567be209d09202dd26570cb03cba644c153ae",
+    "package": "latchkit@1.0.0-rc.1",
+    "archiveSha256": "16ed09a0b6d5d4b59975ae68616b6f51bf30dece61e188cdc3b83be5d8b47fb4"
+  },
+  "testedAt": "2026-09-06T02:30:20.610Z",
+  "runtime": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "cursor": "3.19.13",
+    "node": "v24.20.0"
+  },
+  "result": {
+    "status": "pass",
+    "sourceEvidenceSha256": "666b16ba0fc495069894187d248d66f7c828c08a2eaa64f2e471c4d4b0c8a3df",
+    "marker": {
+      "bytes": 24,
+      "sha256": "3fe5c054b1fcbbabd0030bb865a4eb91e7025cccdecf903d7751e4baf5548c8c"
+    },
+    "recordCount": 9,
+    "events": {
+      "sessionStart": { "observed": true, "count": 1, "classifications": ["success"] },
+      "sessionEnd": { "observed": true, "count": 1, "classifications": ["success"] },
+      "preToolUse": { "observed": true, "count": 3, "classifications": ["success"] },
+      "postToolUse": { "observed": true, "count": 2, "classifications": ["success"] },
+      "postToolUseFailure": {
+        "observed": true,
+        "count": 1,
+        "classifications": ["failure"]
+      },
+      "preCompact": { "observed": false, "count": 0, "classifications": [] },
+      "stop": { "observed": true, "count": 1, "classifications": ["success"] }
+    }
+  },
+  "privacy": {
+    "transcriptStored": false,
+    "promptStored": false,
+    "toolArgumentsStored": false,
+    "toolResultsStored": false,
+    "accountIdentifiersStored": false,
+    "providerSessionIdentifiersStored": false,
+    "credentialsStored": false,
+    "absolutePathsStored": false
+  }
+}

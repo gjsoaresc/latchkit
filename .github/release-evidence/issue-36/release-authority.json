@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "kind": "release-authority-diagnostic",
-  "candidateCommit": "508ffaf41629af043b5e2a7c6c503be738f02681",
+  "candidateCommit": "783567be209d09202dd26570cb03cba644c153ae",
   "testedAt": "2026-09-06",
   "remoteTags": [],
   "githubReleases": [],
-  "packageVersion": "0.1.0-alpha.1",
+  "packageVersion": "1.0.0-rc.1",
   "publicationEnvironment": {
     "name": "npm-production",
     "apiStatus": 404,
@@ -14,8 +14,8 @@
   },
   "disposition": "human-decision-required",
   "requiredActions": [
-    "A maintainer selects and commits the exact v1 release-candidate version.",
+    "A maintainer reviews and accepts the completed exact-candidate qualification evidence.",
     "A maintainer creates and reviews the protected npm-production environment and trusted-publishing configuration.",
-    "Only after qualification passes does a maintainer create the matching stable tag and approve publication."
+    "Only after a fresh controlled release dry run does a maintainer create the matching tag and separately approve publication."
   ]
 }
