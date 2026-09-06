@@ -30,6 +30,7 @@ import {
 } from '../task-state/service.js';
 import { withTaskStateLock } from '../task-state/lock.js';
 import type { Task } from '../task-state/contracts.js';
+import { recordProviderUsage } from '../usage/service.js';
 
 export const TASK_SESSION_PATH = '.latchkit/tasks/sessions-v1.json';
 const SESSION_SCHEMA_VERSION = 1;
@@ -379,6 +380,15 @@ export function createTaskController({
             providerVersion,
             session.providerSessionId,
           ) ?? session.providerSessionId;
+        // This is deliberately local and opt-in. The recorder parses only bounded
+        // documented result lines and never launches a provider or reads transcripts.
+        await recordProviderUsage(root, {
+          provider: providerId,
+          providerVersion: null,
+          taskId,
+          sessionId: session.providerSessionId,
+          output: processResult.stdout ?? '',
+        }).catch(() => {});
         session.state = processResult.status === 'cancelled' ? 'cancelled' : 'finished';
         session.result = resultSummary(processResult);
         session.updatedAt = now();

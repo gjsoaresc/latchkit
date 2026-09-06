@@ -40,6 +40,13 @@ import {
   updateProjectMemory,
 } from './project-memory/service.js';
 import { providerById } from './providers/registry.js';
+import {
+  configureUsage,
+  deleteUsage,
+  exportUsage,
+  inspectUsage,
+  recordProviderUsage,
+} from './usage/service.js';
 import { errorCode, errorRecord, isRecord } from './types.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -412,6 +419,20 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
             const body = await readJson<Parameters<typeof deleteProjectMemory>[2]>(req);
             respond(res, 200, await serialize(() => deleteProjectMemory(root, id, body)));
           } else throw fail(405, 'Method not allowed.');
+        } else if (pathname === '/api/usage' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectUsage(root));
+        } else if (pathname === '/api/usage/settings' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof configureUsage>[1]>(req);
+          respond(res, 200, await serialize(() => configureUsage(root, body)));
+        } else if (pathname === '/api/usage/import' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof recordProviderUsage>[1]>(req);
+          respond(res, 200, await serialize(() => recordProviderUsage(root, body)));
+        } else if (pathname === '/api/usage/export' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await exportUsage(root));
+        } else if (pathname === '/api/usage' && req.method === 'DELETE') {
+          respond(res, 200, await serialize(() => deleteUsage(root)));
         } else if (pathname === '/api/tasks/artifact' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('taskId');

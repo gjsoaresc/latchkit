@@ -46,6 +46,14 @@ import {
 } from './project-memory/service.js';
 import { readFile } from 'node:fs/promises';
 import { providerById } from './providers/registry.js';
+import {
+  configureUsage,
+  deleteUsage,
+  enforceUsageRetention,
+  exportUsage,
+  inspectUsage,
+  recordProviderUsage,
+} from './usage/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -74,6 +82,7 @@ Usage: latchkit <command> [options]
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
+  usage      Enable, inspect, import, export, retain, or delete local usage records
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -101,6 +110,8 @@ Options:
   --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
   --file <path>       memory import or acceptance verify: versioned JSON file
   --budget <n>        memory recover: maximum context characters
+  --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
+  --provider-version <version> usage import: documented provider version for the event
   --provider <id>     memory recover: provider contract to evaluate
   --path <path>       diff annotation: project-relative file path
   --line <number>     diff annotation: one-based line
@@ -180,6 +191,8 @@ try {
       'action-id': { type: 'string' },
       'install-root': { type: 'string' },
       bundle: { type: 'string' },
+      'retention-days': { type: 'string' },
+      'provider-version': { type: 'string' },
     },
   });
   cliValues = values;
@@ -189,9 +202,17 @@ try {
     const [command, ...extra] = positionals;
     if (!command) throw new Error('A command is required.');
     if (
-      !['task', 'workflow', 'self', 'workspace', 'review', 'memory', 'acceptance', 'diff'].includes(
-        command,
-      ) &&
+      ![
+        'task',
+        'workflow',
+        'self',
+        'workspace',
+        'review',
+        'memory',
+        'usage',
+        'acceptance',
+        'diff',
+      ].includes(command) &&
       extra.length
     )
       throw new Error('Only one command is supported at a time.');
@@ -268,6 +289,15 @@ try {
         'budget',
         'provider',
         'expected-revision',
+      ],
+      usage: [
+        'project',
+        'provider',
+        'provider-version',
+        'file',
+        'task',
+        'session',
+        'retention-days',
       ],
     };
     const allowed = allowedByCommand[command];
@@ -693,6 +723,54 @@ try {
         const provider = values.provider ? providerById(values.provider) : undefined;
         const budget = values.budget === undefined ? undefined : Number(values.budget);
         print(await recoverProjectContext(root, { query: values.text, budget, provider }));
+      }
+    } else if (command === 'usage') {
+      if (
+        !['enable', 'disable', 'inspect', 'import', 'export', 'retain', 'delete'].includes(
+          extra[0] ?? '',
+        ) ||
+        extra.length !== 1
+      )
+        throw new Error(
+          'Usage: latchkit usage <enable|disable|inspect|import|export|retain|delete> [options].',
+        );
+      const action = extra[0];
+      const retentionDays =
+        values['retention-days'] === undefined ? undefined : Number(values['retention-days']);
+      if (
+        retentionDays !== undefined &&
+        (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365)
+      )
+        throw new Error('--retention-days must be an integer between 1 and 365.');
+      if (action === 'enable')
+        print(
+          await configureUsage(root, {
+            enabled: true,
+            ...(retentionDays === undefined ? {} : { retentionDays }),
+          }),
+        );
+      else if (action === 'disable') print(await configureUsage(root, { enabled: false }));
+      else if (action === 'inspect') print(await inspectUsage(root));
+      else if (action === 'export') print(await exportUsage(root));
+      else if (action === 'delete') print(await deleteUsage(root));
+      else if (action === 'retain')
+        print(
+          await (retentionDays === undefined
+            ? enforceUsageRetention(root)
+            : configureUsage(root, { retentionDays })),
+        );
+      else {
+        if (!values.provider || !values.file)
+          throw new Error('usage import requires --provider and --file.');
+        print(
+          await recordProviderUsage(root, {
+            provider: values.provider,
+            providerVersion: values['provider-version'],
+            taskId: values.task,
+            sessionId: values.session,
+            output: JSON.parse(await readFile(path.resolve(values.file), 'utf8')),
+          }),
+        );
       }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);

@@ -37,6 +37,14 @@ Each capability has a `supported`, `partial`, `unsupported`, or `unknown` state,
 
 The process runner is an adapter primitive, not evidence that a listed provider can be invoked. It refuses execution unless an adapter's contract has invocation evidence and the caller explicitly authorizes the `host-local-authorized` profile. Host-local execution is not reported as provider-sandboxed, interactive/PTY execution is not emulated, and provider approval settings are never changed.
 
+## Optional local usage accounting
+
+`latchkit usage enable` opts a project into `.latchkit/usage/state-v1.json`; it is disabled by default. Latchkit makes no provider or pricing-network call to collect usage, does not scan provider transcript directories, and stores normalized counters rather than prompts, command output, credentials, or raw events. Recording accepts only the documented Claude result JSON event and Codex JSONL `turn.completed` usage event, plus the sanitized Claude observation compatibility format used for local evidence. A missing or unrecognized provider version is recorded as **unavailable**, never as a zero count.
+
+Usage records are deduplicated by their normalized provider/session/task/event identity. A later observation corrects the matching record, and unknown token components remain `null`, producing `partial` rather than an invented zero. `latchkit usage inspect`, `export`, `retain`, and `delete` operate only on the selected project. Retention defaults to 30 days and is limited to 1–365 days.
+
+Any dollar value is a public API list-price estimate only when callers supply its source URL, version, date, currency, and assumptions. The record retains those assumptions. Existing subscriptions such as Claude Max and actual provider billing remain unknown; estimates do not imply savings, a budget, or billing control.
+
 ## Upstream platform requirements
 
 | Provider        | Windows                                                                                                                      | Linux and macOS                        | Official source                                                                                                    |
