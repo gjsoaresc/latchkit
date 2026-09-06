@@ -203,6 +203,7 @@ export async function proposeContractRevision(
     expectedProducerRevision: number;
     provenance: string;
     accept?: boolean;
+    mutationId?: string;
   },
 ) {
   root = await resolveProjectRoot(root);
@@ -216,6 +217,16 @@ export async function proposeContractRevision(
         'TASK_NOT_FOUND',
         '$.associationId',
       );
+    const requestDigest = hash(input);
+    const replay = a.mutations.find((item) => item.id === input.mutationId);
+    if (replay) {
+      if (replay.requestDigest === requestDigest) return structuredClone(a);
+      throw new TaskStateError(
+        'mutationId was already used with different input.',
+        'TASK_CONTRACT_CONFLICT',
+        '$.mutationId',
+      );
+    }
     if (a.revision !== input.expectedAssociationRevision)
       throw new TaskStateError(
         'Contract association revision changed.',
@@ -237,6 +248,7 @@ export async function proposeContractRevision(
       a.revision += 1;
       a.reconciliation = 'pending';
       a.updatedAt = new Date().toISOString();
+      if (input.mutationId) a.mutations.push({ id: input.mutationId, requestDigest });
       await write(root, document);
       return structuredClone(a);
     }
@@ -256,6 +268,7 @@ export async function proposeContractRevision(
     a.consumerAcknowledgedDigest = null;
     a.consumerAcknowledgedRevision = null;
     a.updatedAt = now;
+    if (input.mutationId) a.mutations.push({ id: input.mutationId, requestDigest });
     await writeAtomic(
       root,
       JOURNAL,
@@ -279,6 +292,7 @@ export async function acknowledgeContractReceipt(
     expectedAssociationRevision: number;
     expectedConsumerRevision: number;
     contractDigest: string;
+    mutationId?: string;
   },
 ) {
   root = await resolveProjectRoot(root);
@@ -292,6 +306,16 @@ export async function acknowledgeContractReceipt(
         'TASK_NOT_FOUND',
         '$.associationId',
       );
+    const requestDigest = hash(input);
+    const replay = association.mutations.find((item) => item.id === input.mutationId);
+    if (replay) {
+      if (replay.requestDigest === requestDigest) return structuredClone(association);
+      throw new TaskStateError(
+        'mutationId was already used with different input.',
+        'TASK_CONTRACT_CONFLICT',
+        '$.mutationId',
+      );
+    }
     if (association.revision !== input.expectedAssociationRevision)
       throw new TaskStateError(
         'Contract association revision changed.',
@@ -317,6 +341,7 @@ export async function acknowledgeContractReceipt(
     association.consumerAcknowledgedRevision = consumer.revision;
     association.reconciliation = version.status === 'accepted' ? 'current' : 'pending';
     association.updatedAt = new Date().toISOString();
+    if (input.mutationId) association.mutations.push({ id: input.mutationId, requestDigest });
     await write(root, document);
     return structuredClone(association);
   });
