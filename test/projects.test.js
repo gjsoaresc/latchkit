@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -29,7 +29,7 @@ async function git(root, args) {
 }
 
 async function tempDir(t, prefix) {
-  const base = await mkdtemp(path.join(os.tmpdir(), prefix));
+  const base = await realpath(await mkdtemp(path.join(os.tmpdir(), prefix)));
   t.after(() => rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return base;
 }

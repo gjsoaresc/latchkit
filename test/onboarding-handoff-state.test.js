@@ -16,7 +16,9 @@ import {
 } from '../dist/src/installation/onboarding-state.js';
 
 async function tempInstallRoot(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-handoff-'));
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-handoff-')),
+  );
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return root;
 }

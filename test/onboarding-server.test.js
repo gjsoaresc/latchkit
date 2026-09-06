@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { startServer } from '../dist/src/server.js';
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-api-'));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-api-')));
   const { server, url, token } = await startServer(root);
   t.after(async () => {
     await new Promise((resolve) => {
