@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/reconciliation-patch-v1.schema.json",
+  "title": "Latchkit task-intent reconciliation patch v1",
+  "description": "Input shape for `task reconcile-preview`/`task reconcile-apply --file`: an explicit, bounded set of record operations and/or a full criteria replacement, reusing the same per-operation shapes as `task record-transition`/`record-add --supersedes`/`record-revise` and `spec register`'s criteria input. At least one of recordOps or criteria is required. See docs/task-state.md#reconciling-changed-intent.",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "recordOps": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/recordOp" }
+    },
+    "criteria": {
+      "description": "Full replacement criteria set, identical semantics to `spec register`'s criteria input: an existing ID with a changed description/required/approvalRequired bumps that criterion's revision, a new ID (or omitted ID) adds a criterion, and an omitted existing ID drops it (rejected if a registered enhanced check still maps to it).",
+      "type": "array",
+      "items": { "$ref": "task-state-v1.schema.json#/$defs/criterion" }
+    }
+  },
+  "$defs": {
+    "recordOp": {
+      "oneOf": [
+        { "$ref": "#/$defs/transitionOp" },
+        { "$ref": "#/$defs/supersedeOp" },
+        { "$ref": "#/$defs/reviseOp" }
+      ]
+    },
+    "transitionOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "recordId", "recordRevision", "status", "reason"],
+      "properties": {
+        "op": { "const": "transition" },
+        "recordId": { "type": "string", "pattern": "^record_[0-9a-fA-F-]{36}$" },
+        "recordRevision": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "authorizationId": { "type": "string", "pattern": "^authorization_[0-9a-fA-F-]{36}$" },
+        "authorization": { "$ref": "#/$defs/authorizationInput" },
+        "evidenceId": { "type": "string", "pattern": "^evidence_[0-9a-fA-F-]{36}$" }
+      }
+    },
+    "supersedeOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "recordId", "recordRevision", "kind", "text", "provenance"],
+      "properties": {
+        "op": { "const": "supersede" },
+        "recordId": { "type": "string", "pattern": "^record_[0-9a-fA-F-]{36}$" },
+        "recordRevision": { "type": "integer", "minimum": 1 },
+        "kind": { "enum": ["decision", "assumption", "observation", "question"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reference"],
+          "properties": {
+            "kind": {
+              "enum": ["direct-user", "agent-inferred", "imported", "execution-observed"]
+            },
+            "reference": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          }
+        },
+        "links": { "type": "array", "maxItems": 32, "items": { "type": "object" } },
+        "authorizationId": { "type": "string", "pattern": "^authorization_[0-9a-fA-F-]{36}$" },
+        "authorization": { "$ref": "#/$defs/authorizationInput" }
+      }
+    },
+    "reviseOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "recordId", "recordRevision"],
+      "properties": {
+        "op": { "const": "revise" },
+        "recordId": { "type": "string", "pattern": "^record_[0-9a-fA-F-]{36}$" },
+        "recordRevision": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "links": { "type": "array", "maxItems": 32, "items": { "type": "object" } },
+        "reason": { "type": "string", "maxLength": 2048 }
+      }
+    },
+    "authorizationInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "scope", "reference"],
+      "properties": {
+        "source": { "const": "user" },
+        "scope": { "type": "string", "minLength": 1 },
+        "reference": { "type": "string", "minLength": 1 },
+        "provenanceKind": { "enum": ["direct-request", "explicit-cli"] }
+      }
+    }
+  }
+}

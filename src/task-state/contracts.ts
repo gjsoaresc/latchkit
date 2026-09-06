@@ -3,6 +3,9 @@ import { isVerificationMode, type VerificationMode } from '../verification/contr
 import {
   buildRecordDependencyEdges,
   detectRecordDependencyCycle,
+  MAX_RECONCILE_IMPACT_ENTRIES,
+  MAX_RECONCILE_PATCH_OPS,
+  MAX_RECONCILIATIONS_PER_TASK,
   MAX_RECORD_HISTORY,
   MAX_RECORD_LINKS,
   MAX_RECORD_REASON_BYTES,
@@ -15,6 +18,14 @@ import {
   type RecordLink,
   type TaskRecord,
 } from './records.js';
+import type {
+  ImpactEntry,
+  ImpactTargetKind,
+  ReconcileOpKind,
+  ReconciliationOpSummary,
+  ReconciliationUncertainty,
+  TaskReconciliation,
+} from './reconcile.js';
 
 export type { VerificationMode };
 export type {
@@ -47,6 +58,20 @@ export {
   reconcileSourceLinkStatus,
 } from './records.js';
 export type { RecordLinkStatus } from './records.js';
+export { computeIntentDigest } from './records.js';
+export type {
+  ImpactClassification,
+  ImpactEntry,
+  ImpactOutcome,
+  ImpactTargetKind,
+  ReconcileOpKind,
+  ReconciliationCriterionSnapshot,
+  ReconciliationOpSummary,
+  ReconciliationRecordSnapshot,
+  ReconciliationReport,
+  ReconciliationUncertainty,
+  TaskReconciliation,
+} from './reconcile.js';
 
 export type SourceSnapshot = { revision: string | null; dirtyFingerprint: string | null };
 export type Authorization = {
@@ -157,6 +182,10 @@ export type Task = {
   /** Present from task-state schema version 4. Discriminated decision/assumption/observation/
    * question knowledge records with explicit provenance. See docs/task-state.md. */
   records?: TaskRecord[];
+  /** Present from task-state schema version 5. Bounded summaries of applied intent
+   * reconciliations (see docs/task-state.md#reconciling-changed-intent); each entry preserves the
+   * digests and impact reasons for one `reconcile-apply` mutation. */
+  reconciliations?: TaskReconciliation[];
 };
 export type TaskState = {
   schemaVersion: number;
@@ -167,8 +196,8 @@ export type TaskState = {
   tasks: Task[];
 };
 
-export const TASK_STATE_SCHEMA_VERSION = 4;
-export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4]);
+export const TASK_STATE_SCHEMA_VERSION = 5;
+export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5]);
 
 export const TASK_STATES = Object.freeze([
   'planned',
@@ -192,7 +221,7 @@ export const EVIDENCE_OUTCOMES = Object.freeze([
 ]);
 
 const ID_PATTERN =
-  /^(project|task|run|criterion|checkpoint|evidence|authorization|owner|event|record)_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^(project|task|run|criterion|checkpoint|evidence|authorization|owner|event|record|reconciliation)_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MEMORY_ID_PATTERN =
   /^memory_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -864,6 +893,201 @@ function validateTaskRecords(records: TaskRecord[], task: Task, path: string) {
     );
 }
 
+const RECONCILE_OP_KINDS: readonly ReconcileOpKind[] = Object.freeze([
+  'transition',
+  'supersede',
+  'revise',
+  'criterion',
+]);
+const IMPACT_TARGET_KINDS: readonly ImpactTargetKind[] = Object.freeze([
+  'record',
+  'criterion',
+  'check',
+  'evidence',
+]);
+const IMPACT_CLASSIFICATIONS = Object.freeze([
+  'directly-affected',
+  'declared-dependent',
+  'potentially-affected',
+]);
+const IMPACT_OUTCOMES = Object.freeze([
+  'needs-user-decision',
+  'needs-replanning',
+  'needs-re-verification',
+  'none',
+]);
+const UNCERTAINTY_REASONS = Object.freeze([
+  'link-stale',
+  'link-missing',
+  'link-unknown',
+  'uncovered-dependency',
+]);
+
+function validateReconcileOpSummary(value: ReconciliationOpSummary, path: string) {
+  keys(
+    value,
+    ['op', 'targetId', 'fromRevision', 'toRevision', 'fromStatus', 'toStatus'],
+    ['op', 'targetId', 'fromRevision', 'toRevision', 'fromStatus', 'toStatus'],
+    path,
+  );
+  if (!(RECONCILE_OP_KINDS as readonly string[]).includes(value.op))
+    throw new TaskStateError('Unknown reconciliation op kind.', 'TASK_STATE_INVALID', `${path}.op`);
+  string(value.targetId, `${path}.targetId`);
+  integer(value.fromRevision, `${path}.fromRevision`, 1);
+  integer(value.toRevision, `${path}.toRevision`, 1);
+  if (value.fromStatus !== null) string(value.fromStatus, `${path}.fromStatus`);
+  if (value.toStatus !== null) string(value.toStatus, `${path}.toStatus`);
+}
+
+function validateImpactEntry(value: ImpactEntry, path: string) {
+  keys(
+    value,
+    ['kind', 'id', 'classification', 'outcome', 'reasonCode', 'path'],
+    ['kind', 'id', 'classification', 'outcome', 'reasonCode', 'path'],
+    path,
+  );
+  if (!(IMPACT_TARGET_KINDS as readonly string[]).includes(value.kind))
+    throw new TaskStateError('Unknown impact target kind.', 'TASK_STATE_INVALID', `${path}.kind`);
+  string(value.id, `${path}.id`);
+  if (!IMPACT_CLASSIFICATIONS.includes(value.classification))
+    throw new TaskStateError(
+      'Unknown impact classification.',
+      'TASK_STATE_INVALID',
+      `${path}.classification`,
+    );
+  if (!IMPACT_OUTCOMES.includes(value.outcome))
+    throw new TaskStateError('Unknown impact outcome.', 'TASK_STATE_INVALID', `${path}.outcome`);
+  string(value.reasonCode, `${path}.reasonCode`);
+  if (
+    !Array.isArray(value.path) ||
+    value.path.length === 0 ||
+    !value.path.every((item) => typeof item === 'string')
+  )
+    throw new TaskStateError(
+      'Expected a non-empty string path.',
+      'TASK_STATE_INVALID',
+      `${path}.path`,
+    );
+}
+
+function validateUncertainty(value: ReconciliationUncertainty, path: string) {
+  keys(value, ['kind', 'id', 'reasonCode', 'detail'], ['kind', 'id', 'reasonCode', 'detail'], path);
+  if (!(IMPACT_TARGET_KINDS as readonly string[]).includes(value.kind))
+    throw new TaskStateError('Unknown impact target kind.', 'TASK_STATE_INVALID', `${path}.kind`);
+  string(value.id, `${path}.id`);
+  if (!UNCERTAINTY_REASONS.includes(value.reasonCode))
+    throw new TaskStateError(
+      'Unknown uncertainty reason.',
+      'TASK_STATE_INVALID',
+      `${path}.reasonCode`,
+    );
+  string(value.detail, `${path}.detail`, { empty: true });
+}
+
+function validateTaskReconciliation(value: TaskReconciliation, path: string) {
+  keys(
+    value,
+    [
+      'id',
+      'mutationId',
+      'patchDigest',
+      'previewDigest',
+      'ops',
+      'impactSummary',
+      'impact',
+      'impactTruncated',
+      'uncertainties',
+      'authorizationIds',
+      'workflowAcknowledged',
+      'createdAt',
+    ],
+    [
+      'id',
+      'mutationId',
+      'patchDigest',
+      'previewDigest',
+      'ops',
+      'impactSummary',
+      'impact',
+      'impactTruncated',
+      'uncertainties',
+      'authorizationIds',
+      'workflowAcknowledged',
+      'createdAt',
+    ],
+    path,
+  );
+  id(value.id, `${path}.id`, 'reconciliation');
+  id(value.mutationId, `${path}.mutationId`, 'event');
+  hash(value.patchDigest, `${path}.patchDigest`);
+  hash(value.previewDigest, `${path}.previewDigest`);
+  if (!Array.isArray(value.ops) || value.ops.length === 0)
+    throw new TaskStateError(
+      'A reconciliation must apply at least one op.',
+      'TASK_STATE_INVALID',
+      `${path}.ops`,
+    );
+  if (value.ops.length > MAX_RECONCILE_PATCH_OPS)
+    throw new TaskStateError(
+      'Reconciliation has too many ops.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      `${path}.ops`,
+    );
+  value.ops.forEach((item, index) => validateReconcileOpSummary(item, `${path}.ops[${index}]`));
+  keys(
+    value.impactSummary,
+    ['directlyAffected', 'declaredDependent', 'potentiallyAffected', 'unchanged'],
+    ['directlyAffected', 'declaredDependent', 'potentiallyAffected', 'unchanged'],
+    `${path}.impactSummary`,
+  );
+  integer(value.impactSummary.directlyAffected, `${path}.impactSummary.directlyAffected`);
+  integer(value.impactSummary.declaredDependent, `${path}.impactSummary.declaredDependent`);
+  integer(value.impactSummary.potentiallyAffected, `${path}.impactSummary.potentiallyAffected`);
+  integer(value.impactSummary.unchanged, `${path}.impactSummary.unchanged`);
+  if (!Array.isArray(value.impact))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', `${path}.impact`);
+  if (value.impact.length > MAX_RECONCILE_IMPACT_ENTRIES)
+    throw new TaskStateError(
+      'Reconciliation retains too many impact entries.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      `${path}.impact`,
+    );
+  value.impact.forEach((item, index) => validateImpactEntry(item, `${path}.impact[${index}]`));
+  boolean(value.impactTruncated, `${path}.impactTruncated`);
+  if (!Array.isArray(value.uncertainties))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', `${path}.uncertainties`);
+  value.uncertainties.forEach((item, index) =>
+    validateUncertainty(item, `${path}.uncertainties[${index}]`),
+  );
+  if (
+    !Array.isArray(value.authorizationIds) ||
+    value.authorizationIds.some((item) => typeof item !== 'string')
+  )
+    throw new TaskStateError(
+      'Expected an array of authorization IDs.',
+      'TASK_STATE_INVALID',
+      `${path}.authorizationIds`,
+    );
+  value.authorizationIds.forEach((item, index) =>
+    id(item, `${path}.authorizationIds[${index}]`, 'authorization'),
+  );
+  boolean(value.workflowAcknowledged, `${path}.workflowAcknowledged`);
+  timestamp(value.createdAt, `${path}.createdAt`);
+}
+
+function validateTaskReconciliations(value: TaskReconciliation[], path: string) {
+  if (!Array.isArray(value))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', path);
+  if (value.length > MAX_RECONCILIATIONS_PER_TASK)
+    throw new TaskStateError(
+      'Task has too many reconciliations.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      path,
+    );
+  value.forEach((item, index) => validateTaskReconciliation(item, `${path}[${index}]`));
+  unique(value, 'id', path);
+}
+
 function validateTask(value: Task, path: string, schemaVersion: number) {
   const fields = [
     'id',
@@ -885,6 +1109,7 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
   if (schemaVersion >= 2) fields.push('enhancedWorkflow');
   if (schemaVersion >= 3) fields.push('verificationMode');
   if (schemaVersion >= 4) fields.push('records');
+  if (schemaVersion >= 5) fields.push('reconciliations');
   keys(value, fields, fields, path);
   id(value.id, `${path}.id`, 'task');
   string(value.title, `${path}.title`);
@@ -946,6 +1171,8 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
       `${path}.verificationMode`,
     );
   if (schemaVersion >= 4) validateTaskRecords(value.records ?? [], value, `${path}.records`);
+  if (schemaVersion >= 5)
+    validateTaskReconciliations(value.reconciliations ?? [], `${path}.reconciliations`);
   const runs = new Map(value.runs.map((item) => [item.id, item]));
   const criteria = new Map(value.criteria.map((item) => [item.id, item]));
   const authorizations = new Set(value.authorizations.map((item) => item.id));
@@ -1021,6 +1248,25 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
       'TASK_STATE_INVALID',
       `${path}.revision`,
     );
+  }
+  if (schemaVersion >= 5) {
+    const eventIds = new Set(value.events.map((item) => item.id));
+    (value.reconciliations ?? []).forEach((item, index) => {
+      if (!eventIds.has(item.mutationId))
+        throw new TaskStateError(
+          'Reconciliation must reference a committed task event.',
+          'TASK_STATE_INVALID',
+          `${path}.reconciliations[${index}].mutationId`,
+        );
+      for (const authorizationId of item.authorizationIds) {
+        if (!authorizations.has(authorizationId))
+          throw new TaskStateError(
+            'Reconciliation references an unknown authorization.',
+            'TASK_STATE_INVALID',
+            `${path}.reconciliations[${index}].authorizationIds`,
+          );
+      }
+    });
   }
   return value;
 }

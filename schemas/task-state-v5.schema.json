@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/task-state-v5.schema.json",
+  "title": "Latchkit local task state v5",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "revision", "createdAt", "updatedAt", "tasks"],
+  "properties": {
+    "schemaVersion": { "const": 5 },
+    "project": { "$ref": "task-state-v1.schema.json#/properties/project" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "state",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "authorizationRequired",
+        "authorizations",
+        "owner",
+        "criteria",
+        "runs",
+        "checkpoints",
+        "evidence",
+        "events",
+        "import",
+        "enhancedWorkflow",
+        "verificationMode",
+        "records",
+        "reconciliations"
+      ],
+      "properties": {
+        "id": { "$ref": "task-state-v1.schema.json#/$defs/taskId" },
+        "title": { "type": "string", "minLength": 1 },
+        "state": {
+          "enum": [
+            "planned",
+            "running",
+            "awaiting-decision",
+            "blocked",
+            "cancelled",
+            "completed",
+            "verified"
+          ]
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "authorizationRequired": { "type": "boolean" },
+        "authorizations": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/authorization" }
+        },
+        "owner": { "$ref": "task-state-v1.schema.json#/$defs/owner" },
+        "criteria": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/criterion" }
+        },
+        "runs": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/run" }
+        },
+        "checkpoints": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/checkpoint" }
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "task-state-v2.schema.json#/$defs/evidence" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/event" }
+        },
+        "import": { "$ref": "task-state-v1.schema.json#/$defs/import" },
+        "enhancedWorkflow": {
+          "oneOf": [{ "type": "null" }, { "$ref": "enhanced-workflow-v1.schema.json" }]
+        },
+        "verificationMode": {
+          "description": "Bounded, change-focused fast verification versus the full standard path. Persisted so resume never silently changes an existing task's verification behavior.",
+          "enum": ["fast", "standard"]
+        },
+        "records": {
+          "description": "Discriminated decision/assumption/observation/question knowledge records with explicit provenance. See docs/task-state.md.",
+          "type": "array",
+          "items": { "$ref": "task-state-v4.schema.json#/$defs/record" }
+        },
+        "reconciliations": {
+          "description": "Bounded summaries of applied intent reconciliations. See docs/task-state.md#reconciling-changed-intent.",
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "reconciliation-report-v1.schema.json#/$defs/taskReconciliation" }
+        }
+      }
+    }
+  }
+}

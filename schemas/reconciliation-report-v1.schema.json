@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/reconciliation-report-v1.schema.json",
+  "title": "Latchkit task-intent reconciliation report v1",
+  "description": "Shape of the read-only impact report returned by `task reconcile-preview` and `task reconcile-apply`, and of the bounded `TaskReconciliation` summary persisted on the task by `reconcile-apply` (task-state schema v5, `Task.reconciliations`). See docs/task-state.md#reconciling-changed-intent.",
+  "$defs": {
+    "opKind": { "enum": ["transition", "supersede", "revise", "criterion"] },
+    "impactTargetKind": { "enum": ["record", "criterion", "check", "evidence"] },
+    "impactClassification": {
+      "enum": ["directly-affected", "declared-dependent", "potentially-affected"]
+    },
+    "impactOutcome": {
+      "enum": ["needs-user-decision", "needs-replanning", "needs-re-verification", "none"]
+    },
+    "opSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "targetId", "fromRevision", "toRevision", "fromStatus", "toStatus"],
+      "properties": {
+        "op": { "$ref": "#/$defs/opKind" },
+        "targetId": { "type": "string", "minLength": 1 },
+        "fromRevision": { "type": "integer", "minimum": 1 },
+        "toRevision": { "type": "integer", "minimum": 1 },
+        "fromStatus": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "toStatus": { "oneOf": [{ "type": "null" }, { "type": "string" }] }
+      }
+    },
+    "impactEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "classification", "outcome", "reasonCode", "path"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/impactTargetKind" },
+        "id": { "type": "string", "minLength": 1 },
+        "classification": { "$ref": "#/$defs/impactClassification" },
+        "outcome": { "$ref": "#/$defs/impactOutcome" },
+        "reasonCode": { "type": "string", "minLength": 1 },
+        "path": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "uncertainty": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "reasonCode", "detail"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/impactTargetKind" },
+        "id": { "type": "string", "minLength": 1 },
+        "reasonCode": {
+          "enum": ["link-stale", "link-missing", "link-unknown", "uncovered-dependency"]
+        },
+        "detail": { "type": "string" }
+      }
+    },
+    "impactSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directlyAffected", "declaredDependent", "potentiallyAffected", "unchanged"],
+      "properties": {
+        "directlyAffected": { "type": "integer", "minimum": 0 },
+        "declaredDependent": { "type": "integer", "minimum": 0 },
+        "potentiallyAffected": { "type": "integer", "minimum": 0 },
+        "unchanged": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "taskReconciliation": {
+      "description": "The bounded, persisted summary stored in Task.reconciliations (task-state schema v5).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "mutationId",
+        "patchDigest",
+        "previewDigest",
+        "ops",
+        "impactSummary",
+        "impact",
+        "impactTruncated",
+        "uncertainties",
+        "authorizationIds",
+        "workflowAcknowledged",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^reconciliation_[0-9a-fA-F-]{36}$" },
+        "mutationId": { "type": "string", "pattern": "^event_[0-9a-fA-F-]{36}$" },
+        "patchDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "previewDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "ops": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/opSummary" }
+        },
+        "impactSummary": { "$ref": "#/$defs/impactSummary" },
+        "impact": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/impactEntry" }
+        },
+        "impactTruncated": { "type": "boolean" },
+        "uncertainties": { "type": "array", "items": { "$ref": "#/$defs/uncertainty" } },
+        "authorizationIds": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^authorization_[0-9a-fA-F-]{36}$" }
+        },
+        "workflowAcknowledged": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "recordSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "revision", "status", "text"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "enum": ["decision", "assumption", "observation", "question"] },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string" },
+        "text": { "type": "string" }
+      }
+    },
+    "criterionSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "description", "required", "approvalRequired"],
+      "properties": {
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string" },
+        "required": { "type": "boolean" },
+        "approvalRequired": { "type": "boolean" }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "taskId",
+    "taskRevision",
+    "workflowExists",
+    "workflowRevision",
+    "ops",
+    "patchDigest",
+    "digest",
+    "source",
+    "before",
+    "after",
+    "impact",
+    "impactSummary",
+    "impactTruncated",
+    "uncertainties",
+    "approval",
+    "generatedAt"
+  ],
+  "properties": {
+    "taskId": { "$ref": "task-state-v1.schema.json#/$defs/taskId" },
+    "taskRevision": { "type": "integer", "minimum": 1 },
+    "workflowExists": { "type": "boolean" },
+    "workflowRevision": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 1 }] },
+    "ops": { "type": "array", "items": { "$ref": "#/$defs/opSummary" } },
+    "patchDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "digest": {
+      "description": "The preview digest an apply call must echo back exactly (`--preview-digest`); it binds the exact patch to the task/workflow revisions, working-tree source snapshot, and every resolved referenced-artifact hash observed at preview time.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirtyFingerprint"],
+      "properties": {
+        "revision": { "oneOf": [{ "type": "null" }, { "type": "string" }] },
+        "dirtyFingerprint": {
+          "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[a-f0-9]{64}$" }]
+        }
+      }
+    },
+    "before": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records", "criteria"],
+      "properties": {
+        "records": { "type": "array", "items": { "$ref": "#/$defs/recordSnapshot" } },
+        "criteria": { "type": "array", "items": { "$ref": "#/$defs/criterionSnapshot" } }
+      }
+    },
+    "after": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["records", "criteria"],
+      "properties": {
+        "records": { "type": "array", "items": { "$ref": "#/$defs/recordSnapshot" } },
+        "criteria": { "type": "array", "items": { "$ref": "#/$defs/criterionSnapshot" } }
+      }
+    },
+    "impact": { "type": "array", "items": { "$ref": "#/$defs/impactEntry" } },
+    "impactSummary": { "$ref": "#/$defs/impactSummary" },
+    "impactTruncated": { "type": "boolean" },
+    "uncertainties": { "type": "array", "items": { "$ref": "#/$defs/uncertainty" } },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentlyValid", "remainsValidAfterPatch"],
+      "properties": {
+        "currentlyValid": { "oneOf": [{ "type": "null" }, { "type": "boolean" }] },
+        "remainsValidAfterPatch": { "oneOf": [{ "type": "null" }, { "type": "boolean" }] }
+      }
+    },
+    "generatedAt": { "type": "string", "format": "date-time" }
+  }
+}

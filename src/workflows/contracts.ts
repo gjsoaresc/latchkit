@@ -30,6 +30,15 @@ export type WorkflowApproval = {
   requirementsDigest: string;
   checksDigest: string;
   criteriaDigest: string;
+  /** Digest over currently *adopted* intent (every `decision` in status `accepted` and every
+   * `assumption` in status `confirmed`; see `computeIntentDigest` in
+   * `../task-state/records.ts`) at the moment of approval. Compared against the task's live
+   * intent digest on every `approvalValid` check (see `./service.ts`) so a task-intent
+   * reconciliation that changes accepted intent — even one that never touches criteria text —
+   * invalidates this approval immediately, the same way a criteria change already does through
+   * `criteriaDigest`. A task with no adopted records produces the same fixed digest, so this
+   * never invalidates an approval on a task that predates task records (task-state schema < 4). */
+  intentDigest: string;
   scope: string;
   reference: string;
   source: SourceIdentity;
@@ -394,6 +403,7 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
         'requirementsDigest',
         'checksDigest',
         'criteriaDigest',
+        'intentDigest',
         'scope',
         'reference',
         'source',
@@ -403,6 +413,7 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
       !digest(approval.requirementsDigest) ||
       !digest(approval.checksDigest) ||
       !digest(approval.criteriaDigest) ||
+      !digest(approval.intentDigest) ||
       !text(approval.scope) ||
       !text(approval.reference) ||
       !source(approval.source) ||

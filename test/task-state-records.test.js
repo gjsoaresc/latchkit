@@ -939,7 +939,10 @@ test('task records require the explicit v4 migration, and reads of an older stor
   const file = path.join(root, TASK_STATE_PATH);
   const current = JSON.parse(await fs.readFile(file, 'utf8'));
   current.schemaVersion = 3;
-  for (const item of current.tasks) delete item.records;
+  for (const item of current.tasks) {
+    delete item.records;
+    delete item.reconciliations;
+  }
   await fs.writeFile(file, `${JSON.stringify(current, null, 2)}\n`);
 
   await assert.rejects(

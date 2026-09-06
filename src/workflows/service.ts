@@ -40,6 +40,7 @@ import {
   verifyTask,
 } from '../task-state/service.js';
 import type { SourceSnapshot, Task } from '../task-state/contracts.js';
+import { computeIntentDigest } from '../task-state/records.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -264,7 +265,11 @@ function approvalValid(record: WorkflowRecord, task: Task): boolean {
     record.approval.requirementsDigest === record.requirements.digest &&
     record.approval.planDigest === record.plan.digest &&
     record.approval.checksDigest === record.plan.checksDigest &&
-    record.approval.criteriaDigest === criteriaDigest(task),
+    record.approval.criteriaDigest === criteriaDigest(task) &&
+    // See docs/task-state.md#reconciling-changed-intent: a change to accepted intent (an accepted
+    // decision superseded, an assumption un-confirmed, …) invalidates approval exactly like a
+    // criteria change already does, even when no criterion text moved.
+    record.approval.intentDigest === computeIntentDigest(task.records ?? []),
   );
 }
 
@@ -1267,6 +1272,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         requirementsDigest: input.requirementsDigest,
         checksDigest: input.checksDigest,
         criteriaDigest: criteriaDigest(task),
+        intentDigest: computeIntentDigest(task.records ?? []),
         scope: requiredText(input.scope, 'scope'),
         reference: requiredText(input.reference, 'reference'),
         source,
