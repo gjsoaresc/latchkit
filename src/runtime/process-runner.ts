@@ -160,6 +160,23 @@ export async function runProviderProcess({
       reason: contract.capabilities.invocation.reason,
     });
 
+  try {
+    if (contract.id === 'claude') {
+      // Load only at execution time: provider contracts themselves import the runner.
+      const { assertManagedMcpRuntime } = await import('../integrations/mcp/managed.js');
+      await assertManagedMcpRuntime(command.cwd ?? process.cwd(), contract, {
+        ...process.env,
+        ...command.environment,
+      });
+    }
+  } catch {
+    return result('refused', {
+      code: 'MCP_RUNTIME_DENIED',
+      reason:
+        'Managed MCP authorization, configuration, or environment requires review. Run mcp inspect or mcp remove.',
+    });
+  }
+
   const launched = spawnArguments(command);
   let child: ChildProcessWithoutNullStreams;
   try {

@@ -99,6 +99,7 @@ Usage: latchkit <command> [options]
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   usage      Enable, inspect, import, export, retain, or delete local usage records
   schedule   Create and operate an explicit foreground local scheduler
+  mcp        Preview, apply, remove, inspect, recover, or health-check optional MCP configuration
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -128,6 +129,7 @@ Options:
   --budget <n>        memory recover: maximum context characters
   --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
   --provider-version <version> usage import: documented provider version for the event
+  --authorized        mcp apply: explicitly authorize the exact enabled definitions in --file
   --provider <id>     memory recover: provider contract to evaluate
   --path <path>       diff annotation: project-relative file path
   --line <number>     diff annotation: one-based line
@@ -245,6 +247,7 @@ try {
         'review',
         'memory',
         'usage',
+        'mcp',
         'acceptance',
         'diff',
         'pack',
@@ -354,6 +357,7 @@ try {
         'max-runs',
         'expected-revision',
       ],
+      mcp: ['project', 'file', 'authorized', 'dry-run', 'id'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -972,6 +976,76 @@ try {
           process.off('SIGINT', stop);
           process.off('SIGTERM', stop);
         }
+      }
+    } else if (command === 'mcp') {
+      const action = extra[0];
+      if (
+        extra.length !== 1 ||
+        !action ||
+        !['preview', 'apply', 'remove', 'inspect', 'recover', 'health'].includes(action)
+      )
+        throw new Error(
+          'Usage: latchkit mcp <preview|apply|remove|inspect|recover|health> [options].',
+        );
+      const actionOptions: Record<string, string[]> = {
+        preview: ['file'],
+        apply: ['file', 'authorized', 'dry-run'],
+        remove: ['dry-run'],
+        inspect: [],
+        recover: ['dry-run'],
+        health: ['id'],
+      };
+      for (const option of Object.keys(values))
+        if (option !== 'project' && !actionOptions[action]!.includes(option))
+          throw new Error(`--${option} is not valid for mcp ${action}.`);
+      const managed = await import('./integrations/mcp/managed.js');
+      if (action === 'inspect') print(await managed.inspectManagedMcp(root));
+      else if (action === 'recover')
+        print(
+          await (values['dry-run']
+            ? managed.inspectManagedMcpRecovery(root)
+            : managed.recoverManagedMcp(root)),
+        );
+      else if (action === 'health') {
+        const { checkManagedMcpHealth } = await import('./integrations/mcp/health.js');
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        process.once('SIGINT', abort);
+        process.once('SIGTERM', abort);
+        try {
+          print(
+            await checkManagedMcpHealth(root, requiredOption(values.id, 'id'), {
+              signal: controller.signal,
+            }),
+          );
+        } finally {
+          process.removeListener('SIGINT', abort);
+          process.removeListener('SIGTERM', abort);
+        }
+      } else {
+        let definitions: unknown[] = [];
+        if (action !== 'remove') {
+          const bytes = await readFile(path.resolve(requiredOption(values.file, 'file')));
+          if (bytes.byteLength > 64 * 1024) throw new Error('MCP definition input exceeds 64 KiB.');
+          let input: unknown;
+          try {
+            input = JSON.parse(bytes.toString('utf8'));
+          } catch {
+            throw new Error('MCP input must be valid JSON.');
+          }
+          definitions = Array.isArray(input) ? input : [input];
+          if (definitions.length > 64) throw new Error('MCP input exceeds 64 definitions.');
+        }
+        const grants = managed.authorizeManagedMcp(
+          definitions,
+          action === 'apply' && values.authorized === true,
+        );
+        const result =
+          action === 'preview' || values['dry-run']
+            ? await managed.planManagedMcp(root, definitions, grants)
+            : await managed.applyManagedMcp(root, definitions, grants);
+        print(result);
+        if (result.diagnostics.length) process.exitCode = 1;
       }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);

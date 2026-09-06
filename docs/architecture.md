@@ -110,6 +110,14 @@ coverage. Live resume and hook integration remain unverified or unimplemented (i
 see the [Antigravity adapter](providers/antigravity.md). Issue #86 is a separate
 optional enhanced specs/tools/workers umbrella and remains outside this release scope.
 
+The optional [managed MCP slice](mcp-integrations.md) adds explicit CLI previews and
+transactional Claude project configuration. Activation binds a definition to the Latchkit
+provider contract, and the shared process runner rechecks managed entries before launch.
+Health uses a separately invoked, bounded loopback MCP handshake. Tool allowlists refuse
+activation until provider runtime enforcement exists; no MCP tool dispatch or server execution
+is added to the core workflow. Other provider serializers and real-provider qualification
+remain open parts of issue #19.
+
 The Cursor IDE adapter is the first editor-specific boundary. Its opt-in project hooks use native
 Cursor event names and a packaged, bounded Node handler; they do not create an editor session or a
 quality-gate service. Translation allowlists non-sensitive fields, records Agent/Tab/workspace
