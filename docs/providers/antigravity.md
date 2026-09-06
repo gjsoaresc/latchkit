@@ -2,7 +2,8 @@
 
 Latchkit exports shared workspace skills and plans bounded `agy -p` sessions.
 Authentication, model choice, workspace trust, and permissions remain owned by
-Antigravity. No provider settings or hooks are installed by this adapter.
+Antigravity. Hook registration is opt-in and project-local; it never changes a
+user's global `settings.json`.
 
 ## Explicit conversation resume
 
@@ -35,9 +36,27 @@ and the original authorization. No configuration or state migration is needed.
 
 ## Capability and verification limits
 
-Official documentation now describes hook input/output contracts, including CLI
-conversation metadata. Hook installation and lifecycle translation remain
-unimplemented here; compaction and normalized usage remain unknown. The
+When explicitly enabled through the adapter integration API, Latchkit writes
+only its `latchkit` namespace in `.agents/hooks.json`, plus an owned handler and
+ownership record under `.latchkit/providers/antigravity/`. It preserves all
+other hook namespaces and refuses removal if its own entries or handler were
+edited. Enable, disable, and recovery use the registered-resource transaction
+layer, so interrupted changes remain inspectable and recoverable.
+
+The documented CLI events are `PreToolUse`, `PostToolUse`, `PreInvocation`,
+`PostInvocation`, and `Stop`. The export deliberately registers only
+`PostToolUse`, whose documented empty response is advisory. The other events
+are omitted: their responses can control execution or have no evidenced,
+permission-preserving advisory response. This preserves Antigravity's native
+permission policy.
+
+The adapter can translate `Stop` into a normalized `turn-completed` lifecycle
+envelope when its owning application supplies project, task, and conversation
+correlation. The standalone project handler does not have that task context or
+start a dispatcher/daemon, so it validates bounded JSON and returns the
+documented advisory response; it does not claim to persist or dispatch lifecycle
+events on its own. Malformed payloads, unknown registered event names,
+unsupported decisions, and missing adapter correlation fields are refused. The
 [shared hooks documentation](https://antigravity.google/docs/hooks) is distinct
 from the IDE-specific hook contract.
 

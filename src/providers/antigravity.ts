@@ -1,8 +1,41 @@
-import { createProviderAdapter, validateCommandPlan } from './contracts.js';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import {
+  LIFECYCLE_ENVELOPE_VERSION,
+  ProviderContractError,
+  createProviderAdapter,
+  validateCommandPlan,
+  validateLifecycleEnvelope,
+} from './contracts.js';
+import {
+  applyRegisteredTransaction,
+  createResourceRegistry,
+  inspectTransaction,
+  recoverTransaction,
+} from '../installer/transactions.js';
+import { inspectProjectLock, removeProvenStaleLock, withProjectLock } from '../installer/lock.js';
+import { readOptional, resolveProjectRoot } from '../storage.js';
+import { quoteWindowsCommandArgument } from '../runtime/process-runner.js';
 
 const CLI_DOCS_URL = 'https://antigravity.google/docs/cli/overview';
 const HEADLESS_DOCS_URL = 'https://antigravity.google/docs/cli/headless/';
+const HOOK_DOCS_URL = 'https://antigravity.google/docs/hooks';
 export const ANTIGRAVITY_RESUME_VERSION = '1.1.27';
+export const ANTIGRAVITY_HOOKS_PATH = '.agents/hooks.json';
+export const ANTIGRAVITY_HANDLER_PATH = '.latchkit/providers/antigravity/hook-handler.cjs';
+export const ANTIGRAVITY_STATE_PATH = '.latchkit/providers/antigravity/ownership.json';
+export const ANTIGRAVITY_HOOK_EVENTS = Object.freeze(['PostToolUse']);
+export const ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS = Object.freeze([
+  'PreToolUse',
+  'PreInvocation',
+  'PostInvocation',
+  'Stop',
+]);
+const ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS = Object.freeze([
+  ...ANTIGRAVITY_HOOK_EVENTS,
+  ...ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS,
+]);
 const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 
 const evidence = (state: string, reason: string, evidenceUrl = CLI_DOCS_URL) => ({
@@ -28,15 +61,33 @@ const contract = {
       'Official documentation describes print mode (-p/--print) and machine-readable JSON output.',
       HEADLESS_DOCS_URL,
     ),
-    hooks: {},
+    hooks: {
+      ...Object.fromEntries(
+        ANTIGRAVITY_HOOK_EVENTS.map((event) => [
+          event,
+          evidence('supported', `Antigravity CLI documents the ${event} hook.`, HOOK_DOCS_URL),
+        ]),
+      ),
+      ...Object.fromEntries(
+        ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS.map((event) => [
+          event,
+          evidence(
+            'unsupported',
+            `${event} requires an output decision or has no permission-preserving advisory response evidence.`,
+            HOOK_DOCS_URL,
+          ),
+        ]),
+      ),
+    },
     decisions: {
       blocking: evidence(
         'unknown',
-        'Documented Antigravity hooks are not implemented by this adapter.',
+        'The documented hook output contract does not establish a blocking response for this adapter.',
       ),
       advisory: evidence(
-        'unknown',
-        'Documented Antigravity hooks are not implemented by this adapter.',
+        'supported',
+        'Documented command hooks can observe CLI lifecycle events without an enforcement claim.',
+        HOOK_DOCS_URL,
       ),
     },
     compaction: evidence(
@@ -232,17 +283,277 @@ export function parseAntigravitySessionIdentity(
   return envelope.conversation_id;
 }
 
-function unsupported(name: string) {
-  return () => ({
-    supported: false,
-    reason: `This adapter does not implement Antigravity ${name} integration.`,
+const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+const text = (value: unknown, field: string) => {
+  if (typeof value !== 'string' || !value.trim() || value.length > 1024)
+    throw new ProviderContractError(`Expected bounded ${field}.`, `$.${field}`);
+  return value;
+};
+
+type HookDocument = Record<string, unknown>;
+type Ownership = {
+  schemaVersion: 1;
+  command: string;
+  handlerSha256: string;
+  entries: Record<string, string>;
+};
+const hookEntry = (command: string) => ({ type: 'command', command, timeout: 10 });
+const invocationEntry = (command: string) => ({ type: 'command', command, timeout: 10 });
+
+function quoteToken(value: string, platform: NodeJS.Platform = process.platform) {
+  if (!value || /[\r\n\0]/.test(value)) throw new Error('Unsafe Antigravity hook command token.');
+  return platform === 'win32'
+    ? quoteWindowsCommandArgument(value)
+    : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function antigravityHookCommand(
+  nodeExecutable = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+) {
+  return `${quoteToken(nodeExecutable, platform)} ${quoteToken(ANTIGRAVITY_HANDLER_PATH, platform)}`;
+}
+
+function parseHooks(raw: string | null): HookDocument {
+  if (raw === null) return {};
+  let document: unknown;
+  try {
+    document = JSON.parse(raw);
+  } catch {
+    throw new Error(`Invalid ${ANTIGRAVITY_HOOKS_PATH}.`);
+  }
+  if (!isRecord(document)) throw new Error(`${ANTIGRAVITY_HOOKS_PATH} must contain an object.`);
+  return structuredClone(document);
+}
+
+function entriesFor(event: string, command: string) {
+  const eventCommand = `${command} --event ${event}`;
+  return event === 'PostToolUse'
+    ? [{ matcher: '*', hooks: [hookEntry(eventCommand)] }]
+    : [invocationEntry(eventCommand)];
+}
+
+export function mergeAntigravityHooks(raw: string | null, command: string): string {
+  const document = parseHooks(raw);
+  if (document.latchkit !== undefined && !isRecord(document.latchkit))
+    throw new Error('The Latchkit Antigravity hook namespace has an unsupported shape.');
+  const namespace = isRecord(document.latchkit) ? structuredClone(document.latchkit) : {};
+  for (const event of ANTIGRAVITY_HOOK_EVENTS) namespace[event] = entriesFor(event, command);
+  document.latchkit = namespace;
+  return `${JSON.stringify(document, null, 2)}\n`;
+}
+
+function removeAntigravityHooks(raw: string | null, ownership: Ownership): string | null {
+  if (raw === null) throw new Error('Owned Antigravity hooks are missing.');
+  const document = parseHooks(raw);
+  if (!isRecord(document.latchkit)) throw new Error('Owned Antigravity hooks are missing.');
+  const namespace = structuredClone(document.latchkit);
+  for (const event of ANTIGRAVITY_HOOK_EVENTS) {
+    const actual = namespace[event];
+    if (digest(JSON.stringify(actual)) !== ownership.entries[event])
+      throw new Error(`Owned Antigravity hook ${event} has local edits or is missing.`);
+    delete namespace[event];
+  }
+  if (Object.keys(namespace).length) document.latchkit = namespace;
+  else delete document.latchkit;
+  return Object.keys(document).length ? `${JSON.stringify(document, null, 2)}\n` : null;
+}
+
+async function hookSource() {
+  return readFile(fileURLToPath(new URL('./antigravity-hook.cjs', import.meta.url)), 'utf8');
+}
+
+export async function planAntigravityHookExport(
+  root: string,
+  options: { enabled?: boolean; nodeExecutable?: string; platform?: NodeJS.Platform } = {},
+) {
+  root = await resolveProjectRoot(root);
+  const currentHooks = await readOptional(root, ANTIGRAVITY_HOOKS_PATH);
+  const currentHandler = await readOptional(root, ANTIGRAVITY_HANDLER_PATH);
+  const rawState = await readOptional(root, ANTIGRAVITY_STATE_PATH);
+  let ownership: Ownership | null = null;
+  if (rawState !== null) {
+    try {
+      ownership = JSON.parse(rawState) as Ownership;
+    } catch {
+      throw new Error('Invalid Antigravity ownership record.');
+    }
+  }
+  if (options.enabled !== true && !ownership) return { configured: false, changes: [] };
+  const source = await hookSource();
+  if (ownership && (currentHandler === null || digest(currentHandler) !== ownership.handlerSha256))
+    throw new Error('Owned Antigravity handler has local edits or is missing.');
+  const command = antigravityHookCommand(options.nodeExecutable, options.platform);
+  const nextHooks =
+    options.enabled === true
+      ? mergeAntigravityHooks(
+          ownership ? removeAntigravityHooks(currentHooks, ownership) : currentHooks,
+          command,
+        )
+      : removeAntigravityHooks(currentHooks, ownership!);
+  const nextHandler = options.enabled === true ? source : null;
+  const nextState =
+    options.enabled === true
+      ? `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            command,
+            handlerSha256: digest(source),
+            entries: Object.fromEntries(
+              ANTIGRAVITY_HOOK_EVENTS.map((event) => [
+                event,
+                digest(JSON.stringify(entriesFor(event, command))),
+              ]),
+            ),
+          },
+          null,
+          2,
+        )}\n`
+      : null;
+  return {
+    configured: options.enabled === true,
+    backup:
+      currentHooks !== null && currentHooks !== nextHooks
+        ? { bytes: currentHooks, protected: true, sha256: digest(currentHooks) }
+        : null,
+    changes: [
+      [ANTIGRAVITY_HOOKS_PATH, currentHooks, nextHooks],
+      [ANTIGRAVITY_HANDLER_PATH, currentHandler, nextHandler],
+      [ANTIGRAVITY_STATE_PATH, rawState, nextState],
+    ]
+      .filter(([, before, after]) => before !== after)
+      .map(([resourcePath, before, bytes]) => ({
+        resourceId: `provider:antigravity:${resourcePath}`,
+        path: resourcePath,
+        action: bytes === null ? 'remove' : before === null ? 'create' : 'update',
+        bytes,
+      })),
+  };
+}
+
+export function antigravityResourceRegistry() {
+  return createResourceRegistry(
+    [ANTIGRAVITY_HOOKS_PATH, ANTIGRAVITY_HANDLER_PATH, ANTIGRAVITY_STATE_PATH].map((path) => ({
+      id: `provider:antigravity:${path}`,
+      path,
+    })),
+  );
+}
+
+export async function applyAntigravityHookExport(
+  root: string,
+  options: {
+    enabled?: boolean;
+    nodeExecutable?: string;
+    platform?: NodeJS.Platform;
+    faultBoundary?: (boundary: string) => Promise<void>;
+  } = {},
+) {
+  root = await resolveProjectRoot(root);
+  return withProjectLock(root, async () => {
+    const plan = await planAntigravityHookExport(root, options);
+    if (!plan.changes.length) return plan;
+    const manifest =
+      (await readOptional(root, '.latchkit/manifest.json')) ??
+      `${JSON.stringify({ schemaVersion: 3, files: {}, packs: [], sections: {} }, null, 2)}\n`;
+    await applyRegisteredTransaction(root, {
+      operation: options.enabled === true ? 'antigravity-hook-enable' : 'antigravity-hook-disable',
+      registry: antigravityResourceRegistry(),
+      changes: plan.changes.map(({ resourceId, bytes }) => ({ resourceId, bytes: bytes ?? null })),
+      manifest,
+      faultBoundary: options.faultBoundary,
+    });
+    return plan;
   });
+}
+
+export async function inspectAntigravityRecovery(root: string) {
+  return inspectTransaction(await resolveProjectRoot(root), antigravityResourceRegistry());
+}
+export async function recoverAntigravityIntegration(root: string) {
+  root = await resolveProjectRoot(root);
+  const lock = await inspectProjectLock(root);
+  if (lock.state === 'live' || lock.state === 'invalid')
+    throw new Error('Antigravity recovery is blocked by the project lock.');
+  if (lock.state === 'stale') await removeProvenStaleLock(root, lock);
+  return recoverTransaction(root, antigravityResourceRegistry());
+}
+
+export function translateAntigravityLifecycleInput(
+  input: unknown,
+  context: {
+    eventName?: unknown;
+    projectId?: unknown;
+    taskId?: unknown;
+    sessionId?: unknown;
+    version?: unknown;
+    timestamp?: number;
+  } = {},
+) {
+  if (!isRecord(input)) throw new ProviderContractError('Expected Antigravity hook payload.');
+  const event = text(context.eventName, 'eventName');
+  if (
+    !ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS.includes(
+      event as (typeof ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS)[number],
+    )
+  )
+    throw new ProviderContractError('Unsupported Antigravity hook event.', '$.eventName');
+  if (event === 'PostToolUse') {
+    if (!isRecord(input.toolCall))
+      throw new ProviderContractError('PostToolUse requires a toolCall object.', '$.toolCall');
+    if (!Number.isInteger(input.stepIdx) || (input.stepIdx as number) < 0)
+      throw new ProviderContractError('PostToolUse requires a non-negative stepIdx.', '$.stepIdx');
+  }
+  const kind = event === 'Stop' ? 'turn-completed' : null;
+  if (!kind) return { accepted: true, event, envelope: null };
+  const sessionId = text(context.sessionId ?? input.conversationId, 'sessionId');
+  return {
+    accepted: true,
+    event,
+    envelope: validateLifecycleEnvelope({
+      schemaVersion: LIFECYCLE_ENVELOPE_VERSION,
+      provider: {
+        id: 'antigravity',
+        version: text(context.version ?? 'unknown', 'version'),
+        runtime: 'cli',
+      },
+      correlation: {
+        projectId: text(context.projectId, 'projectId'),
+        taskId: text(context.taskId, 'taskId'),
+        sessionId,
+      },
+      eventId: `${sessionId}:${event}:${context.timestamp ?? Date.now()}`,
+      timestamp: context.timestamp ?? Date.now(),
+      kind,
+      payload: { antigravityEvent: event },
+      decisionModes: ['advisory'],
+    }),
+  };
+}
+
+export function translateAntigravityLifecycleOutput(
+  event: unknown,
+  result: { decision?: unknown } = {},
+) {
+  if (event !== 'PostToolUse')
+    throw new ProviderContractError('Unsupported Antigravity hook event.', '$.event');
+  if (result.decision === undefined || result.decision === 'advisory') return {};
+  throw new ProviderContractError(
+    'Antigravity hook decisions are not supported by the documented adapter contract.',
+    '$.result',
+  );
 }
 
 export function createAntigravityAdapter() {
   return createProviderAdapter(contract, {
     inspect: inspectAntigravity,
-    planInstall: unsupported('project hook/settings'),
+    planInstall: (options = {}) =>
+      planAntigravityHookExport(
+        String((options as { root?: string }).root ?? process.cwd()),
+        options,
+      ),
     planSkillExport: ({ skills = [] } = {}) => ({
       provider: 'antigravity',
       directory: '.agents/skills',
@@ -255,8 +566,8 @@ export function createAntigravityAdapter() {
     }),
     planInvocation: planAntigravityInvocation,
     planResume: planAntigravityResume,
-    translateLifecycleInput: unsupported('lifecycle events'),
-    translateLifecycleOutput: unsupported('lifecycle events'),
+    translateLifecycleInput: translateAntigravityLifecycleInput,
+    translateLifecycleOutput: translateAntigravityLifecycleOutput,
     planUsage: () => ({
       state: 'unknown',
       reason: 'Antigravity usage fields are not normalized by this adapter.',
