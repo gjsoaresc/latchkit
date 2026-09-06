@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, mkdir, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, mkdir, symlink, realpath } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -158,7 +158,8 @@ test('timeout, pause/edit/resume/remove, and bounded history remain inspectable'
   await until(
     async () => (await inspectSchedule(root, schedule.id, { clock })).runs[0].state !== 'running',
   );
-  assert.equal((await inspectSchedule(root, schedule.id, { clock })).runs[0].state, 'timed-out');
+  const timedOut = (await inspectSchedule(root, schedule.id, { clock })).runs[0];
+  assert.equal(timedOut.state, 'timed-out', JSON.stringify(timedOut.result));
   await pauseSchedule(root, schedule.id, { clock });
   const edited = await editSchedule(
     root,
@@ -184,6 +185,52 @@ test('editing executable scope invalidates the prior execution authorization', a
     { clock },
   );
   assert.equal(edited.authorization.executionAuthorized, false);
+});
+
+test(
+  'editing through a Windows path spelling alias preserves the canonical authorized target',
+  {
+    skip: process.platform !== 'win32' ? 'Windows drive-letter spelling regression.' : false,
+  },
+  async (t) => {
+    const { root, clock } = await fixture(t);
+    const canonical = await realpath(root);
+    const alias = `${canonical[0] === canonical[0].toLowerCase() ? canonical[0].toUpperCase() : canonical[0].toLowerCase()}${canonical.slice(1)}`;
+    assert.notEqual(alias, canonical);
+    assert.equal(await realpath(alias), canonical);
+    const original = await add(alias, clock);
+    assert.equal(original.targetProject, canonical);
+    const edited = await editSchedule(alias, original.id, { everyMinutes: 30 }, { clock });
+    assert.equal(edited.targetProject, canonical);
+    assert.equal(edited.authorization.executionAuthorized, false);
+    await resumeSchedule(alias, original.id, { clock });
+    assert.equal((await listSchedules(alias)).schedules[0].targetProject, canonical);
+    assert.equal((await exportSchedules(alias)).schedules[0].targetProject, canonical);
+    assert.equal((await removeSchedule(alias, original.id)).removed.id, original.id);
+  },
+);
+
+test('blocked scheduled execution retains an allowlisted error code without raw error data', async (t) => {
+  for (const code of ['EPERM', 'test-only-secret-value']) {
+    const { root, clock, setTime } = await fixture(t);
+    const scheduled = await add(root, clock);
+    setTime('2026-03-08T07:30:00.000Z');
+    const scheduler = createForegroundScheduler({
+      root,
+      clock,
+      runner: async () => {
+        throw Object.assign(new Error('test-only-secret-value'), { code });
+      },
+    });
+    await scheduler.tick();
+    await until(
+      async () => (await inspectSchedule(root, scheduled.id)).runs[0].state === 'blocked',
+    );
+    await scheduler.stop();
+    const run = (await inspectSchedule(root, scheduled.id)).runs[0];
+    assert.equal(run.result.code, code === 'EPERM' ? 'EPERM' : 'SCHEDULE_EXECUTION_FAILED');
+    assert.equal(JSON.stringify(run).includes('test-only-secret-value'), false);
+  }
 });
 
 test('resume and recovery cannot erase another live foreground run', async (t) => {
@@ -324,10 +371,16 @@ test('timeout reaches the owned process runner and stop drains it before releasi
       }),
   });
   await scheduler.tick();
-  await until(async () => (await inspectSchedule(root, schedule.id)).runs[0].state === 'timed-out');
+  await until(async () => (await inspectSchedule(root, schedule.id)).runs[0].state !== 'running');
+  const timedOut = (await inspectSchedule(root, schedule.id)).runs[0];
+  assert.equal(timedOut.state, 'timed-out', JSON.stringify(timedOut.result));
   setTime('2026-03-08T08:30:00.000Z');
-  await scheduler.tick();
-  await until(() => launches === 2);
+  // Terminal state can become visible before the owned promise releases its
+  // overlap guard. Exercise the foreground polling contract until that drain ends.
+  await until(async () => {
+    await scheduler.tick();
+    return launches === 2;
+  });
   await scheduler.stop();
   const state = await inspectSchedule(root, schedule.id);
   assert.equal(state.runs.at(-1).state, 'cancelled');

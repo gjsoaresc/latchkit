@@ -3,6 +3,37 @@ import { createHash } from 'node:crypto';
 export const SCHEDULE_PATH = '.latchkit/schedules/state-v1.json';
 export const SCHEDULE_SCHEMA_VERSION = 1;
 export const MAX_SCHEDULE_BYTES = 4 * 1024 * 1024;
+export const SCHEDULE_FAILURE_CODES = [
+  'EPERM',
+  'EACCES',
+  'ENOENT',
+  'ENOTEMPTY',
+  'EBUSY',
+  'ENOSPC',
+  'EROFS',
+  'EMFILE',
+  'ENFILE',
+  'TASK_STATE_BUSY',
+  'TASK_STATE_LOCK_AMBIGUOUS',
+  'TASK_STATE_LOCK_INVALID',
+  'TASK_REVISION_CONFLICT',
+  'TASK_OWNERSHIP_CONFLICT',
+  'TASK_EXECUTION_BUSY',
+  'TASK_AUTHORIZATION_REQUIRED',
+  'TASK_TRANSITION_INVALID',
+  'TASK_NOT_FOUND',
+  'PROVIDER_UNAVAILABLE',
+  'CAPABILITY_UNAVAILABLE',
+  'EXECUTION_PROFILE_UNAVAILABLE',
+  'EXECUTION_AUTHORIZATION_REQUIRED',
+  'PROVIDER_CONTRACT_INVALID',
+  'SCHEDULE_EXECUTION_FAILED',
+] as const;
+type ScheduleFailureCode = (typeof SCHEDULE_FAILURE_CODES)[number];
+export function scheduleFailureCode(error: unknown): ScheduleFailureCode {
+  const code = (error as { code?: unknown } | null)?.code;
+  return SCHEDULE_FAILURE_CODES.find((allowed) => allowed === code) ?? 'SCHEDULE_EXECUTION_FAILED';
+}
 export type ScheduleRun = {
   id: string;
   taskId: string | null;
@@ -19,7 +50,12 @@ export type ScheduleRun = {
   startedAt: string;
   endedAt: string | null;
   reason: string | null;
-  result: { status: string; exitCode: number | null; outputBytes: number } | null;
+  result: {
+    status: string;
+    exitCode: number | null;
+    outputBytes: number;
+    code?: ScheduleFailureCode;
+  } | null;
 };
 export type Schedule = {
   id: string;
@@ -125,7 +161,17 @@ function validateRun(run: ScheduleRun, path: string) {
   if (run.endedAt !== null) iso(run.endedAt, `${path}.endedAt`);
   if (run.reason !== null) text(run.reason, `${path}.reason`);
   if (run.result !== null) {
-    fields(run.result, ['status', 'exitCode', 'outputBytes'], `${path}.result`);
+    fields(
+      run.result,
+      ['status', 'exitCode', 'outputBytes', ...(Object.hasOwn(run.result, 'code') ? ['code'] : [])],
+      `${path}.result`,
+    );
+    if (Object.hasOwn(run.result, 'code') && !SCHEDULE_FAILURE_CODES.includes(run.result.code!))
+      throw new SchedulerError(
+        'Unknown execution failure code.',
+        'SCHEDULER_INVALID',
+        `${path}.result.code`,
+      );
     text(run.result.status, `${path}.result.status`);
     if (run.result.exitCode !== null && !Number.isSafeInteger(run.result.exitCode))
       throw new SchedulerError(

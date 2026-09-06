@@ -13,7 +13,12 @@ import type { ProcessRunResult } from '../runtime/process-runner.js';
 import { createTaskController } from '../runtime/task-controller.js';
 import { createTask } from '../task-state/service.js';
 import { resolveProjectRoot, safePath } from '../storage.js';
-import { SchedulerError, scheduleDefinitionDigest, validateSchedulerState } from './contracts.js';
+import {
+  SchedulerError,
+  scheduleDefinitionDigest,
+  scheduleFailureCode,
+  validateSchedulerState,
+} from './contracts.js';
 import type { Schedule, ScheduleRun, SchedulerState } from './contracts.js';
 import { readSchedulerState, writeSchedulerState } from './store.js';
 
@@ -164,7 +169,9 @@ export async function editSchedule(
     if (current.runs.some((run) => run.state === 'running'))
       throw new SchedulerError('Cannot edit a running schedule.', 'SCHEDULE_RUN_ACTIVE', '$.id');
     const replacement = validateInput(
-      root,
+      // The target is not editable. Reuse the canonical identity already checked
+      // by readSchedulerState, even when the caller used a Windows path alias.
+      current.targetProject,
       {
         timezone: patch.timezone ?? current.timezone,
         everyMinutes: patch.everyMinutes ?? current.everyMinutes,
@@ -389,14 +396,16 @@ export function createForegroundScheduler({
                 ? 'blocked'
                 : 'failed';
       run.endedAt = now(clock);
-      run.reason =
-        run.state === 'blocked'
+      run.reason = result.code
+        ? `Scheduled execution ended with ${scheduleFailureCode(result)}; inspect the linked task before resuming.`
+        : run.state === 'blocked'
           ? 'Provider session did not produce verified task evidence; inspect the linked task before resuming.'
           : `Owned process ended with ${result.status}.`;
       run.result = {
         status: result.status,
         exitCode: result.exitCode ?? null,
         outputBytes: result.outputBytes ?? 0,
+        ...(result.code ? { code: scheduleFailureCode(result) } : {}),
       };
       item.updatedAt = now(clock);
       if (run.state === 'blocked' || run.state === 'failed') item.enabled = false;
@@ -538,12 +547,15 @@ export function createForegroundScheduler({
           taskId: task.id,
           reason: 'Scheduled cancellation won the completion race.',
         });
-    } catch {
+    } catch (error) {
       if (taskId && abort.signal.aborted)
         await controller
           .cancel({ taskId, reason: 'Scheduled run cancelled before launch.' })
           .catch(() => {});
-      await finish(item.id, run.id, { status: abort.signal.aborted ? 'cancelled' : 'refused' });
+      await finish(item.id, run.id, {
+        status: abort.signal.aborted ? 'cancelled' : 'refused',
+        code: scheduleFailureCode(error),
+      });
     } finally {
       if (cancellationPoll) clearInterval(cancellationPoll);
     }

@@ -265,6 +265,34 @@
                         "outputBytes"
                       ],
                       "properties": {
+                        "code": {
+                          "enum": [
+                            "EPERM",
+                            "EACCES",
+                            "ENOENT",
+                            "ENOTEMPTY",
+                            "EBUSY",
+                            "ENOSPC",
+                            "EROFS",
+                            "EMFILE",
+                            "ENFILE",
+                            "TASK_STATE_BUSY",
+                            "TASK_STATE_LOCK_AMBIGUOUS",
+                            "TASK_STATE_LOCK_INVALID",
+                            "TASK_REVISION_CONFLICT",
+                            "TASK_OWNERSHIP_CONFLICT",
+                            "TASK_EXECUTION_BUSY",
+                            "TASK_AUTHORIZATION_REQUIRED",
+                            "TASK_TRANSITION_INVALID",
+                            "TASK_NOT_FOUND",
+                            "PROVIDER_UNAVAILABLE",
+                            "CAPABILITY_UNAVAILABLE",
+                            "EXECUTION_PROFILE_UNAVAILABLE",
+                            "EXECUTION_AUTHORIZATION_REQUIRED",
+                            "PROVIDER_CONTRACT_INVALID",
+                            "SCHEDULE_EXECUTION_FAILED"
+                          ]
+                        },
                         "status": {
                           "type": "string",
                           "minLength": 1,
