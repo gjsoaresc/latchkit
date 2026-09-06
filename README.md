@@ -29,21 +29,18 @@ npm install --global latchkit
 latchkit --version
 ```
 
-For the current alpha, or when the package is not available from your registry, run these commands from PowerShell, Terminal, or a Linux shell:
+Then run these commands from your project directory:
 
 ```sh
-git clone https://github.com/gjsoaresc/latchkit.git
-cd latchkit
-npm ci
-node src/cli.js init --project "path/to/your/project"
-node src/cli.js sync --project "path/to/your/project" --dry-run
-node src/cli.js sync --project "path/to/your/project"
-node src/cli.js ui --project "path/to/your/project"
+latchkit init
+latchkit sync --dry-run
+latchkit sync
+latchkit ui
 ```
 
-Replace the example path with an existing project directory. Open the local URL printed by `ui`. The console can select providers and skills, save configuration, preview changes, and apply them. Stop it with Ctrl+C.
+Open the local URL printed by `latchkit ui`. The console can select providers and skills, save configuration, preview changes, and apply them. Stop it with Ctrl+C.
 
-For a command available from any directory in a source checkout, run `npm link` in the clone, then use `latchkit init`, `latchkit sync`, and `latchkit ui` in your project. See the [clean-machine quickstart](docs/getting-started.md) for package, native OS, and WSL paths.
+See the [clean-machine quickstart](docs/getting-started.md) for package, native OS, and WSL paths.
 
 No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. Run Node inside WSL when you want a WSL environment. Install and authenticate your chosen coding tool separately.
 
