@@ -18,6 +18,27 @@ The persisted authorization digest binds the provider, instructions, target, rec
 
 Native Windows smoke uses PowerShell with a project path containing spaces and no administrator rights: `latchkit schedule create --project "C:\work\my project" --provider codex --prompt "Inspect current diagnostics" --scope "Read project diagnostics" --reference "Explicit local test" --every-minutes 1`, followed by `latchkit schedule start --project "C:\work\my project"`. Without `--host-local-authorized`, inspect the one blocked record and verify that no provider starts. In another terminal exercise `schedule inspect`, `pause`, `edit`, `resume`, `cancel`, and `export`, each with `--project` and the schedule `--id` where applicable. Add explicit host-local authorization only when a real provider run is intended and authorized.
 
+The emitted native CLI uses a one-second foreground poll interval so an explicit
+`schedule start` reaches near-term due work promptly; the scheduler service API
+retains its conservative 30-second default for direct callers. On Windows 11
+native Node 26.8.1, the focused regression `node --import ./test/env.js --test
+--test-timeout=120000 test/scheduled-work.test.js` exercises create, list,
+inspect, pause, edit, resume, export, start, cancel, and remove in a disposable
+project path containing spaces and `é`. The same run verifies that a schedule
+without host-local authorization records `blocked` and does not launch the
+provider. Existing neighboring coverage exercises owned-child cancellation via
+an independent CLI process and verifies retained cancelled task evidence. This
+is credential-free state qualification only; it does not qualify a real
+provider session, unattended approval behavior, or non-Windows execution.
+
+Follow-up validation on 2026-09-07 used Node 26.8.1 on native Windows 11:
+`npm ci` completed with zero reported vulnerabilities, `npm run check` passed,
+and the focused scheduler file passed all 18 tests, including the new emitted
+CLI case. A repository-wide `npm test` run was started but stopped after the
+long installer/update cells stopped producing progress; it is not reported as
+passed by this change. No provider account, real model session, or paid run was
+used.
+
 Linux/macOS use the same foreground commands with a native path containing spaces. WSL is a separate Linux process and must use its own native project/state; copying or sharing a Windows schedule target is refused. It cannot adopt or cancel Windows ownership. These non-Windows procedures have not been executed in this change. Credential-free native Windows tests exercise actual child termination, a separate CLI cancellation process, duplicate ownership, killed-owner recovery, and directory junction refusal. They do not establish real-provider unattended approval behavior or production release qualification.
 
 Review validation on Windows 11 x64 (`10.0.26200`): `npm ci` completed with zero reported vulnerabilities; `npm run check` passed; `npm test` passed 248 tests with three pre-existing file-symlink capability skips (251 total), using Node.js 26.8.1. The strengthened `node --test test/scheduled-work.test.js` passed all 14 tests under both Node.js 26.8.1 and Node.js 22.23.2. Four new regression tests were observed failing against the initial scheduler implementation before the safety fixes. No provider account, model session, service installation, or non-Windows qualification was involved.

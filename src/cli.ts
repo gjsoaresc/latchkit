@@ -1684,7 +1684,10 @@ try {
         print(await cancelScheduleRun(root, requiredOption(values.id, 'id')));
       else {
         const scheduler = createForegroundScheduler({ root });
-        await scheduler.start();
+        // The CLI is an explicit foreground process; poll promptly so a
+        // near-term schedule does not appear idle for the 30-second service
+        // default while still keeping the service API's conservative default.
+        await scheduler.start(1_000);
         console.log('Foreground scheduler running. Ctrl+C to stop.');
         const stop = () => {
           void scheduler.stop().catch(() => {});
