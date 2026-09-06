@@ -1478,3 +1478,90 @@ html.dark .footer-brand,
 html.dark .footer-right {
   color: var(--muted);
 }
+
+.fcc-card {
+  padding: 20px;
+}
+
+.fcc-status,
+.fcc-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fcc-status {
+  justify-content: space-between;
+}
+
+.fcc-status strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+}
+
+.fcc-state {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.fcc-state.is-running {
+  border-color: #5c9a73;
+  color: #21643f;
+}
+
+.fcc-card > .section-note {
+  margin: 15px 0 0;
+}
+
+.fcc-error {
+  margin: 14px 0 0;
+  color: var(--destructive);
+  font-size: 13px;
+}
+
+.fcc-actions {
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.fcc-guide {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #405c50;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fcc-guide svg {
+  width: 13px;
+}
+
+html.dark .fcc-guide {
+  color: var(--accent-foreground);
+}
+
+html.dark .fcc-state.is-running {
+  border-color: #6baf7d;
+  color: #a9d2a9;
+}
+
+@media (max-width: 600px) {
+  .fcc-card {
+    padding: 16px;
+  }
+
+  .fcc-actions {
+    align-items: stretch;
+  }
+
+  .fcc-actions [data-slot='button'] {
+    flex: 1 1 140px;
+  }
+}

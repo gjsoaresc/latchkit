@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowUpRight, CheckCircle2, CircleDot, ExternalLink, RefreshCw, Save } from 'lucide-react';
 import { createConsoleStore } from './console-store.js';
+import { FccConsole } from './fcc.js';
 import { exportMemory, MemoryConsole } from './memory.js';
 import { ThemeToggle } from './theme.js';
 import { UsageConsole } from './usage.js';
@@ -316,6 +317,7 @@ function Console() {
           </div>
         )}
         <Summary state={state} />
+        <FccConsole />
         <section id="configuration" className="config-section" aria-labelledby="providers-heading">
           <div className="section-heading">
             <div>
