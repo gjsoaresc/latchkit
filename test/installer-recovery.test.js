@@ -315,6 +315,38 @@ test('registered provider configuration uses the same bounded recovery engine', 
   assert.equal((await inspectTransaction(root, registry)).state, 'none');
 });
 
+test('a multi-resource transaction commits every durable resource without a diagnostic boundary', async (t) => {
+  const root = await temporaryProject(t);
+  const changes = Array.from({ length: 33 }, (_, index) => ({
+    resourceId: `provider:batch-${index}`,
+    bytes: `batch ${index}\n`,
+  }));
+  const registry = createResourceRegistry(
+    changes.map((change, index) => ({
+      id: change.resourceId,
+      path: `.provider/batch/${index}.txt`,
+    })),
+  );
+
+  await withProjectLock(root, () =>
+    applyRegisteredTransaction(root, {
+      operation: 'batch-fixture',
+      registry,
+      changes,
+      manifest: '{"batch-fixture":"after"}\n',
+    }),
+  );
+
+  await Promise.all(
+    changes.map((change, index) =>
+      fs
+        .readFile(path.join(root, '.provider', 'batch', `${index}.txt`), 'utf8')
+        .then((content) => assert.equal(content, change.bytes)),
+    ),
+  );
+  assert.equal((await inspectTransaction(root, registry)).state, 'none');
+});
+
 test('a killed provider configuration update restores unrelated user settings exactly', async (t) => {
   const root = await temporaryProject(t);
   const registry = createResourceRegistry([

@@ -20,6 +20,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const nodePath = process.execPath;
 const output = path.join(root, '.github', 'release-evidence', 'rc2', 'benchmarks-windows.json');
+const profileSync = process.argv.includes('--profile-sync');
 const packs = 1_000;
 const memories = 10_000;
 const diffFiles = 300;
@@ -119,9 +120,34 @@ async function largePackSync(packRoot) {
       ],
     });
     return measure(async () => {
-      const result = await syncProject(project);
+      const started = process.hrtime.bigint();
+      const profile = {
+        journalMs: null,
+        firstResourceMs: null,
+        lastResourceMs: null,
+        manifestMs: null,
+        resourceCount: 0,
+      };
+      const result = await syncProject(
+        project,
+        profileSync
+          ? {
+              faultBoundary: (boundary, journal) => {
+                const elapsed = toMilliseconds(started);
+                if (boundary === 'journal') {
+                  profile.journalMs = elapsed;
+                  profile.resourceCount = journal.resources.length;
+                } else if (boundary === 'resource:0') profile.firstResourceMs = elapsed;
+                else if (boundary === `resource:${profile.resourceCount - 1}`)
+                  profile.lastResourceMs = elapsed;
+                else if (boundary === 'manifest') profile.manifestMs = elapsed;
+              },
+            }
+          : undefined,
+      );
       return {
         installedFiles: result.changes.filter((change) => change.action === 'create').length,
+        ...(profileSync ? { syncProfile: profile } : {}),
       };
     });
   });
@@ -259,7 +285,7 @@ async function main() {
       startup:
         'Fresh Node child imports the emitted CLI with --version and emits post-operation memory measurements.',
       largePackSync:
-        'Each sample creates a fresh initialized project and synchronizes one validated local pack containing 1,000 synthetic portable skill files.',
+        'Each sample creates a fresh initialized project and synchronizes one validated local pack containing 1,000 synthetic portable skill files. --profile-sync records journal and ordered-resource boundary times; it intentionally preserves ordered resource writes for that diagnostic run.',
       memorySearch:
         'Each sample writes a validated project-memory state with 10,000 synthetic records, then measures searchProjectMemory only.',
       diff: 'Each sample creates a temporary Git repository, records an owned task, creates an isolated worktree, changes 300 tracked files, then measures inspectDiff only.',
