@@ -201,16 +201,28 @@ test('MCP API preview is inert, apply requires the exact reviewed preview, and C
     }),
   });
   assert.equal(stale.status, 409);
-  const unsupported = await fetch(`${origin}/api/mcp/preview`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      definitions: [{ ...definition, providers: ['codex'] }],
-      reviewActivation: true,
-    }),
-  });
-  assert.equal(unsupported.status, 200);
-  assert.notEqual((await unsupported.json()).plan.diagnostics[0]?.code, 'MCP_PROVIDER_UNSUPPORTED');
+  const isolatedPath = await mkdtemp(path.join(os.tmpdir(), 'latchkit-no-codex-'));
+  t.after(() => rm(isolatedPath, { recursive: true, force: true }));
+  const pathEntries = Object.entries(process.env).filter(([key]) => key.toUpperCase() === 'PATH');
+  const pathKeys = pathEntries.length ? pathEntries.map(([key]) => key) : ['PATH'];
+  let unsupported;
+  try {
+    for (const key of pathKeys) process.env[key] = isolatedPath;
+    unsupported = await fetch(`${origin}/api/mcp/preview`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        definitions: [{ ...definition, providers: ['codex'] }],
+        reviewActivation: true,
+      }),
+    });
+  } finally {
+    for (const [key, value] of pathEntries) process.env[key] = value;
+    if (!pathEntries.length) delete process.env.PATH;
+  }
+  assert.equal(unsupported.status, 400);
+  const unsupportedBody = await unsupported.json();
+  assert.equal(unsupportedBody.code, 'MCP_RUNTIME_DENIED');
 });
 
 test('MCP apply refuses stale managed state and a preview that did not review activation', async (t) => {
