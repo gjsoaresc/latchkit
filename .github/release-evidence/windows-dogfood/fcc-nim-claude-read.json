@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcc-nim-claude-read-qualification",
+  "observedAt": "2026-09-06T17:09:19.780Z",
+  "platform": "win32",
+  "release": "10.0.26200",
+  "node": "v24.20.0",
+  "installedLatchkit": {
+    "version": "1.0.0-dogfood.20260906.3",
+    "commit": "d6ee85d8aff58c3159aaaca2b5aa7c83f8dcc509"
+  },
+  "claudeVersion": "2.1.258",
+  "fccVersion": "5.22.8",
+  "routedModel": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+  "requestedClaudeAlias": "haiku",
+  "invocationId": "fcc-nim-read-1788714559780",
+  "bounds": {
+    "processDeadlineMs": 60000,
+    "outputBytes": 262144,
+    "maxAgentTurns": 3,
+    "requestedMaxOutputTokens": 512,
+    "requestedClientRetries": 0,
+    "modelFallbacks": 0
+  },
+  "authorization": "Existing user authorization for FCC/NIM testing and independent bounded provider execution; confirmation that private key is in place.",
+  "permissionOverrides": false,
+  "globalConfigurationWritesByHarness": false,
+  "billing": null,
+  "ownedAuthenticatedBridgeVerified": true,
+  "elapsedMs": 4819.449,
+  "process": {
+    "status": "exited",
+    "exitCode": 0,
+    "outputBytes": 26866
+  },
+  "result": {
+    "subtype": "success",
+    "isError": false,
+    "exactMarker": true,
+    "numTurns": 2,
+    "sessionId": "18495e3d-ebb0-4503-afdb-8384ae741d87",
+    "toolCalls": [
+      {
+        "name": "Read",
+        "expectedFile": true
+      }
+    ],
+    "responseModels": ["claude-haiku-4-5-20251001"],
+    "inputFileUnchanged": true,
+    "inputFileSha256": "1d23e7e971594e152257108e03169c5bb9d6e668227c1b61caac5818a58cd531",
+    "additionalWorkspaceEntries": []
+  },
+  "usage": {
+    "inputTokens": 14136,
+    "outputTokens": 423,
+    "cacheReadInputTokens": 0,
+    "cacheCreationInputTokens": 0,
+    "source": "Claude Code result reporting traffic routed through FCC; not independent NVIDIA billing"
+  },
+  "localUsageCollectionEnabled": true,
+  "localUsageRecords": [
+    {
+      "id": "usage_2a31bc30-c9a6-4793-9aa6-3f0a7c1008c5",
+      "provider": "claude",
+      "providerVersion": "2.1.258",
+      "model": "claude-haiku-4-5-20251001",
+      "sessionId": "18495e3d-ebb0-4503-afdb-8384ae741d87",
+      "status": "measured",
+      "tokens": {
+        "input": 14136,
+        "output": 423,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "thinking": 0
+      },
+      "estimate": null
+    }
+  ],
+  "status": "passed",
+  "modelProvenance": "Claude Code reports its requested Haiku alias. The Nemotron route is established by the inspected FCC configuration, pinned routing implementation and owned local connection, not by an independent NVIDIA response trace.",
+  "limitations": [
+    "This is a read-only synthetic agent/tool task, not a code-edit or full delivery-workflow qualification.",
+    "Token/cache counters are Claude Code observations through FCC; billing and the NVIDIA free-tier balance remain unknown.",
+    "The local record stores the client-reported Claude model alias; it must not be interpreted as an Anthropic inference or billing claim.",
+    "The process/turn/output bounds do not independently count or cap all physical upstream retries.",
+    "One local session usage record was matched by provider, task and actual session ID; the private fixture and raw transcript were not published."
+  ]
+}

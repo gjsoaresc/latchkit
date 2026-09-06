@@ -39,7 +39,8 @@ establish a completed autonomous delivery workflow.
   controller, authenticated inference endpoint and six Admin assets were checked.
   The console exposes start/stop/refresh and the separate Admin interface.
   Child connection settings replace inherited Anthropic credentials and preserve
-  provider permissions. No NIM inference has been performed.
+  provider permissions. Subsequent NIM inference and a read-only Claude Code task
+  passed; see the [live qualification](fcc-nim-2026-09-06.md).
 - Local Windows release preparation stages the matching `install.ps1` automatically
   and refuses conflicting existing bootstrap files before building.
 
@@ -164,11 +165,14 @@ benchmarks, bundle smoke, browser verification, Claude observation and separate
 Codex workflow attempts. FCC's exact upstream contract and lifecycle evidence is
 in [its verification record](fcc-lifecycle-2026-09-06.md).
 
-NIM inference remains unverified. The unsaved Notepad key was visible behind a
-Windows security prompt, but local OCR did not recover the exact key format.
-No credential was sent, no Admin configuration changed and no NIM inference ran.
-The existing key must be saved accurately in the private local key file or entered
-into FCC's private profile. No replacement API key is required by the integration.
+The earlier NIM credential gate is preserved as historical evidence. After the
+user saved the existing key accurately, Nemotron 3 Super returned the expected
+response through FCC in 564.96 ms (27 input and 8 output tokens reported). A
+read-only Claude Code task through the installed bridge then passed in two turns
+and 4.82 seconds, with one matched local usage record. An initial Llama 3.1 8B
+request returned HTTP 410 and remains recorded as failed. No provider fallback
+was enabled. See the [NIM qualification](fcc-nim-2026-09-06.md) for bounds, model
+provenance and limitations; autonomous code editing through FCC remains unqualified.
 
 Open feature scope remains explicit: MCP serializers for other providers,
 enforced MCP tool allowlists and installed-provider version qualification;
