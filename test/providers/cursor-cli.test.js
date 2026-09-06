@@ -65,6 +65,14 @@ test('plans safe interactive, structured, resume, and Windows-compatible vectors
     executable: 'cursor-agent',
     args: ['--resume=chat-1'],
   });
+  assert.deepEqual(planInvocation({ prompt: 'bounded task' }), {
+    executable: 'cursor-agent',
+    args: ['--print', '--output-format', 'json', 'bounded task'],
+  });
+  assert.deepEqual(planResume({ sessionId: 'chat-2', prompt: 'continue' }), {
+    executable: 'cursor-agent',
+    args: ['--print', '--output-format', 'json', '--resume=chat-2', 'continue'],
+  });
   assert.deepEqual(planResume(), { executable: 'cursor-agent', args: ['resume'] });
   assert.throws(() => planInvocation({ outputFormat: 'json' }), /requires print/);
 });
