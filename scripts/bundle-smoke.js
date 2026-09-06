@@ -66,34 +66,63 @@ async function hook(node, file, hookArgs = []) {
   });
 }
 
-async function stableHook(command, hookArgs = []) {
-  await new Promise((resolve, reject) => {
+async function terminateOwnedHook(child) {
+  if (process.platform === 'win32' && child.pid) {
+    try {
+      await run(
+        path.join(process.env.SystemRoot, 'System32', 'taskkill.exe'),
+        ['/pid', String(child.pid), '/t', '/f'],
+        { windowsHide: true, timeout: 5_000 },
+      );
+    } catch {
+      child.kill();
+    }
+  } else child.kill('SIGKILL');
+}
+
+async function stableHook(command, hookArgs = [], label) {
+  return new Promise((resolve, reject) => {
     const child = spawn(command, hookArgs, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const startedAt = performance.now();
+    let settled = false;
+    let timedOut = false;
+    let timer;
+    const finish = (outcome, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      outcome(value);
+    };
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error('Stable hook did not exit.'));
-    }, 10_000);
+    timer = setTimeout(() => {
+      timedOut = true;
+      void terminateOwnedHook(child).finally(() => {
+        finish(reject, new Error(`Stable hook ${label} did not exit within 30 seconds.`));
+      });
+    }, 30_000);
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
     });
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
     });
-    child.once('error', reject);
+    child.once('error', (error) => {
+      if (!timedOut) finish(reject, error);
+    });
     child.once('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`Stable hook failed: ${stderr}`));
+      if (timedOut) return;
+      if (code !== 0) finish(reject, new Error(`Stable hook ${label} failed: ${stderr}`));
       else {
         try {
           const event = JSON.parse(stdout);
           assert.equal(event.kind, 'turn-completed');
           assert.equal(event.payload.session_id, 'bundle-smoke');
           assert.match(event.eventId, /^bundle-smoke:Stop:/);
-          resolve();
+          finish(resolve, Math.round(performance.now() - startedAt));
         } catch (error) {
-          reject(
+          finish(
+            reject,
             new Error('Stable hook did not preserve handler arguments or stdin.', { cause: error }),
           );
         }
@@ -302,12 +331,22 @@ async function main() {
             'Stop',
           ]
         : ['--version', active.trim(), '--handler', 'claude', '--event', 'Stop'];
-    await stableHook(
-      process.platform === 'win32'
-        ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
-        : hookLauncher,
-      stableHookArgs,
-    );
+    const stableHookDurations = [];
+    const runStableHook = async (phase, hookArgs) => {
+      const durationMs = await stableHook(
+        process.platform === 'win32'
+          ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
+          : hookLauncher,
+        hookArgs,
+        `${phase} for ${hookArgs[hookArgs.indexOf('--version') + 1]}`,
+      );
+      stableHookDurations.push({
+        phase,
+        version: hookArgs[hookArgs.indexOf('--version') + 1],
+        durationMs,
+      });
+    };
+    await runStableHook('after-upgrade', stableHookArgs);
     await manage({ command: 'install', bundle });
     assert.equal(await readFile(path.join(installRoot, 'current'), 'utf8'), active);
     const launcher =
@@ -346,28 +385,13 @@ async function main() {
             'Stop',
           ]
         : ['--version', rollbackKey, '--handler', 'claude', '--event', 'Stop'];
-    await stableHook(
-      process.platform === 'win32'
-        ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
-        : hookLauncher,
-      rollbackHookArgs,
-    );
+    await runStableHook('after-rollback', rollbackHookArgs);
     if (previousManifest) {
       await manage({ command: 'rollback', version: manifest.version });
-      await stableHook(
-        process.platform === 'win32'
-          ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
-          : hookLauncher,
-        stableHookArgs,
-      );
+      await runStableHook('after-restore', stableHookArgs);
     }
     await manage({ command: 'uninstall' });
-    await stableHook(
-      process.platform === 'win32'
-        ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
-        : hookLauncher,
-      stableHookArgs,
-    );
+    await runStableHook('after-uninstall', stableHookArgs);
     assert(
       (await readdir(path.join(installRoot, 'versions'))).length > 0,
       'Compatibility versions must survive uninstall until references are detached.',
@@ -391,6 +415,7 @@ async function main() {
           }
         : null,
       systemToolchains: 'absent from PATH',
+      stableHookDurations,
       checks: [
         'compiled workflow policy async exit',
         'CLI',

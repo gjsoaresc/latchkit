@@ -59,6 +59,7 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run release:artifacts
+        id: bundle
       - name: Include installation scripts
         shell: bash
         run: cp install.sh install.ps1 release-artifacts/
@@ -80,6 +81,7 @@ jobs:
         if: inputs.prior_run_id != ''
         run: node -e "require('node:fs').cpSync('prior-artifacts','release-artifacts/previous',{recursive:true})"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        if: always() && steps.bundle.outcome == 'success'
         with:
           name: standalone-${{ matrix.target }}
           path: release-artifacts/
