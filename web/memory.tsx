@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { api } from './api.js';
-import type { ConsoleStore } from './console-store.js';
+import { createConsoleStore, type ConsoleStore } from './console-store.js';
 import type { MemoryPage, RecoveryContext } from './types.js';
 import { Button } from './components/ui/button.js';
 import { Input, Textarea, NativeSelect, Label } from './components/ui/fields.js';
+import { Shell, ShellPlaceholder, Topbar } from './shell.js';
 
 export function MemoryConsole({
   store,
@@ -182,4 +183,88 @@ export async function exportMemory(store: ConsoleStore) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     store.notice('Memory export downloaded for your review. It was not uploaded.');
   });
+}
+
+const pageStore = createConsoleStore();
+
+const TAGLINE = (
+  <>
+    Only what helps recovery,
+    <br />
+    inspectable anytime.
+  </>
+);
+
+/** The directly addressable Memory page (issue #90): the shared shell plus the same
+ * `MemoryConsole` used previously on the combined home page. */
+export function MemoryConsolePage() {
+  const snapshot = useSyncExternalStore(
+    pageStore.subscribe,
+    pageStore.getSnapshot,
+    pageStore.getSnapshot,
+  );
+  const state = snapshot.state;
+  useEffect(() => {
+    void pageStore.initialize();
+    const timer = window.setInterval(() => pageStore.poll(), 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (!state)
+    return (
+      <ShellPlaceholder
+        active="memory"
+        tagline={TAGLINE}
+        breadcrumb="WORKSPACE"
+        label="Memory"
+        title="Project memory."
+        message={snapshot.notice?.message}
+      />
+    );
+  const configuredProviders = state.providers.filter((provider) =>
+    snapshot.selection.providers.includes(provider.id),
+  );
+  return (
+    <Shell active="memory" tagline={TAGLINE}>
+      <Topbar
+        breadcrumb="WORKSPACE"
+        label="Memory"
+        actions={
+          <Button
+            variant="outline"
+            onClick={() => void exportMemory(pageStore)}
+            disabled={snapshot.busy}
+          >
+            Export local memory
+          </Button>
+        }
+      />
+      <section className="intro intro-compact">
+        <div>
+          <p className="eyebrow">PROJECT MEMORY</p>
+          <h1 id="memory-heading">Keep only what helps recovery.</h1>
+          <p className="intro-copy">
+            Inspectable, local records. No transcripts are imported automatically.
+          </p>
+        </div>
+      </section>
+      {snapshot.notice && (
+        <div
+          className={`notice ${snapshot.notice.error ? 'notice-error' : ''}`}
+          role={snapshot.notice.error ? 'alert' : 'status'}
+          aria-live="polite"
+          tabIndex={-1}
+        >
+          {snapshot.notice.message}
+        </div>
+      )}
+      <section id="memory" className="config-section" aria-labelledby="memory-heading">
+        <MemoryConsole
+          store={pageStore}
+          page={snapshot.memory}
+          providers={configuredProviders}
+          busy={snapshot.busy}
+        />
+      </section>
+    </Shell>
+  );
 }

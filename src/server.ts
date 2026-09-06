@@ -102,9 +102,15 @@ const WEB_ROOT = new URL('../web/', import.meta.url);
 const ASSETS = new Map<string, [string, string]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
-  // The multi-project overview (see web/projects.tsx) is client-side routed from the same
-  // single-page bundle; this entry only lets a direct load or refresh at /projects resolve.
+  // Issue #90: the console is one bundle (see web/app.tsx) client-side routed by
+  // `location.pathname`. Every page below is a distinct, directly addressable URL — a direct
+  // load or refresh at any of these paths resolves the same index.html, and the bundle picks
+  // the matching page. /projects predates this (#94) and keeps working unchanged.
   ['/projects', ['index.html', 'text/html; charset=utf-8']],
+  ['/specs', ['index.html', 'text/html; charset=utf-8']],
+  ['/memory', ['index.html', 'text/html; charset=utf-8']],
+  ['/usage', ['index.html', 'text/html; charset=utf-8']],
+  ['/settings', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/docs/managed-fcc.md', ['../../docs/managed-fcc.md', 'text/plain; charset=utf-8']],

@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, RefreshCw } from 'lucide-react';
 import type {
   inspectProject,
   listProjects,
@@ -10,7 +10,7 @@ import { apiError } from './types.js';
 import { Button } from './components/ui/button.js';
 import { Card } from './components/ui/card.js';
 import { Input, Label } from './components/ui/fields.js';
-import { ThemeToggle } from './theme.js';
+import { Shell, Topbar } from './shell.js';
 
 type ProjectList = Awaited<ReturnType<typeof listProjects>>;
 type ProjectDetail = Awaited<ReturnType<typeof inspectProject>>;
@@ -23,51 +23,13 @@ function projectHref(id?: string) {
   return id ? `/projects?project=${encodeURIComponent(id)}` : '/projects';
 }
 
-function Shell({ children }: { children: ReactNode }) {
-  return (
-    <div className="shell">
-      <aside className="sidebar" aria-label="Workspace navigation">
-        <a className="brand" href="/" aria-label="Latchkit workspace">
-          <span className="brand-mark" aria-hidden="true">
-            l<span>k</span>
-          </span>
-          <span>
-            latchkit<span className="brand-dot">.</span>
-          </span>
-        </a>
-        <div className="sidebar-caption">DEVELOPER WORKSPACE</div>
-        <nav aria-label="Primary">
-          <a className="nav-item" href="/#workspace">
-            <span aria-hidden="true">◈</span>Workspace
-          </a>
-          <a className="nav-item active" href="/projects" aria-current="page">
-            <span aria-hidden="true">▤</span>Projects
-          </a>
-          <a
-            className="nav-item"
-            href="https://github.com/willahealm/latchkit#readme"
-            target="_blank"
-            rel="noreferrer noopener"
-          >
-            <ExternalLink size={17} aria-hidden="true" />
-            Documentation
-          </a>
-        </nav>
-        <div className="sidebar-note">
-          <span className="connection-dot" aria-hidden="true" />
-          Local to your machine
-          <p>
-            Every project you touch,
-            <br />
-            in one overview.
-          </p>
-          <span className="version">OPEN SOURCE · 1.0 RELEASE CANDIDATE</span>
-        </div>
-      </aside>
-      <main id="workspace">{children}</main>
-    </div>
-  );
-}
+const TAGLINE = (
+  <>
+    Every project you touch,
+    <br />
+    in one overview.
+  </>
+);
 
 function StatusBadge({ entry }: { entry: ProjectOverviewEntry }) {
   return (
@@ -203,20 +165,16 @@ function ProjectGrid() {
   const representative = list?.projects.filter((entry) => entry.isRepresentative) ?? [];
   return (
     <>
-      <header className="topbar">
-        <div>
-          <span className="breadcrumb">PROJECTS</span>
-          <span className="slash">/</span>
-          <span>All projects</span>
-        </div>
-        <div className="topbar-actions">
+      <Topbar
+        breadcrumb="PROJECTS"
+        label="All projects"
+        actions={
           <Button variant="outline" onClick={() => void load()} disabled={loading}>
             <RefreshCw aria-hidden="true" />
             Refresh
           </Button>
-          <ThemeToggle />
-        </div>
-      </header>
+        }
+      />
       <section className="intro">
         <div>
           <p className="eyebrow">EVERY PROJECT, ONE PLACE</p>
@@ -339,22 +297,17 @@ function ProjectDetailView({ id }: { id: string }) {
   }, [id]);
   return (
     <>
-      <header className="topbar">
-        <div>
-          <a className="breadcrumb" href="/projects">
-            PROJECTS
-          </a>
-          <span className="slash">/</span>
-          <span>{detail?.project.displayName ?? id}</span>
-        </div>
-        <div className="topbar-actions">
+      <Topbar
+        breadcrumb="PROJECTS"
+        breadcrumbHref="/projects"
+        label={detail?.project.displayName ?? id}
+        actions={
           <Button variant="outline" onClick={() => void load()} disabled={loading}>
             <RefreshCw aria-hidden="true" />
             Refresh
           </Button>
-          <ThemeToggle />
-        </div>
-      </header>
+        }
+      />
       <section className="intro">
         <div>
           <Button asChild variant="outline">
@@ -552,12 +505,17 @@ export function ProjectsConsole() {
   }, []);
   if (!hasSession()) {
     return (
-      <Shell>
+      <Shell active="projects" tagline={TAGLINE}>
+        <Topbar breadcrumb="PROJECTS" label="All projects" />
         <div className="notice notice-error" role="alert">
           Open the complete session URL printed by Latchkit to connect this dashboard.
         </div>
       </Shell>
     );
   }
-  return <Shell>{projectId ? <ProjectDetailView id={projectId} /> : <ProjectGrid />}</Shell>;
+  return (
+    <Shell active="projects" tagline={TAGLINE}>
+      {projectId ? <ProjectDetailView id={projectId} /> : <ProjectGrid />}
+    </Shell>
+  );
 }

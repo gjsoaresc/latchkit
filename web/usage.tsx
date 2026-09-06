@@ -3,9 +3,10 @@ import type { inspectUsage } from '../src/usage/service.js';
 import type { UsageAggregate, UsageBucketTotals } from '../src/usage/aggregate.js';
 import type { SavingsBaseline, SavingsUnits } from '../src/usage/baseline-contracts.js';
 import type { SavingsResult } from '../src/usage/savings.js';
-import { api } from './api.js';
+import { api, hasSession } from './api.js';
 import { Button } from './components/ui/button.js';
 import { Input, Label, NativeSelect, Textarea } from './components/ui/fields.js';
+import { Shell, Topbar } from './shell.js';
 
 type Usage = Awaited<ReturnType<typeof inspectUsage>>;
 type BaselineList = { project: { id: string }; revision: number; baselines: SavingsBaseline[] };
@@ -839,5 +840,43 @@ export function UsageConsole() {
         </>
       )}
     </section>
+  );
+}
+
+const TAGLINE = (
+  <>
+    Every session accounted for,
+    <br />
+    locally.
+  </>
+);
+
+/** The directly addressable Usage page (issue #90): the shared shell around the same
+ * self-contained `UsageConsole` used previously on the combined home page. */
+export function UsageConsolePage() {
+  if (!hasSession())
+    return (
+      <Shell active="usage" tagline={TAGLINE}>
+        <Topbar breadcrumb="WORKSPACE" label="Usage" />
+        <div className="notice notice-error" role="alert">
+          Open the complete session URL printed by Latchkit to connect this dashboard.
+        </div>
+      </Shell>
+    );
+  return (
+    <Shell active="usage" tagline={TAGLINE}>
+      <Topbar breadcrumb="WORKSPACE" label="Usage" />
+      <section className="intro intro-compact">
+        <div>
+          <p className="eyebrow">LOCAL USAGE</p>
+          <h1>Understand every session.</h1>
+          <p className="intro-copy">
+            Optional local counters, with missing data clearly marked. Actual provider billing is
+            unknown.
+          </p>
+        </div>
+      </section>
+      <UsageConsole />
+    </Shell>
   );
 }
