@@ -64,6 +64,14 @@ import {
   inspectUsage,
   recordProviderUsage,
 } from './usage/service.js';
+import {
+  createSavingsBaseline,
+  deleteSavingsBaseline,
+  exportSavingsBaselines,
+  listSavingsBaselines,
+  updateSavingsBaseline,
+} from './usage/baseline-service.js';
+import { inspectSavings, inspectUsageOverview } from './usage/overview-service.js';
 import { errorCode, errorRecord, isRecord } from './types.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -129,6 +137,17 @@ async function listTasksForConsole(
     if (errorCode(error) !== 'TASK_STATE_NOT_FOUND') throw error;
     return { schemaVersion: 1, revision: 0, tasks: [] };
   }
+}
+
+function optionalIsoParam(requestUrl: URL, name: string): string | undefined {
+  const value = requestUrl.searchParams.get(name);
+  if (value === null) return undefined;
+  if (!Number.isFinite(Date.parse(value))) throw fail(400, `${name} must be an ISO date-time.`);
+  return value;
+}
+
+function usageRangeOptions(requestUrl: URL) {
+  return { from: optionalIsoParam(requestUrl, 'from'), to: optionalIsoParam(requestUrl, 'to') };
 }
 
 function boundedNumber(
@@ -482,6 +501,35 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           respond(res, 200, await exportUsage(root));
         } else if (pathname === '/api/usage' && req.method === 'DELETE') {
           respond(res, 200, await serialize(() => deleteUsage(root)));
+        } else if (pathname === '/api/usage/overview' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectUsageOverview([root], usageRangeOptions(requestUrl)));
+        } else if (pathname === '/api/usage/savings' && req.method === 'GET') {
+          await pendingMutation;
+          const baselineId = requestUrl.searchParams.get('baselineId');
+          if (!baselineId) throw fail(400, 'A baselineId query parameter is required.');
+          respond(
+            res,
+            200,
+            await inspectSavings([root], baselineId, usageRangeOptions(requestUrl)),
+          );
+        } else if (pathname === '/api/usage/baselines' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await listSavingsBaselines(root));
+        } else if (pathname === '/api/usage/baselines' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof createSavingsBaseline>[1]>(req);
+          respond(res, 200, await serialize(() => createSavingsBaseline(root, body)));
+        } else if (pathname === '/api/usage/baselines/export' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await exportSavingsBaselines(root));
+        } else if (/^\/api\/usage\/baselines\/baseline_[0-9a-f-]+$/i.test(pathname)) {
+          const id = pathname.slice('/api/usage/baselines/'.length);
+          if (req.method === 'PUT') {
+            const body = await readJson<Parameters<typeof updateSavingsBaseline>[2]>(req);
+            respond(res, 200, await serialize(() => updateSavingsBaseline(root, id, body)));
+          } else if (req.method === 'DELETE') {
+            respond(res, 200, await serialize(() => deleteSavingsBaseline(root, id)));
+          } else throw fail(405, 'Method not allowed.');
         } else if (pathname === '/api/tasks/artifact' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('taskId');
