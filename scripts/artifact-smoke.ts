@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -13,13 +13,21 @@ const args = process.argv.slice(2);
 const requireWsl = args.includes('--require-wsl');
 const requireLinks = args.includes('--require-links');
 const mountedArg = valueAfter('--mounted-project');
+type CommandOptions = Parameters<typeof run>[2];
+type CliResponse = string | { conflicts?: unknown[]; changes: { action: string }[] };
+const errorText = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
-function valueAfter(flag) {
+function valueAfter(flag: string): string | undefined {
   const index = args.indexOf(flag);
   return index === -1 ? undefined : args[index + 1];
 }
 
-async function command(file, commandArgs, options = {}) {
+async function command(
+  file: string,
+  commandArgs: string[],
+  options: CommandOptions = {},
+): Promise<string> {
   const result = await run(file, commandArgs, {
     ...options,
     ...(file === npmCommand && process.platform === 'win32' ? { shell: true } : {}),
@@ -28,7 +36,12 @@ async function command(file, commandArgs, options = {}) {
   return result.stdout;
 }
 
-async function cli(node, entry, commandArgs, options = {}) {
+async function cli(
+  node: string,
+  entry: string,
+  commandArgs: string[],
+  options: CommandOptions = {},
+): Promise<CliResponse> {
   const stdout = await command(node, [entry, ...commandArgs], options);
   try {
     return JSON.parse(stdout);
@@ -37,10 +50,10 @@ async function cli(node, entry, commandArgs, options = {}) {
   }
 }
 
-async function waitForServer(child) {
-  return new Promise((resolve, reject) => {
+async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     let output = '';
-    const onData = (chunk) => {
+    const onData = (chunk: Buffer) => {
       output += chunk.toString();
       const match = output.match(/http:\/\/127\.0\.0\.1:\d+\/#([a-f0-9]+)\s/);
       if (match) {
@@ -48,11 +61,11 @@ async function waitForServer(child) {
         resolve(`http://${match[0].split('/')[2]}/#${match[1]}`);
       }
     };
-    const onError = (error) => {
+    const onError = (error: Error) => {
       cleanup();
       reject(error);
     };
-    const onExit = (code) => {
+    const onExit = (code: number | null) => {
       cleanup();
       reject(new Error(`Installed UI exited before startup (code ${code}).\n${output}`));
     };
@@ -69,9 +82,9 @@ async function waitForServer(child) {
   });
 }
 
-async function stopChild(child) {
+async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise((resolve) => child.once('exit', resolve));
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   child.kill();
   const stopped = await Promise.race([
     exited.then(() => true),
@@ -82,7 +95,12 @@ async function stopChild(child) {
   }
 }
 
-export async function assertArtifact(root, node, entry, label) {
+export async function assertArtifact(
+  root: string,
+  node: string,
+  entry: string,
+  label: string,
+): Promise<void> {
   const fs = await import('node:fs/promises');
   await fs.mkdir(root, { recursive: true });
   const project = path.join(root, 'project with spaces é');
@@ -103,7 +121,8 @@ export async function assertArtifact(root, node, entry, label) {
     await run(node, [entry, 'sync', '--project', project])
   ).stdout;
   const repeat = await cli(node, entry, ['sync', '--project', project, '--dry-run']);
-  if (repeat.conflicts.length || repeat.changes.some((change) => change.action !== 'unchanged'))
+  if (typeof repeat === 'string') throw new Error(`${label}: repeat sync did not return JSON`);
+  if (repeat.conflicts?.length || repeat.changes.some((change) => change.action !== 'unchanged'))
     throw new Error(`${label}: repeat sync is not clean`);
 
   const installedSkill = path.join(project, '.agents', 'skills', 'latchkit-spec', 'SKILL.md');
@@ -113,7 +132,7 @@ export async function assertArtifact(root, node, entry, label) {
     await run(node, [entry, 'sync', '--project', project]);
     throw new Error(`${label}: edited skill did not block sync`);
   } catch (error) {
-    if (!/Sync blocked/.test(error.stderr ?? error.message)) throw error;
+    if (!/Sync blocked/.test(errorText(error))) throw error;
   }
   await writeFile(installedSkill, original);
 
@@ -124,6 +143,7 @@ export async function assertArtifact(root, node, entry, label) {
   await writeFile(readOnly, 'preserve me\n');
   await fs.chmod(readOnly, 0o444);
   const removed = await cli(node, entry, ['remove', '--project', project]);
+  if (typeof removed === 'string') throw new Error(`${label}: removal did not return JSON`);
   if (
     removed.conflicts?.length ||
     (await stat(installedSkill).then(
@@ -155,7 +175,7 @@ export async function assertArtifact(root, node, entry, label) {
   const child = spawn(node, [entry, 'ui', '--project', project, '--port', '0'], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }) as unknown as ChildProcessWithoutNullStreams;
   const url = await waitForServer(child);
   const parsed = new URL(url);
   const token = parsed.hash.slice(1);
@@ -171,7 +191,11 @@ export async function assertArtifact(root, node, entry, label) {
   await stopChild(child);
 }
 
-async function assertInstalledPackage(installDir, node, expectedVersion) {
+async function assertInstalledPackage(
+  installDir: string,
+  node: string,
+  expectedVersion: string,
+): Promise<void> {
   const packageRoot = path.join(installDir, 'node_modules', 'latchkit');
   const packageJson = JSON.parse(await readFile(path.join(packageRoot, 'package.json'), 'utf8'));
   if (packageJson.version !== expectedVersion)
@@ -187,8 +211,8 @@ async function assertInstalledPackage(installDir, node, expectedVersion) {
       throw new Error(`artifact: required packaged resource is missing: ${required}`);
   }
   const readme = await readFile(path.join(packageRoot, 'README.md'), 'utf8');
-  for (const target of [...readme.matchAll(/\]\((docs\/[^)#]+)(?:#[^)]+)?\)/g)].map(
-    (match) => match[1],
+  for (const target of [...readme.matchAll(/\]\((docs\/[^)#]+)(?:#[^)]+)?\)/g)].flatMap((match) =>
+    match[1] ? [match[1]] : [],
   )) {
     if (
       !(await stat(path.join(packageRoot, target)).then(
@@ -225,7 +249,7 @@ async function assertInstalledPackage(installDir, node, expectedVersion) {
     throw new Error('artifact: bundled skills are missing');
 }
 
-export async function linkCapability(root, node, entry) {
+export async function linkCapability(root: string, node: string, entry: string): Promise<void> {
   const fs = await import('node:fs/promises');
   await fs.mkdir(root, { recursive: true });
   const target = path.join(root, 'link-target');
@@ -263,8 +287,7 @@ export async function linkCapability(root, node, entry) {
     try {
       await command(node, [entry, 'sync', '--project', guardedProject]);
     } catch (error) {
-      if (/Refusing symlink or junction|Sync blocked/.test(error.stderr ?? error.message))
-        blocked = true;
+      if (/Refusing symlink or junction|Sync blocked/.test(errorText(error))) blocked = true;
       else throw error;
     }
     if (!blocked) throw new Error('directory link safeguard did not block sync');
@@ -288,20 +311,19 @@ export async function linkCapability(root, node, entry) {
     try {
       await command(node, [entry, 'sync', '--project', fileProject]);
     } catch (error) {
-      if (/Refusing symlink or junction|Sync blocked/.test(error.stderr ?? error.message))
-        blocked = true;
+      if (/Refusing symlink or junction|Sync blocked/.test(errorText(error))) blocked = true;
       else throw error;
     }
     if (!blocked) throw new Error('file link safeguard did not block sync');
   } catch (error) {
     throw new Error(
-      `Required link capability unavailable (${error.code ?? error.message}); release evidence cannot claim link safeguards.`,
+      `Required link capability unavailable (${errorText(error)}); release evidence cannot claim link safeguards.`,
     );
   }
 }
 
 async function main() {
-  const repository = path.resolve(import.meta.dirname, '..');
+  const repository = path.resolve(import.meta.dirname, '..', '..');
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-artifact-'));
   try {
     if (
@@ -319,7 +341,7 @@ async function main() {
     await fs.mkdir(packDir, { recursive: true });
     await fs.mkdir(installDir, { recursive: true });
     const suppliedArtifact = valueAfter('--artifact');
-    const artifact =
+    const artifact: string =
       suppliedArtifact ??
       JSON.parse(
         await command(npmCommand, ['pack', '--json', '--pack-destination', packDir], {
@@ -367,7 +389,7 @@ async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  main().catch((error) => {
-    console.error(`Artifact smoke failed: ${error.message}`);
+  main().catch((error: unknown) => {
+    console.error(`Artifact smoke failed: ${errorText(error)}`);
     process.exitCode = 1;
   });

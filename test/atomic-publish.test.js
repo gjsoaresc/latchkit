@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { publishArchiveSet } from '../scripts/atomic-publish.js';
+import { publishArchiveSet } from '../dist/scripts/atomic-publish.js';
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-atomic-publish-'));
