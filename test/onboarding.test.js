@@ -32,12 +32,14 @@ import {
 import { readOnboardingHandoffState } from '../dist/src/installation/onboarding-state.js';
 
 async function tempProject(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-'));
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-')));
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return root;
 }
 async function tempInstallRoot(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-install-'));
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-install-')),
+  );
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return root;
 }

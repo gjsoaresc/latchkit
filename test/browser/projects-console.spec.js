@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -30,7 +30,7 @@ async function gitProject(base, name) {
 test('multi-project overview lists grouped worktrees, opens a project, adds and removes one, and flags an unavailable root', async ({
   page,
 }) => {
-  const base = await mkdtemp(path.join(os.tmpdir(), 'latchkit-projects-console-'));
+  const base = await realpath(await mkdtemp(path.join(os.tmpdir(), 'latchkit-projects-console-')));
   const registry = path.join(base, 'registry');
   const currentProject = path.join(base, 'current-project');
   await mkdir(currentProject, { recursive: true });
