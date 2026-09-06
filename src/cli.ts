@@ -119,6 +119,7 @@ import {
 } from './onboarding/service.js';
 import { listProjects, registerProject, removeProject } from './projects/service.js';
 import { defaultProjectsRegistryRoot } from './projects/store.js';
+import { discoverSpecImport, previewSpecImport } from './spec-imports/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -181,6 +182,8 @@ Usage: latchkit <command> [options]
   onboarding Inspect, drive, or resume the project/provider/workflow setup wizard (CLI fallback
              for the browser console's onboarding page); prints state and exits, no prompts
   projects   List, add, or remove a project in the user-local multi-project overview registry
+  spec-import Explicitly discover or preview foreign spec artifacts (Spec Kit only so far;
+             see issue #114) under a selected local root; read-only, creates nothing
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -272,6 +275,8 @@ Options:
   --tool-root <path>  tool fcc: recorded user-local FCC tool directory
   --python <path>     tool fcc install: explicit Python 3.14+ runtime
   --uv <path>         tool fcc install: explicit uv 0.11.16+ lock installer
+  --root <path>       spec-import: local root to scan (contains a "specs" directory)
+  --adapter <id>      spec-import: adapter ID (only "spec-kit" is implemented)
   --help             Show this help
   --version          Show version
 
@@ -365,6 +370,8 @@ try {
       'authorization-id': { type: 'string' },
       limit: { type: 'string' },
       cursor: { type: 'string' },
+      root: { type: 'string' },
+      adapter: { type: 'string' },
     },
   });
   cliValues = values;
@@ -392,6 +399,7 @@ try {
         'tool',
         'onboarding',
         'projects',
+        'spec-import',
       ].includes(command) &&
       extra.length
     )
@@ -556,6 +564,7 @@ try {
         'verification-mode',
       ],
       projects: ['project', 'id', 'title'],
+      'spec-import': ['project', 'root', 'adapter'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -1776,6 +1785,21 @@ try {
           }),
         );
       else print(await removeProject(registryRoot, requiredOption(values.id, 'id')));
+    } else if (command === 'spec-import') {
+      const action = extra[0];
+      if (extra.length !== 1 || !action || !['discover', 'preview'].includes(action))
+        throw new Error(
+          'Usage: latchkit spec-import <discover|preview> --root <path> [--adapter <id>].',
+        );
+      const options = {
+        adapter: values.adapter,
+        root: path.resolve(requiredOption(values.root, 'root')),
+      };
+      print(
+        action === 'discover'
+          ? await discoverSpecImport(options.root, { adapter: options.adapter })
+          : await previewSpecImport(options.root, { adapter: options.adapter }),
+      );
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)

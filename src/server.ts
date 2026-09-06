@@ -57,6 +57,7 @@ import {
   updateProjectMemory,
 } from './project-memory/service.js';
 import { providerById } from './providers/registry.js';
+import { discoverSpecImport, previewSpecImport } from './spec-imports/service.js';
 import {
   configureUsage,
   deleteUsage,
@@ -757,6 +758,23 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           } else if (req.method === 'DELETE') {
             respond(res, 200, await serialize(() => removeProject(projectsRegistryRoot, id)));
           } else throw fail(405, 'Method not allowed.');
+          // Spec-import discovery/preview (#114, first increment): explicitly invoked,
+          // read-only, and independent of this project's own mutation queue and state —
+          // the selected root need not be this console's project.
+        } else if (
+          (pathname === '/api/spec-imports/discover' || pathname === '/api/spec-imports/preview') &&
+          req.method === 'GET'
+        ) {
+          const sourceRoot = requestUrl.searchParams.get('root');
+          if (!sourceRoot) throw fail(400, 'A root query parameter is required.');
+          const adapter = requestUrl.searchParams.get('adapter') ?? undefined;
+          respond(
+            res,
+            200,
+            pathname.endsWith('/discover')
+              ? await discoverSpecImport(sourceRoot, { adapter })
+              : await previewSpecImport(sourceRoot, { adapter }),
+          );
         } else {
           throw fail(404, 'API route or method not found.');
         }

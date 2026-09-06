@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/spec-import-manifest-v1.schema.json",
+  "title": "Latchkit spec-import manifest v1 (read-only discovery/preview, issue #114)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "adapter", "discoveredAt", "sourceRoot", "limits", "truncated", "entries", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "adapter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version", "upstream"],
+      "properties": {
+        "id": { "const": "spec-kit" },
+        "version": { "type": "string", "minLength": 1 },
+        "upstream": {
+          "type": "object", "additionalProperties": false,
+          "required": ["repository", "ref", "commit", "publishedAt", "pinnedTemplatePaths"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "ref": { "type": "string", "minLength": 1 },
+            "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+            "publishedAt": { "type": "string", "format": "date-time" },
+            "pinnedTemplatePaths": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    "discoveredAt": { "type": "string", "format": "date-time" },
+    "sourceRoot": {
+      "type": "object", "additionalProperties": false, "required": ["path"],
+      "properties": { "path": { "type": "string", "minLength": 1 } }
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "maxFeatureDirectories", "maxTotalFiles", "maxFilesPerEntry", "maxFileBytes",
+        "maxTotalBytes", "maxDepth", "maxLinksPerArtifact", "maxTasksPerEntry", "maxUserStoriesPerEntry"
+      ],
+      "properties": {
+        "maxFeatureDirectories": { "type": "integer", "minimum": 1 },
+        "maxTotalFiles": { "type": "integer", "minimum": 1 },
+        "maxFilesPerEntry": { "type": "integer", "minimum": 1 },
+        "maxFileBytes": { "type": "integer", "minimum": 1 },
+        "maxTotalBytes": { "type": "integer", "minimum": 1 },
+        "maxDepth": { "type": "integer", "minimum": 1 },
+        "maxLinksPerArtifact": { "type": "integer", "minimum": 1 },
+        "maxTasksPerEntry": { "type": "integer", "minimum": 1 },
+        "maxUserStoriesPerEntry": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "truncated": { "type": "boolean" },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+    "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } }
+  },
+  "$defs": {
+    "relativePath": { "type": "string", "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$)).+" },
+    "artifactRole": { "enum": ["spec", "plan", "tasks", "supporting"] },
+    "warning": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "path": { "type": "string" }
+      }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "path", "sha256", "byteLength", "sectionAnchors"],
+      "properties": {
+        "role": { "$ref": "#/$defs/artifactRole" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "sectionAnchors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "declaredLink": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fromRole", "fromPath", "linkText", "targetPath", "targetExists", "provenance"],
+      "properties": {
+        "fromRole": { "$ref": "#/$defs/artifactRole" },
+        "fromPath": { "$ref": "#/$defs/relativePath" },
+        "linkText": { "type": "string" },
+        "targetPath": { "$ref": "#/$defs/relativePath" },
+        "targetExists": { "type": "boolean" },
+        "provenance": { "const": "explicit-link" }
+      }
+    },
+    "inferredReference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fromRole", "fromPath", "text", "candidatePath", "provenance", "established"],
+      "properties": {
+        "fromRole": { "$ref": "#/$defs/artifactRole" },
+        "fromPath": { "$ref": "#/$defs/relativePath" },
+        "text": { "type": "string" },
+        "candidatePath": { "type": "string" },
+        "provenance": { "const": "inferred" },
+        "established": { "const": false }
+      }
+    },
+    "task": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "checked", "parallel", "userStory", "description"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^T\\d{3,}$" },
+        "checked": { "type": "boolean" },
+        "parallel": { "type": "boolean" },
+        "userStory": { "type": ["string", "null"] },
+        "description": { "type": "string" }
+      }
+    },
+    "userStory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["number", "title", "priority"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "title": { "type": "string" },
+        "priority": { "type": ["string", "null"] }
+      }
+    },
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "id", "slug", "directory", "status", "sourceDeclaredStatus", "artifacts",
+        "declaredLinks", "inferredReferences", "parsedIdentifiers", "warnings"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "slug": { "type": "string" },
+        "directory": { "$ref": "#/$defs/relativePath" },
+        "status": { "enum": ["complete", "partial", "ambiguous", "unsupported-version", "malformed", "inaccessible"] },
+        "sourceDeclaredStatus": {
+          "type": "object", "additionalProperties": false,
+          "required": ["value", "provenance"],
+          "properties": {
+            "value": { "type": ["string", "null"] },
+            "provenance": { "const": "source-declared-claim" }
+          }
+        },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+        "declaredLinks": { "type": "array", "items": { "$ref": "#/$defs/declaredLink" } },
+        "inferredReferences": { "type": "array", "items": { "$ref": "#/$defs/inferredReference" } },
+        "parsedIdentifiers": {
+          "type": "object", "additionalProperties": false,
+          "required": ["tasks", "userStories"],
+          "properties": {
+            "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } },
+            "userStories": { "type": "array", "items": { "$ref": "#/$defs/userStory" } }
+          }
+        },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/warning" } }
+      }
+    }
+  }
+}
