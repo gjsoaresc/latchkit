@@ -28,6 +28,7 @@ import {
   pauseTask,
   resumeTask,
 } from '../task-state/service.js';
+import { buildContextBrief } from '../context-brief/service.js';
 import { withTaskStateLock } from '../task-state/lock.js';
 import type { Task } from '../task-state/contracts.js';
 import { recordProviderUsage } from '../usage/service.js';
@@ -60,6 +61,10 @@ type TaskSession = {
   eventIds: string[];
   result: ReturnType<typeof resultSummary> | null;
   workspace?: SessionWorkspace | null;
+  /** The context-brief digest bound to this dispatch (issue #112), best-effort: a failure
+   * building the brief never blocks a direct task start/resume, and is recorded as `null` rather
+   * than guessed. Absent on sessions persisted before this field existed. */
+  contextBriefDigest?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -429,6 +434,14 @@ export function createTaskController({
           'Task run ownership was not acquired.',
           'TASK_OWNERSHIP_CONFLICT',
         );
+      // Best-effort context-brief binding (issue #112) for the direct task-controller dispatch
+      // path, mirroring the delivery workflow's own binding in src/workflows/service.ts#invoke.
+      // A failure here (an unexpected brief-building error, not a deliberate budget refusal) never
+      // blocks starting/resuming a direct session; the digest is recorded as `null` instead of
+      // guessed at.
+      const contextBriefDigest = await buildContextBrief(root, { taskId })
+        .then((brief) => brief.digest)
+        .catch(() => null);
       const session: TaskSession = {
         id: `session_${randomUUID()}`,
         providerSessionId: resumeSession?.providerSessionId ?? null,
@@ -441,6 +454,7 @@ export function createTaskController({
         eventIds: [],
         result: null,
         workspace,
+        contextBriefDigest,
         createdAt: now(),
         updatedAt: now(),
       };

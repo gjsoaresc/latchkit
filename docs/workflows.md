@@ -76,6 +76,27 @@ latchkit workflow inspect --project <path> --task <task-id>
 latchkit workflow inspect --project <path>
 ```
 
+Preview the current, bounded resumable context brief (issue #112; see
+[context briefs](task-state.md#context-briefs)) — current accepted intent,
+what changed since the last dispatch, and the next action the existing
+workflow allows. This is read-only: it never creates a controller, starts a
+provider, or mutates workflow state, and requires an existing workflow
+(`WORKFLOW_NOT_FOUND` otherwise):
+
+```sh
+latchkit workflow context --project <path> --task <task-id> \
+  [--since-digest <sha256>] [--byte-budget 16384] [--format text|json]
+```
+
+Every `requirements`/`plan`/`implementation`/`handoff` dispatch this
+controller actually makes binds a freshly built brief to that exact dispatch
+first, recording which digest was delivered on the workflow's own record
+(`lastDispatchedContext`) — always rebuilt from the current task/workflow
+state immediately before dispatch, never reused, so a source drift or an
+intent/criteria change is reflected automatically and a brief whose mandatory
+content cannot fit its byte budget fails that dispatch
+(`WORKFLOW_CONTEXT_BUDGET_EXCEEDED`) before any provider process starts.
+
 Approve the exact plan shown by inspection. Supply all digests and the scope
 and reference for the direct user approval:
 

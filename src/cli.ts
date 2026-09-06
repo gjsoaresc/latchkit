@@ -136,6 +136,8 @@ import {
   registerSpecImport,
   reinspectSpecImportRegistrations,
 } from './spec-imports/registration-service.js';
+import { buildContextBrief } from './context-brief/service.js';
+import type { ContextBrief } from './context-brief/contracts.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -179,6 +181,114 @@ async function readReconciliationPatchFile(
   return document as ReconciliationPatchInput;
 }
 
+/** Shared `--format` handling for `task context-preview`/`workflow context` (issue #112): `json`
+ * prints the full brief exactly like every other command; `text` (the default) renders a concise
+ * human-readable summary with source links, never a substitute for inspecting the JSON directly. */
+function requireContextBriefFormat(value: string | undefined): 'text' | 'json' {
+  const format = value ?? 'text';
+  if (format !== 'text' && format !== 'json') throw new Error('--format must be text or json.');
+  return format;
+}
+
+function parseByteBudgetOption(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1)
+    throw new Error('--byte-budget must be a positive integer.');
+  return parsed;
+}
+
+function formatContextBriefText(brief: ContextBrief): string {
+  const lines: string[] = [];
+  lines.push(
+    `Context brief for ${brief.taskId} (task revision ${brief.taskRevision}, state ${brief.taskState})`,
+  );
+  lines.push(`  digest: ${brief.digest}`);
+  lines.push(`  intentDigest: ${brief.intentDigest}  criteriaDigest: ${brief.criteriaDigest}`);
+  lines.push(
+    brief.workflow.exists
+      ? `  workflow: ${brief.workflow.workflowId} (phase ${brief.workflow.phase}, status ${brief.workflow.status})`
+      : '  workflow: none (ordinary task)',
+  );
+  lines.push(`  next action: ${brief.nextAction.kind} — ${brief.nextAction.description}`);
+  const section = (title: string, items: { id: string; status: string; text: string }[]) => {
+    lines.push(`${title} (${items.length}):`);
+    for (const item of items) lines.push(`  - [${item.status}] ${item.id}: ${item.text}`);
+  };
+  section('Accepted decisions', brief.acceptedDecisions);
+  section('Confirmed assumptions', brief.confirmedAssumptions);
+  section('Pending decisions', brief.pendingDecisions);
+  section('Open assumptions', brief.openAssumptions);
+  section('Open questions', brief.openQuestions);
+  lines.push(`Criteria (${brief.criteria.length}):`);
+  for (const criterion of brief.criteria)
+    lines.push(
+      `  - ${criterion.id}${criterion.required ? ' [required]' : ''}: ${criterion.description}`,
+    );
+  const change = brief.changeSinceLastRun;
+  lines.push(
+    `Change since last run: ${change.available ? 'available' : `unavailable (${change.reason})`}`,
+  );
+  if (change.available) {
+    lines.push(
+      `  reconciliations since: ${change.reconciliationsSince.length}${change.reconciliationsSinceTruncated ? ' (truncated)' : ''}`,
+    );
+    if (change.unreconciledChange)
+      lines.push(
+        `  unreconciled change: criteria=${change.unreconciledChange.criteriaDigestChanged} intent=${change.unreconciledChange.intentDigestChanged}${change.unreconciledChange.note ? ` — ${change.unreconciledChange.note}` : ''}`,
+      );
+    lines.push(`  work needing attention (${change.workNeedingAttention.length}):`);
+    for (const item of change.workNeedingAttention)
+      lines.push(`    - ${item.kind}:${item.id} (${item.outcome}, ${item.reasonCode})`);
+    lines.push(`  completed work remaining (${change.completedWorkRemaining.length}):`);
+    for (const item of change.completedWorkRemaining)
+      lines.push(`    - ${item.criterionId}: ${item.description} (evidence ${item.evidenceId})`);
+    lines.push(`  missing dependency links (${change.missingDependencyLinks.length}):`);
+    for (const item of change.missingDependencyLinks)
+      lines.push(`    - ${item.recordId} -> ${item.linkType}:${item.targetId} (${item.status})`);
+  }
+  lines.push(`Plan references (${brief.planReferences.length}):`);
+  for (const reference of brief.planReferences)
+    lines.push(`  - ${reference.kind}: ${reference.sourceRef} (${reference.digest.slice(0, 12)}…)`);
+  lines.push(
+    `Reconciliation outcomes (${brief.reconciliationOutcomes.length}${brief.reconciliationOutcomesTruncated ? ', truncated' : ''})`,
+  );
+  lines.push(
+    `Omitted (${brief.omitted.length}): ${brief.omitted.map((item) => `${item.section}:${item.sourceRef}`).join(', ') || 'none'}`,
+  );
+  lines.push(
+    `Budget: used ${brief.budget.usedBytes}/${brief.budget.effectiveBytes} bytes (~${brief.budget.estimatedTokens} est. tokens; ${brief.budget.estimateDisclaimer})`,
+  );
+  lines.push(brief.deliveryNote);
+  lines.push(brief.resumeGuidance);
+  return lines.join('\n');
+}
+
+async function printContextBrief(options: {
+  taskId: string;
+  byteBudget?: number;
+  sinceDigest?: string;
+  format: 'text' | 'json';
+  root: string;
+  /** `workflow context` only: fail before rendering when this task has no delivery workflow,
+   * mirroring `workflow inspect`'s own WORKFLOW_NOT_FOUND rather than silently falling back to
+   * `task context-preview`'s ordinary-task behavior. */
+  requireWorkflow?: boolean;
+}): Promise<void> {
+  const brief = await buildContextBrief(options.root, {
+    taskId: options.taskId,
+    ...(options.byteBudget !== undefined ? { byteBudget: options.byteBudget } : {}),
+    ...(options.sinceDigest !== undefined ? { sinceDigest: options.sinceDigest } : {}),
+  });
+  if (options.requireWorkflow && !brief.workflow.exists) {
+    const error = new Error('Workflow was not found.') as Error & { code: string };
+    error.code = 'WORKFLOW_NOT_FOUND';
+    throw error;
+  }
+  if (options.format === 'json') console.log(JSON.stringify(brief, null, 2));
+  else console.log(formatContextBriefText(brief));
+}
+
 let cliValues: { project?: string } = {};
 
 const usage = `Latchkit — Your agents. One workflow.
@@ -201,11 +311,14 @@ Usage: latchkit <command> [options]
              observation/question knowledge record with explicit provenance,
              or reconcile-preview/reconcile-apply a structured patch to accepted
              intent records and/or criteria (deterministic impact report, then
-             an explicit digest-bound apply)
+             an explicit digest-bound apply), or context-preview a bounded,
+             deterministic resumable context brief (current intent, change
+             since the last dispatch, and the next allowed action; read-only)
   spec       Register/inspect/migrate/verify an enhanced spec, preview a plan-path or
              migrate-plan a durable plan, or present/approve/note/pause/build the
              end-of-spec decision (approve and build, add notes, or keep for later)
-  workflow   Run, inspect, approve, resume, or cancel a delivery workflow
+  workflow   Run, inspect, approve, resume, cancel, or context (a read-only
+             resumable context brief) a delivery workflow
   self       Inspect, upgrade, roll back, or uninstall this standalone installation
   update     Narrow inspect/recovery fallback for the console updater: status, check,
              preview, stage, or roll back a compatible release (never activates on
@@ -282,6 +395,14 @@ Options:
   --limit <n>         task record-list: page size (default 50, max 200)
   --cursor <id>       task record-list: resume listing after this record ID
   --preview-digest <sha256> task reconcile-apply: exact digest from a prior reconcile-preview
+  --since-digest <sha256> task context-preview/workflow context: prior brief digest to diff
+                       "change since last run" against (default: the workflow's own last
+                       dispatched digest, if any)
+  --byte-budget <n>    task context-preview/workflow context: explicit byte budget (default
+                       16384, max 262144); mandatory content that cannot fit refuses rather than
+                       silently omitting a governing constraint
+  --format <name>      task context-preview/workflow context: text (default, concise) or json
+                       (the full brief)
   --summary <text>    spec decision-present and task result-present: concise summary
   --budget <n>        memory recover: maximum context characters
   --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
@@ -442,6 +563,8 @@ try {
       'expected-task-revision': { type: 'string' },
       format: { type: 'string' },
       'baseline-revision': { type: 'string' },
+      'since-digest': { type: 'string' },
+      'byte-budget': { type: 'string' },
     },
   });
   cliValues = values;
@@ -507,6 +630,9 @@ try {
         'evidence-id',
         'file',
         'verification-mode',
+        'since-digest',
+        'byte-budget',
+        'format',
       ],
       task: [
         'project',
@@ -546,6 +672,9 @@ try {
         'limit',
         'cursor',
         'preview-digest',
+        'since-digest',
+        'byte-budget',
+        'format',
       ],
       spec: [
         'project',
@@ -793,116 +922,132 @@ try {
       if (
         extra.length !== 1 ||
         !action ||
-        !['run', 'inspect', 'approve', 'resume', 'cancel'].includes(action)
+        !['run', 'inspect', 'approve', 'resume', 'cancel', 'context'].includes(action)
       )
-        throw new Error('Usage: latchkit workflow <run|inspect|approve|resume|cancel> [options].');
-      const { createWorkflowController } = await import('./workflows/service.js');
-      const controller = createWorkflowController({ root });
-      const shutdown = () => {
-        void controller.shutdown();
-      };
-      for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, shutdown);
-      try {
-        if (action === 'inspect') {
-          if (values.task) print(await controller.inspect(values.task));
-          else
-            print({ workflows: await (await import('./workflows/store.js')).listWorkflows(root) });
-        } else {
-          const expectedRevision =
-            values['expected-revision'] === undefined
-              ? undefined
-              : Number(values['expected-revision']);
-          if (
-            (action !== 'run' || values.task) &&
-            (!Number.isInteger(expectedRevision) || (expectedRevision ?? 0) < 1)
-          )
-            throw new Error('Send --expected-revision with the current workflow revision.');
-          const common = { expectedRevision, mutationId: values['mutation-id'] };
-          let result;
-          if (action === 'run') {
+        throw new Error(
+          'Usage: latchkit workflow <run|inspect|approve|resume|cancel|context> [options].',
+        );
+      if (action === 'context') {
+        // Read-only (issue #112): never creates a controller, never starts a provider.
+        await printContextBrief({
+          root,
+          taskId: requiredOption(values.task, 'task'),
+          byteBudget: parseByteBudgetOption(values['byte-budget']),
+          ...(values['since-digest'] !== undefined ? { sinceDigest: values['since-digest'] } : {}),
+          format: requireContextBriefFormat(values.format),
+          requireWorkflow: true,
+        });
+      } else {
+        const { createWorkflowController } = await import('./workflows/service.js');
+        const controller = createWorkflowController({ root });
+        const shutdown = () => {
+          void controller.shutdown();
+        };
+        for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, shutdown);
+        try {
+          if (action === 'inspect') {
+            if (values.task) print(await controller.inspect(values.task));
+            else
+              print({
+                workflows: await (await import('./workflows/store.js')).listWorkflows(root),
+              });
+          } else {
+            const expectedRevision =
+              values['expected-revision'] === undefined
+                ? undefined
+                : Number(values['expected-revision']);
             if (
-              values['verification-mode'] !== undefined &&
-              !['fast', 'standard'].includes(values['verification-mode'])
+              (action !== 'run' || values.task) &&
+              (!Number.isInteger(expectedRevision) || (expectedRevision ?? 0) < 1)
             )
-              throw new Error('--verification-mode must be fast or standard.');
-            result = await controller.run({
-              ...common,
-              taskId: values.task,
-              providerId: requiredOption(values.provider, 'provider'),
-              reviewProviderId: values['review-provider'],
-              prompt: values.prompt,
-              executionAuthorized: values['host-local-authorized'] === true,
-              ...(values['verification-mode']
-                ? { verificationMode: values['verification-mode'] as 'fast' | 'standard' }
-                : {}),
-              ...(values.file
-                ? {
-                    checksDocument: JSON.parse(
-                      await readFile(path.resolve(requiredOption(values.file, 'file')), 'utf8'),
-                    ) as unknown,
-                  }
-                : {}),
-            });
-          } else if (action === 'approve') {
-            result = await controller.approve({
-              ...common,
-              expectedRevision: expectedRevision!,
-              taskId: requiredOption(values.task, 'task'),
-              planDigest: requiredOption(values['plan-digest'], 'plan-digest'),
-              requirementsDigest: requiredOption(
-                values['requirements-digest'],
-                'requirements-digest',
-              ),
-              checksDigest: requiredOption(values['checks-digest'], 'checks-digest'),
-              scope: requiredOption(values['authorization-scope'], 'authorization-scope'),
-              reference: requiredOption(
-                values['authorization-reference'],
-                'authorization-reference',
-              ),
-            });
-          } else if (action === 'resume') {
-            const decision = values.resolution;
-            if (decision && !['observed', 'abandon', 'retry'].includes(decision))
-              throw new Error('--resolution must be observed, abandon, or retry.');
-            result = await controller.resume({
-              ...common,
-              expectedRevision: expectedRevision!,
-              taskId: requiredOption(values.task, 'task'),
-              prompt: values.prompt,
-              executionAuthorized: values['host-local-authorized'] === true,
-              ...(decision
-                ? {
-                    resolution: {
-                      actionId: requiredOption(values['action-id'], 'action-id'),
-                      decision: decision as 'observed' | 'abandon' | 'retry',
-                      ...(decision === 'observed'
-                        ? { evidenceId: requiredOption(values['evidence-id'], 'evidence-id') }
-                        : {}),
-                    },
-                  }
-                : {}),
-            });
-          } else
-            result = await controller.cancel({
-              ...common,
-              expectedRevision: expectedRevision!,
-              taskId: requiredOption(values.task, 'task'),
-            });
-          print(result);
-          if (action === 'run')
-            await registerProject(defaultProjectsRegistryRoot(), {
-              root,
-              source: 'task-run',
-            }).catch(() => {});
-          if (action !== 'cancel') {
-            const final = await controller.wait(result.taskId);
-            if (final.revision !== result.revision) print(final);
-            if (['blocked', 'interrupted'].includes(final.status)) process.exitCode = 1;
+              throw new Error('Send --expected-revision with the current workflow revision.');
+            const common = { expectedRevision, mutationId: values['mutation-id'] };
+            let result;
+            if (action === 'run') {
+              if (
+                values['verification-mode'] !== undefined &&
+                !['fast', 'standard'].includes(values['verification-mode'])
+              )
+                throw new Error('--verification-mode must be fast or standard.');
+              result = await controller.run({
+                ...common,
+                taskId: values.task,
+                providerId: requiredOption(values.provider, 'provider'),
+                reviewProviderId: values['review-provider'],
+                prompt: values.prompt,
+                executionAuthorized: values['host-local-authorized'] === true,
+                ...(values['verification-mode']
+                  ? { verificationMode: values['verification-mode'] as 'fast' | 'standard' }
+                  : {}),
+                ...(values.file
+                  ? {
+                      checksDocument: JSON.parse(
+                        await readFile(path.resolve(requiredOption(values.file, 'file')), 'utf8'),
+                      ) as unknown,
+                    }
+                  : {}),
+              });
+            } else if (action === 'approve') {
+              result = await controller.approve({
+                ...common,
+                expectedRevision: expectedRevision!,
+                taskId: requiredOption(values.task, 'task'),
+                planDigest: requiredOption(values['plan-digest'], 'plan-digest'),
+                requirementsDigest: requiredOption(
+                  values['requirements-digest'],
+                  'requirements-digest',
+                ),
+                checksDigest: requiredOption(values['checks-digest'], 'checks-digest'),
+                scope: requiredOption(values['authorization-scope'], 'authorization-scope'),
+                reference: requiredOption(
+                  values['authorization-reference'],
+                  'authorization-reference',
+                ),
+              });
+            } else if (action === 'resume') {
+              const decision = values.resolution;
+              if (decision && !['observed', 'abandon', 'retry'].includes(decision))
+                throw new Error('--resolution must be observed, abandon, or retry.');
+              result = await controller.resume({
+                ...common,
+                expectedRevision: expectedRevision!,
+                taskId: requiredOption(values.task, 'task'),
+                prompt: values.prompt,
+                executionAuthorized: values['host-local-authorized'] === true,
+                ...(decision
+                  ? {
+                      resolution: {
+                        actionId: requiredOption(values['action-id'], 'action-id'),
+                        decision: decision as 'observed' | 'abandon' | 'retry',
+                        ...(decision === 'observed'
+                          ? { evidenceId: requiredOption(values['evidence-id'], 'evidence-id') }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              });
+            } else
+              result = await controller.cancel({
+                ...common,
+                expectedRevision: expectedRevision!,
+                taskId: requiredOption(values.task, 'task'),
+              });
+            print(result);
+            if (action === 'run')
+              await registerProject(defaultProjectsRegistryRoot(), {
+                root,
+                source: 'task-run',
+              }).catch(() => {});
+            if (action !== 'cancel') {
+              const final = await controller.wait(result.taskId);
+              if (final.revision !== result.revision) print(final);
+              if (['blocked', 'interrupted'].includes(final.status)) process.exitCode = 1;
+            }
           }
+        } finally {
+          for (const signal of ['SIGINT', 'SIGTERM']) process.removeListener(signal, shutdown);
+          await controller.shutdown();
         }
-      } finally {
-        for (const signal of ['SIGINT', 'SIGTERM']) process.removeListener(signal, shutdown);
-        await controller.shutdown();
       }
     } else if (command === 'task') {
       const taskActions = [
@@ -924,6 +1069,7 @@ try {
         'record-inspect',
         'reconcile-preview',
         'reconcile-apply',
+        'context-preview',
       ];
       if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
         throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
@@ -1222,6 +1368,14 @@ try {
             ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
           }),
         );
+      } else if (action === 'context-preview') {
+        await printContextBrief({
+          root,
+          taskId: requiredOption(values.task, 'task'),
+          byteBudget: parseByteBudgetOption(values['byte-budget']),
+          ...(values['since-digest'] !== undefined ? { sinceDigest: values['since-digest'] } : {}),
+          format: requireContextBriefFormat(values.format),
+        });
       } else {
         const hasAuthorization =
           values['authorization-scope'] !== undefined ||

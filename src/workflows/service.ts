@@ -41,6 +41,8 @@ import {
 } from '../task-state/service.js';
 import type { SourceSnapshot, Task } from '../task-state/contracts.js';
 import { computeIntentDigest } from '../task-state/records.js';
+import { bindDispatchContext } from '../context-brief/service.js';
+import { ContextBriefError } from '../context-brief/contracts.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -82,14 +84,17 @@ function actionOwnerIsLive(action: WorkflowActionJournal): boolean {
 }
 import {
   WorkflowError,
+  approvalValid,
   boundedContext,
   canonicalJson,
+  criteriaDigest,
   digestJson,
   sha256,
   sourceEqual,
   type CompletedWorkflowAction,
   type WorkflowActionJournal,
   type WorkflowArtifact,
+  type WorkflowDispatchedContext,
   type WorkflowRecord,
 } from './contracts.js';
 import {
@@ -243,37 +248,6 @@ function commitMutation(
   }
   record.mutations.push({ id: selectedMutationId, digest, revision: record.revision + 1 });
   return true;
-}
-
-function criteriaDigest(task: Task): string {
-  return digestJson(
-    task.criteria.map(({ id, revision, description, required, approvalRequired }) => ({
-      id,
-      revision,
-      description,
-      required,
-      approvalRequired,
-    })),
-  );
-}
-
-function approvalValid(record: WorkflowRecord, task: Task): boolean {
-  return Boolean(
-    record.approval &&
-    record.requirements &&
-    record.plan &&
-    record.approval.requirementsDigest === record.requirements.digest &&
-    record.approval.planDigest === record.plan.digest &&
-    record.approval.checksDigest === record.plan.checksDigest &&
-    record.approval.criteriaDigest === criteriaDigest(task) &&
-    // See docs/task-state.md#reconciling-changed-intent: a change to accepted intent (an accepted
-    // decision superseded, an assumption un-confirmed, …) invalidates approval exactly like a
-    // criteria change already does, even when no criterion text moved.
-    // An approval persisted before intent digests existed was necessarily made with no adopted
-    // records, so it compares against the empty-intent digest.
-    (record.approval.intentDigest ?? computeIntentDigest([])) ===
-      computeIntentDigest(task.records ?? []),
-  );
 }
 
 function correlatedCheckLabel(actionId: string, check: AcceptanceCheck): string {
@@ -614,6 +588,11 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
     action: WorkflowAction,
     ownerId: string,
     actionContext: string,
+    /** Set only by `invoke()`, which is the only dispatch that starts a fresh provider
+     * conversation; see issue #112. Binding happens in the same journal mutation that claims
+     * `pendingAction`, so `record.lastDispatchedContext` always reflects the exact brief bound to
+     * the dispatch that is actually about to run. */
+    dispatchedContext?: WorkflowDispatchedContext,
   ): Promise<WorkflowActionJournal> {
     const source = await tasks.source(root);
     const pending: WorkflowActionJournal = {
@@ -637,6 +616,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         current.status = 'running';
         current.lastOutcome = { status: 'none', summary: '' };
         if (action.repair) current.repairAttempts += 1;
+        if (dispatchedContext) current.lastDispatchedContext = dispatchedContext;
       });
     } catch (error) {
       LIVE_ACTION_OWNERS.delete(ownerId);
@@ -757,8 +737,33 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       }
       await ensureRunningTask(record);
     }
+    // Bind a fresh context brief (issue #112) to this exact dispatch before journaling it: the
+    // brief is always rebuilt from the current task/workflow state rather than reused, so a source
+    // drift or an intent/criteria change between the last dispatch and this one is reflected
+    // immediately. It is built from this controller's own `task`/`record` (already sourced through
+    // the injectable `tasks` service) rather than an independent storage read, so a test double or
+    // an in-flight mutation can never disagree with what the rest of this dispatch is using. A
+    // brief whose mandatory content cannot fit its byte budget is an actionable refusal, not an
+    // incomplete dispatch — it fails this invocation the same way a stale approval already does,
+    // before any provider process starts.
+    let dispatchedContext: WorkflowDispatchedContext | undefined;
+    try {
+      dispatchedContext = (
+        await bindDispatchContext(root, {
+          task,
+          workflow: record,
+          source: await tasks.source(root),
+        })
+      ).binding;
+    } catch (error) {
+      if (error instanceof ContextBriefError)
+        throw new WorkflowError(error.message, 'WORKFLOW_CONTEXT_BUDGET_EXCEEDED', {
+          cause: error.code,
+        });
+      throw error;
+    }
     const actionContext = workflowContext(record, task);
-    const pending = await journal(record, action, ownerId, actionContext);
+    const pending = await journal(record, action, ownerId, actionContext, dispatchedContext);
     try {
       const plan = invocationPlan(adapter, action.phase, action.prompt, root);
       const result = await observeProviderInvocation({
@@ -1231,6 +1236,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       mutations: [{ id: selectedMutationId, digest: digestJson(input), revision: 1 }],
       lastOutcome: { status: 'none', summary: '' },
       source,
+      lastDispatchedContext: null,
       createdAt: at,
       updatedAt: at,
     };
@@ -1274,7 +1280,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         planDigest: input.planDigest,
         requirementsDigest: input.requirementsDigest,
         checksDigest: input.checksDigest,
-        criteriaDigest: criteriaDigest(task),
+        criteriaDigest: criteriaDigest(task.criteria),
         intentDigest: computeIntentDigest(task.records ?? []),
         scope: requiredText(input.scope, 'scope'),
         reference: requiredText(input.reference, 'reference'),
