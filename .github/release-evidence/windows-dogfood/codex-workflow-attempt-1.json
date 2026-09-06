@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "live-workflow-qualification-failure",
+  "status": "failed",
+  "attemptId": "d721ab14-0363-49f0-9c2a-eeb561cbf355",
+  "startedAt": "2026-09-06T14:40:25.643Z",
+  "finishedAt": "2026-09-06T14:40:52.521Z",
+  "failure": {
+    "stage": "plan-scope",
+    "reason": "Qualification did not satisfy its required evidence checks."
+  },
+  "candidate": {
+    "archiveSha256": "76639da0cc748eefdba4db7e7ce03121fcc8427559258ddc9efac486fa1177a9",
+    "commit": "42889f7b54db2009483d9c54d63a16b77f5b8f5c",
+    "version": "1.0.0-dogfood.20260906.1",
+    "target": "win32-x64"
+  },
+  "provider": {
+    "id": "codex",
+    "modelOverride": "gpt-5.6-luna",
+    "reasoningEffortOverride": "medium"
+  },
+  "bounds": {
+    "providerTimeoutMs": 120000,
+    "totalTimeoutMs": 900000,
+    "outputLimitBytes": 1048576,
+    "providerProcessStarts": 2
+  },
+  "workflow": {
+    "phase": "plan",
+    "status": "awaiting-approval",
+    "repairAttempts": 0,
+    "actions": [
+      {
+        "phase": "requirements",
+        "status": "passed"
+      },
+      {
+        "phase": "plan",
+        "status": "passed"
+      }
+    ]
+  }
+}
