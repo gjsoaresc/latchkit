@@ -338,6 +338,17 @@ export async function applyManagedMcp(
       )) ||
     (definitions.length === 0 && (await hasCodexManagedMcp(root)))
   ) {
+    const reviewedPlan = await planManagedMcp(root, definitions, grants, options.environment);
+    if (
+      (options.expectedSnapshotDigest !== undefined &&
+        options.expectedSnapshotDigest !== (await managedMcpSnapshotDigest(root))) ||
+      (options.expectedPlanDigest !== undefined &&
+        options.expectedPlanDigest !== entryHash(reviewedPlan))
+    )
+      throw new McpContractError(
+        'The reviewed MCP preview no longer matches the managed configuration. Review it again.',
+        'MCP_EDIT_CONFLICT',
+      );
     const plan = await applyCodexManagedMcp(root, definitions, {
       authorized: grants.some((grant) => grant.provider === 'codex' && grant.authorized),
       faultBoundary: options.faultBoundary,

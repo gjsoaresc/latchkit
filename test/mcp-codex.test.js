@@ -6,10 +6,12 @@ import path from 'node:path';
 import {
   applyCodexManagedMcp,
   assertCodexManagedMcpRuntime,
+  codexManagedMcpSnapshotDigest,
   codexMcpQualification,
   planCodexManagedMcp,
 } from '../dist/src/integrations/mcp/codex.js';
 import { inspectManagedMcp } from '../dist/src/integrations/mcp/managed.js';
+import { entryHash } from '../dist/src/integrations/mcp/contracts.js';
 
 const version = 'codex-cli 0.153.2';
 const definition = (overrides = {}) => ({
@@ -113,6 +115,11 @@ test('Codex refuses malformed TOML and never records invalid or duplicate entrie
     planCodexManagedMcp(root, [definition()], { authorized: true, versionOutput: version }),
     { code: 'MCP_TOML_CONFLICT' },
   );
+  await fs.writeFile(config, 'model = nope\n');
+  await assert.rejects(
+    planCodexManagedMcp(root, [definition()], { authorized: true, versionOutput: version }),
+    { code: 'MCP_TOML_CONFLICT' },
+  );
   await fs.writeFile(config, 'model = "gpt-5"\n');
   const invalid = definition({
     id: 'legacy',
@@ -140,4 +147,21 @@ test('Codex refuses malformed TOML and never records invalid or duplicate entrie
     code: 'ENOENT',
   });
   assert.equal(await fs.readFile(config, 'utf8'), 'model = "gpt-5"\n');
+});
+
+test('Codex apply rejects an exact reviewed snapshot that becomes stale', async (t) => {
+  const root = await fixture(t);
+  const options = { authorized: true, versionOutput: version };
+  const plan = await planCodexManagedMcp(root, [definition()], options);
+  const snapshot = await codexManagedMcpSnapshotDigest(root);
+  await fs.mkdir(path.join(root, '.codex'));
+  await fs.writeFile(path.join(root, '.codex/config.toml'), 'model = "changed"\n');
+  await assert.rejects(
+    applyCodexManagedMcp(root, [definition()], {
+      ...options,
+      expectedSnapshotDigest: snapshot,
+      expectedPlanDigest: entryHash(plan),
+    }),
+    { code: 'MCP_EDIT_CONFLICT' },
+  );
 });

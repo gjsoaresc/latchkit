@@ -193,12 +193,40 @@ function range(raw: string, id: string): [number, number] | null {
 /** This deliberately accepts only the TOML forms this serializer can safely
  * preserve. It is not a permissive partial parser: malformed source blocks a
  * write instead of risking repair/normalization of user configuration. */
+const TOML_KEY =
+  /^(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\.(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*$/;
+const TOML_NUMBER = /^[+-]?(?:0|[1-9](?:_?\d)*)(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?$/;
+const TOML_DATE = /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+function tomlValue(value: string): boolean {
+  if (/^"(?:[^"\\\r\n]|\\[btnfr"\\])*"$/.test(value) || /^'[^'\r\n]*'$/.test(value)) return true;
+  if (value === 'true' || value === 'false' || TOML_NUMBER.test(value) || TOML_DATE.test(value))
+    return true;
+  if (value.startsWith('[') && value.endsWith(']')) {
+    const inner = value.slice(1, -1).trim();
+    return !inner || inner.split(',').every((item) => tomlValue(item.trim()));
+  }
+  if (value.startsWith('{') && value.endsWith('}')) {
+    const inner = value.slice(1, -1).trim();
+    return (
+      !inner ||
+      inner.split(',').every((item) => {
+        const equals = item.indexOf('=');
+        return (
+          equals > 0 &&
+          TOML_KEY.test(item.slice(0, equals).trim()) &&
+          tomlValue(item.slice(equals + 1).trim())
+        );
+      })
+    );
+  }
+  return false;
+}
 function assertTomlPreservable(raw: string): void {
   for (const line of raw.split(/\r?\n/)) {
     const text = line.replace(/\s+#.*$/, '').trim();
     if (!text || text.startsWith('#')) continue;
     if (text.startsWith('[')) {
-      if (!/^\[[^[\]\r\n]+\]$/.test(text))
+      if (!/^\[[^[\]\r\n]+\]$/.test(text) || !TOML_KEY.test(text.slice(1, -1).trim()))
         throw new McpContractError(
           'Refusing malformed or unsupported TOML in .codex/config.toml.',
           'MCP_TOML_CONFLICT',
@@ -206,14 +234,17 @@ function assertTomlPreservable(raw: string): void {
       continue;
     }
     const equals = text.indexOf('=');
-    if (equals <= 0 || !text.slice(equals + 1).trim())
+    if (
+      equals <= 0 ||
+      !TOML_KEY.test(text.slice(0, equals).trim()) ||
+      !text.slice(equals + 1).trim()
+    )
       throw new McpContractError(
         'Refusing malformed or unsupported TOML in .codex/config.toml.',
         'MCP_TOML_CONFLICT',
       );
     const value = text.slice(equals + 1).trim();
-    const doubleQuotes = [...value.matchAll(/(?<!\\)"/g)].length;
-    if (doubleQuotes % 2 || /\[\s*$/.test(value) || /,\s*\]$/.test(value))
+    if (!tomlValue(value))
       throw new McpContractError(
         'Refusing malformed or unsupported TOML in .codex/config.toml.',
         'MCP_TOML_CONFLICT',
