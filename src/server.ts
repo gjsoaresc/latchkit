@@ -267,7 +267,17 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
     return result;
   };
 
-  const server = http.createServer({ maxHeaderSize: 16 * 1024 }, async (req, res) => {
+  const activeRequests = new Set<Promise<void>>();
+  const server = http.createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
+    const request = handleRequest(req, res);
+    activeRequests.add(request);
+    void request.then(
+      () => activeRequests.delete(request),
+      () => activeRequests.delete(request),
+    );
+  });
+
+  async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
@@ -571,12 +581,35 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         ...(details.configRevision ? { configRevision: details.configRevision } : {}),
       });
     }
-  });
+  }
   server.requestTimeout = 30_000;
   server.headersTimeout = 15_000;
+  let shutdown: Promise<void> | undefined;
+  const drain = () =>
+    (shutdown ??= (async () => {
+      // A disconnected socket does not stop its asynchronous handler. Finish
+      // admitted requests before stopping workflows they may still schedule.
+      await Promise.allSettled([...activeRequests]);
+      await workflowController.shutdown();
+    })());
   server.once('close', () => {
-    void workflowController.shutdown();
+    void drain().catch(() => {});
   });
+  const closeTransport = server.close;
+  server.close = function (callback) {
+    return closeTransport.call(this, function (this: http.Server | undefined, error) {
+      // Preserve the native close event and return value; the callback also
+      // guarantees that this server's requests and workflows have drained.
+      void drain().then(
+        () => callback?.call(this, error),
+        (failure: unknown) =>
+          callback?.call(
+            this,
+            error ?? (failure instanceof Error ? failure : new Error('Server shutdown failed.')),
+          ),
+      );
+    });
+  };
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => {
