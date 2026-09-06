@@ -145,6 +145,12 @@ import {
   saveCodegraphSettings,
   syncCodegraph,
 } from './integrations/codegraph/service.js';
+import {
+  createContractAssociation,
+  acknowledgeContractReceipt,
+  inspectContractImpact,
+  proposeContractRevision,
+} from './task-state/contract-coordination.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -577,6 +583,15 @@ try {
       'review-id': { type: 'string' },
       'since-digest': { type: 'string' },
       'byte-budget': { type: 'string' },
+      'producer-task': { type: 'string' },
+      'consumer-task': { type: 'string' },
+      'producer-record': { type: 'string' },
+      'consumer-record': { type: 'string' },
+      'producer-revision': { type: 'string' },
+      'consumer-revision': { type: 'string' },
+      'criterion-ids': { type: 'string' },
+      'association-id': { type: 'string' },
+      'contract-digest': { type: 'string' },
     },
   });
   cliValues = values;
@@ -645,6 +660,15 @@ try {
         'since-digest',
         'byte-budget',
         'format',
+        'producer-task',
+        'consumer-task',
+        'producer-record',
+        'consumer-record',
+        'producer-revision',
+        'consumer-revision',
+        'criterion-ids',
+        'association-id',
+        'contract-digest',
       ],
       task: [
         'project',
@@ -1103,6 +1127,10 @@ try {
         'reconcile-preview',
         'reconcile-apply',
         'context-preview',
+        'contract-link',
+        'contract-impact',
+        'contract-revise',
+        'contract-acknowledge',
       ];
       if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
         throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
@@ -1409,6 +1437,66 @@ try {
           ...(values['since-digest'] !== undefined ? { sinceDigest: values['since-digest'] } : {}),
           format: requireContextBriefFormat(values.format),
         });
+      } else if (action === 'contract-link') {
+        const producerRevision = Number(
+          requiredOption(values['producer-revision'], 'producer-revision'),
+        );
+        const consumerRevision = Number(
+          requiredOption(values['consumer-revision'], 'consumer-revision'),
+        );
+        if (!Number.isInteger(producerRevision) || !Number.isInteger(consumerRevision))
+          throw new Error('Producer and consumer revisions must be integers.');
+        print(
+          await createContractAssociation(root, {
+            producerTaskId: requiredOption(values['producer-task'], 'producer-task'),
+            consumerTaskId: requiredOption(values['consumer-task'], 'consumer-task'),
+            producerRecordId: requiredOption(values['producer-record'], 'producer-record'),
+            consumerRecordId: requiredOption(values['consumer-record'], 'consumer-record'),
+            criterionIds: requiredOption(values['criterion-ids'], 'criterion-ids')
+              .split(',')
+              .filter(Boolean),
+            expectedProducerRevision: producerRevision,
+            expectedConsumerRevision: consumerRevision,
+            provenance: requiredOption(values.reference, 'reference'),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (action === 'contract-impact') {
+        print(
+          await inspectContractImpact(root, {
+            producerTaskId: requiredOption(values['producer-task'], 'producer-task'),
+            producerRecordId: requiredOption(values['producer-record'], 'producer-record'),
+          }),
+        );
+      } else if (action === 'contract-revise') {
+        const producerRevision = Number(
+          requiredOption(values['producer-revision'], 'producer-revision'),
+        );
+        if (!Number.isInteger(producerRevision))
+          throw new Error('--producer-revision must be an integer.');
+        print(
+          await proposeContractRevision(root, {
+            associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedAssociationRevision: Number(requiredOption(values.revision, 'revision')),
+            expectedProducerRevision: producerRevision,
+            provenance: requiredOption(values.reference, 'reference'),
+            ...(values.status === 'pending' ? { accept: false } : {}),
+          }),
+        );
+      } else if (action === 'contract-acknowledge') {
+        const consumerRevision = Number(
+          requiredOption(values['consumer-revision'], 'consumer-revision'),
+        );
+        if (!Number.isInteger(consumerRevision))
+          throw new Error('--consumer-revision must be an integer.');
+        print(
+          await acknowledgeContractReceipt(root, {
+            associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedAssociationRevision: Number(requiredOption(values.revision, 'revision')),
+            expectedConsumerRevision: consumerRevision,
+            contractDigest: requiredOption(values['contract-digest'], 'contract-digest'),
+          }),
+        );
       } else {
         const hasAuthorization =
           values['authorization-scope'] !== undefined ||
