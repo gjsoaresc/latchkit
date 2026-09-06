@@ -13,6 +13,8 @@ When the caller requests lower usage or latency, apply the [optional efficiency 
 
 Use the existing authorization and scope. Distinguish plan-only requests from delivery requests; do not add approval checkpoints to already authorized work. Confirm the named criteria, allowed directories, and limits for iteration, time, and provider usage. Never merge, deploy, send messages, schedule work, or start costly orchestration merely because this skill is present.
 
+If a durable plan exists, it is normally under `docs/plans/` (or the legacy `.latchkit/notes/` for older tasks); read it for the accepted scope and criteria instead of re-deriving them.
+
 ## Iterate with evidence
 
 For each criterion, make the smallest coherent change, run a focused check, and record the command, result, environment, and artifact. Prefer a failing regression test before a behavioral fix. Use the repository's declared quality gates only when a caller supplies an explicit execution authorization and the provider capability supports the requested mode.

@@ -114,7 +114,8 @@ credentials.
 
 Ask for `latchkit-requirements` and then `latchkit-spec` with: “Clarify the
 acceptance criteria and write a plan; do not edit files.” The expected result is
-a requirements/specification note under `.latchkit/notes/`, no source edits,
+a requirements/specification note under `docs/plans/` (or the legacy
+`.latchkit/notes/` when continuing an existing task there), no source edits,
 and explicit unresolved decisions. Approval to implement is not invented by a
 skill or workflow.
 

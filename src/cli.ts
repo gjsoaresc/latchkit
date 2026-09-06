@@ -19,8 +19,10 @@ import {
   importMarkdownTask,
   inspectTask,
   listTasks,
+  migrateLegacyPlan,
   migrateTaskState,
   registerEnhancedWorkflow,
+  resolveCollisionSafePlanPath,
   resumeTask,
   verifyTask,
 } from './task-state/service.js';
@@ -105,9 +107,9 @@ Usage: latchkit <command> [options]
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
-  spec       Register/inspect/migrate/verify an enhanced spec, or present/approve/
-             note/pause/build the end-of-spec decision (approve and build,
-             add revision notes, or keep the plan for later)
+  spec       Register/inspect/migrate/verify an enhanced spec, preview a plan-path or
+             migrate-plan a durable plan, or present/approve/note/pause/build the
+             end-of-spec decision (approve and build, add notes, or keep for later)
   workflow   Run, inspect, approve, resume, or cancel a delivery workflow
   self       Inspect, upgrade, roll back, or uninstall this standalone installation
   review     Run bounded independent reviews
@@ -165,6 +167,9 @@ Options:
   --resolution <decision> workflow resume: observed, abandon, or retry an interrupted action
   --action-id <id>    workflow resume: interrupted action being resolved
   --file <path>       workflow run: versioned acceptance checks
+  --title <text>      spec plan-path: desired plan title used to derive the filename
+  --from <path>       spec migrate-plan: legacy .latchkit/notes/ source to migrate
+  --to <path>         spec migrate-plan: explicit docs/plans/ destination (default: derived)
   --timezone <iana>   schedule create/edit: IANA timezone
   --every-minutes <n> schedule create/edit: recurrence interval
   --scope <text>      schedule create: authorized task scope
@@ -192,6 +197,7 @@ try {
       skills: { type: 'string' },
       port: { type: 'string' },
       to: { type: 'string' },
+      from: { type: 'string' },
       'dry-run': { type: 'boolean' },
       task: { type: 'string' },
       'expected-revision': { type: 'string' },
@@ -339,6 +345,9 @@ try {
         'text',
         'scope',
         'reference',
+        'from',
+        'to',
+        'title',
       ],
       review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
       diff: [
@@ -706,11 +715,25 @@ try {
         'decision-pause',
         'decision-build',
         'decision-inspect',
+        'plan-path',
+        'migrate-plan',
       ];
       if (extra.length !== 1 || !specActions.includes(extra[0] ?? ''))
         throw new Error(`Usage: latchkit spec <${specActions.join('|')}> [options].`);
       const action = extra[0];
       if (action === 'migrate') print(await migrateTaskState(root, { dryRun: values['dry-run'] }));
+      else if (action === 'plan-path')
+        print({
+          path: await resolveCollisionSafePlanPath(root, requiredOption(values.title, 'title')),
+        });
+      else if (action === 'migrate-plan')
+        print(
+          await migrateLegacyPlan(root, {
+            from: requiredOption(values.from, 'from'),
+            ...(values.to ? { to: values.to } : {}),
+            dryRun: values['dry-run'] === true,
+          }),
+        );
       else if (action === 'inspect')
         print((await inspectTask(root, requiredOption(values.task, 'task'))).task.enhancedWorkflow);
       else if (action === 'decision-inspect')

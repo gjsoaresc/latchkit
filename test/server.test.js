@@ -151,6 +151,57 @@ test('enhanced specification API registers and inspects revision-bound metadata'
   assert.equal(inspected.enhancedWorkflow.checks[0].id, 'api-result');
 });
 
+test('spec plan-path and migrate-plan APIs are authenticated and never overwrite a conflicting file', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  assert.equal((await fetch(`${origin}/api/spec/plan-path?title=API+Plan`)).status, 401);
+  const previewed = await (
+    await fetch(`${origin}/api/spec/plan-path?title=${encodeURIComponent('API Plan')}`, { headers })
+  ).json();
+  assert.equal(previewed.path, 'docs/plans/api-plan.md');
+
+  await mkdir(path.join(root, '.latchkit', 'notes'), { recursive: true });
+  await writeFile(path.join(root, '.latchkit', 'notes', 'api-plan.md'), '# API plan\n');
+  assert.equal(
+    (
+      await fetch(`${origin}/api/spec/migrate-plan`, {
+        method: 'POST',
+        body: JSON.stringify({ from: '.latchkit/notes/api-plan.md' }),
+      })
+    ).status,
+    401,
+  );
+  const migrated = await (
+    await fetch(`${origin}/api/spec/migrate-plan`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ from: '.latchkit/notes/api-plan.md' }),
+    })
+  ).json();
+  assert.equal(migrated.action, 'migrated');
+  assert.equal(migrated.to, 'docs/plans/api-plan.md');
+  assert.equal(
+    await readFile(path.join(root, 'docs', 'plans', 'api-plan.md'), 'utf8'),
+    '# API plan\n',
+  );
+  assert.equal(
+    await readFile(path.join(root, '.latchkit', 'notes', 'api-plan.md'), 'utf8'),
+    '# API plan\n',
+  );
+
+  await writeFile(path.join(root, '.latchkit', 'notes', 'conflict.md'), '# Conflicting\n');
+  const conflict = await fetch(`${origin}/api/spec/migrate-plan`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ from: '.latchkit/notes/conflict.md', to: 'docs/plans/api-plan.md' }),
+  });
+  assert.equal(conflict.status, 400);
+  assert.match((await conflict.json()).error, /already exists with different content/);
+  assert.equal(
+    await readFile(path.join(root, 'docs', 'plans', 'api-plan.md'), 'utf8'),
+    '# API plan\n',
+  );
+});
+
 test('authenticated API exposes a task-owned diff and revision-bound annotations', async (t) => {
   const { root, origin, headers } = await fixture(t);
   await execFile('git', ['init', root]);

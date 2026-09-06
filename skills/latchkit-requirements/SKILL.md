@@ -13,7 +13,7 @@ When the caller requests lower usage or latency, apply the [optional efficiency 
 
 Record the audience, problem, desired outcome, constraints, non-goals, and decisions that materially affect the work. Separate what the requester said from assumptions and unresolved questions. Do not invent provider capabilities, credentials, approvals, or evidence.
 
-Write `.latchkit/notes/<unique-task-slug>-requirements.md` unless the user asked for an inline result or writes are unavailable. Use the template in [workflow evidence](../references/workflow-evidence.md). Keep secrets, full private transcripts, and unrelated repository contents out of the note.
+Write a collision-safe, readable filename under `docs/plans/`, for example `docs/plans/<unique-task-slug>-requirements.md`, unless the user asked for an inline result or writes are unavailable. Follow an explicit existing project convention (`AGENTS.md`, `CLAUDE.md`, or similar) when one names a different plan location; do not overwrite an unrelated file already at the chosen name. A requirements record already under the legacy `.latchkit/notes/` location remains valid and readable without an implicit move. Use the template in [workflow evidence](../references/workflow-evidence.md). Keep secrets, full private transcripts, and unrelated repository contents out of the note.
 
 ## Make intent observable
 

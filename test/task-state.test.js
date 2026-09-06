@@ -15,11 +15,14 @@ import {
   createTask,
   importMarkdownTask,
   inspectTask,
+  migrateLegacyPlan,
   migrateTaskState,
   recordEvidence,
   registerEnhancedWorkflow,
+  resolveCollisionSafePlanPath,
   resumeTask,
   reviseCriteria,
+  slugifyPlanTitle,
   verifyTask,
 } from '../dist/src/task-state/service.js';
 import { readTaskState, TASK_STATE_PATH } from '../dist/src/task-state/store.js';
@@ -663,4 +666,247 @@ test('CLI inspect, resume, and cancel operate on a Unicode project path', async 
   assert.equal(cancelled.state, 'cancelled');
   assert.equal((await readTaskState(root)).tasks[0].state, 'cancelled');
   assert.equal(TASK_STATE_PATH, '.latchkit/tasks/state-v1.json');
+});
+
+test('enhanced workflow registration and Markdown import accept durable plans under docs/plans and continue to accept the legacy notes location', async (t) => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  await fs.mkdir(path.join(root, '.latchkit', 'notes'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(root, '.latchkit', 'notes', 'plan.md'), '# Plan\n');
+  const created = await createTask(root, {
+    title: 'Durable plan task',
+    authorization: authorization(),
+    criteria: [{ description: 'observable result' }],
+  });
+  const registered = await registerEnhancedWorkflow(root, {
+    taskId: created.id,
+    expectedRevision: created.revision,
+    artifacts: {
+      prd: { path: 'docs/plans/prd.md', templateVersion: 1 },
+      technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+    },
+    checks: [{ id: 'mixed-location', criterionId: created.criteria[0].id, type: 'cli' }],
+  });
+  assert.equal(registered.enhancedWorkflow.artifacts.prd.path, 'docs/plans/prd.md');
+  assert.equal(registered.enhancedWorkflow.artifacts.technicalPlan.path, '.latchkit/notes/plan.md');
+
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'imported-plan.md'), '# Imported\n');
+  const imported = await importMarkdownTask(root, {
+    notePath: 'docs/plans/imported-plan.md',
+    title: 'Imported durable plan',
+  });
+  assert.equal(imported.import.path, 'docs/plans/imported-plan.md');
+});
+
+test('enhanced workflow registration and Markdown import reject a plan outside docs/plans and the legacy notes location', async (t) => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, 'docs', 'other'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'other', 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(root, 'docs', 'other', 'plan.md'), '# Plan\n');
+  const created = await createTask(root, {
+    title: 'Rejected plan location task',
+    authorization: authorization(),
+    criteria: [{ description: 'observable result' }],
+  });
+  await assert.rejects(
+    registerEnhancedWorkflow(root, {
+      taskId: created.id,
+      expectedRevision: created.revision,
+      artifacts: {
+        prd: { path: 'docs/other/prd.md', templateVersion: 1 },
+        technicalPlan: { path: 'docs/other/plan.md', templateVersion: 1 },
+      },
+      checks: [{ id: 'rejected', criterionId: created.criteria[0].id, type: 'cli' }],
+    }),
+    { code: 'TASK_ENHANCED_WORKFLOW_INVALID' },
+  );
+  await assert.rejects(
+    importMarkdownTask(root, { notePath: 'docs/other/prd.md', title: 'Rejected import' }),
+    { code: 'TASK_IMPORT_INVALID' },
+  );
+});
+
+test('collision-safe plan paths are readable, portable, and never reuse an existing filename, on a Windows path with spaces and Unicode', async (t) => {
+  const root = await fixture(t);
+  assert.match(root, /project with spaces é/);
+
+  assert.equal(slugifyPlanTitle(''), 'plan');
+  assert.equal(slugifyPlanTitle('   ---   '), 'plan');
+  assert.equal(slugifyPlanTitle('Café résumé Plan!'), 'cafe-resume-plan');
+
+  const first = await resolveCollisionSafePlanPath(root, 'Café résumé Plan!');
+  assert.equal(first, 'docs/plans/cafe-resume-plan.md');
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  await fs.writeFile(path.join(root, first), '# Existing\n');
+
+  const second = await resolveCollisionSafePlanPath(root, 'Café résumé Plan!');
+  assert.equal(second, 'docs/plans/cafe-resume-plan-2.md');
+  await fs.writeFile(path.join(root, second), '# Existing 2\n');
+
+  const third = await resolveCollisionSafePlanPath(root, 'Café résumé Plan!');
+  assert.equal(third, 'docs/plans/cafe-resume-plan-3.md');
+});
+
+test('legacy plan migration preserves the original, is explicit and idempotent, and never overwrites a conflicting file', async (t) => {
+  const root = await fixture(t);
+  const notes = path.join(root, '.latchkit', 'notes');
+  await fs.mkdir(notes, { recursive: true });
+  await fs.writeFile(path.join(notes, 'legacy-spec.md'), '# Legacy\n');
+
+  const preview = await migrateLegacyPlan(root, {
+    from: '.latchkit/notes/legacy-spec.md',
+    dryRun: true,
+  });
+  assert.deepEqual(preview, {
+    from: '.latchkit/notes/legacy-spec.md',
+    to: 'docs/plans/legacy-spec.md',
+    sha256: preview.sha256,
+    action: 'migrated',
+  });
+  await assert.rejects(fs.access(path.join(root, 'docs', 'plans', 'legacy-spec.md')));
+
+  const migrated = await migrateLegacyPlan(root, { from: '.latchkit/notes/legacy-spec.md' });
+  assert.equal(migrated.action, 'migrated');
+  assert.equal(migrated.to, 'docs/plans/legacy-spec.md');
+  assert.equal(
+    await fs.readFile(path.join(root, 'docs', 'plans', 'legacy-spec.md'), 'utf8'),
+    '# Legacy\n',
+  );
+  assert.equal(await fs.readFile(path.join(notes, 'legacy-spec.md'), 'utf8'), '# Legacy\n');
+
+  const repeated = await migrateLegacyPlan(root, { from: '.latchkit/notes/legacy-spec.md' });
+  assert.equal(repeated.action, 'current');
+
+  await fs.writeFile(path.join(notes, 'conflict.md'), '# Conflicting source\n');
+  await fs.writeFile(
+    path.join(root, 'docs', 'plans', 'conflict.md'),
+    '# Unrelated existing plan\n',
+  );
+  await assert.rejects(migrateLegacyPlan(root, { from: '.latchkit/notes/conflict.md' }), {
+    code: 'PLAN_MIGRATION_TARGET_CONFLICT',
+  });
+  assert.equal(
+    await fs.readFile(path.join(notes, 'conflict.md'), 'utf8'),
+    '# Conflicting source\n',
+  );
+  assert.equal(
+    await fs.readFile(path.join(root, 'docs', 'plans', 'conflict.md'), 'utf8'),
+    '# Unrelated existing plan\n',
+  );
+
+  await assert.rejects(migrateLegacyPlan(root, { from: '.latchkit/notes/missing.md' }), {
+    code: 'PLAN_MIGRATION_SOURCE_MISSING',
+  });
+  await assert.rejects(migrateLegacyPlan(root, { from: 'docs/plans/legacy-spec.md' }), {
+    code: 'PLAN_MIGRATION_INVALID',
+  });
+  await assert.rejects(
+    migrateLegacyPlan(root, { from: '.latchkit/notes/legacy-spec.md', to: '.latchkit/notes/x.md' }),
+    { code: 'PLAN_MIGRATION_INVALID' },
+  );
+});
+
+test('CLI resolves a collision-safe plan path and migrates a legacy plan explicitly', async (t) => {
+  const root = await fixture(t);
+  const planPath = JSON.parse(
+    (
+      await execFileAsync(process.execPath, [
+        cli,
+        'spec',
+        'plan-path',
+        '--project',
+        root,
+        '--title',
+        'My New Feature',
+      ])
+    ).stdout,
+  );
+  assert.equal(planPath.path, 'docs/plans/my-new-feature.md');
+
+  const notes = path.join(root, '.latchkit', 'notes');
+  await fs.mkdir(notes, { recursive: true });
+  await fs.writeFile(path.join(notes, 'cli-plan.md'), '# CLI plan\n');
+  const migrated = JSON.parse(
+    (
+      await execFileAsync(process.execPath, [
+        cli,
+        'spec',
+        'migrate-plan',
+        '--project',
+        root,
+        '--from',
+        '.latchkit/notes/cli-plan.md',
+      ])
+    ).stdout,
+  );
+  assert.equal(migrated.action, 'migrated');
+  assert.equal(migrated.to, 'docs/plans/cli-plan.md');
+  assert.equal(await fs.readFile(path.join(notes, 'cli-plan.md'), 'utf8'), '# CLI plan\n');
+  assert.equal(
+    await fs.readFile(path.join(root, 'docs', 'plans', 'cli-plan.md'), 'utf8'),
+    '# CLI plan\n',
+  );
+});
+
+test('editing a durable plan under docs/plans invalidates evidence like other tracked files, while the legacy notes location stays excluded', async (t) => {
+  const withNewLocation = await fixture(t);
+  await fs.mkdir(path.join(withNewLocation, 'docs', 'plans'), { recursive: true });
+  await fs.writeFile(path.join(withNewLocation, 'docs', 'plans', 'plan.md'), '# Plan v1\n');
+  let newLocationTask = await runningTask(withNewLocation);
+  const newLocationCriterion = newLocationTask.criteria[0];
+  newLocationTask = await recordEvidence(withNewLocation, {
+    taskId: newLocationTask.id,
+    runId: newLocationTask.owner.runId,
+    expectedRevision: newLocationTask.revision,
+    criterionId: newLocationCriterion.id,
+    criterionRevision: newLocationCriterion.revision,
+    outcome: 'passed',
+  });
+  newLocationTask = await completeTask(withNewLocation, {
+    taskId: newLocationTask.id,
+    runId: newLocationTask.runs[0].id,
+    expectedRevision: newLocationTask.revision,
+  });
+  // Editing the plan after evidence was recorded changes the working-tree source snapshot, so the
+  // formerly passing evidence is no longer current for the same criterion revision.
+  await fs.writeFile(path.join(withNewLocation, 'docs', 'plans', 'plan.md'), '# Plan v2\n');
+  await assert.rejects(
+    verifyTask(withNewLocation, {
+      taskId: newLocationTask.id,
+      expectedRevision: newLocationTask.revision,
+    }),
+    (error) => {
+      assert.equal(error.code, 'TASK_NOT_VERIFIABLE');
+      assert.equal(error.failures[0].reason, 'missing-current-evidence');
+      return true;
+    },
+  );
+
+  const legacy = await fixture(t);
+  await fs.mkdir(path.join(legacy, '.latchkit', 'notes'), { recursive: true });
+  await fs.writeFile(path.join(legacy, '.latchkit', 'notes', 'plan.md'), '# Plan v1\n');
+  let legacyTask = await runningTask(legacy);
+  const legacyCriterion = legacyTask.criteria[0];
+  legacyTask = await recordEvidence(legacy, {
+    taskId: legacyTask.id,
+    runId: legacyTask.owner.runId,
+    expectedRevision: legacyTask.revision,
+    criterionId: legacyCriterion.id,
+    criterionRevision: legacyCriterion.revision,
+    outcome: 'passed',
+  });
+  legacyTask = await completeTask(legacy, {
+    taskId: legacyTask.id,
+    runId: legacyTask.runs[0].id,
+    expectedRevision: legacyTask.revision,
+  });
+  // The legacy .latchkit/notes/ location is excluded from the source fingerprint, so editing a
+  // plan stored there does not by itself invalidate otherwise-current evidence.
+  await fs.writeFile(path.join(legacy, '.latchkit', 'notes', 'plan.md'), '# Plan v2\n');
+  const verifiedLegacy = await verifyTask(legacy, {
+    taskId: legacyTask.id,
+    expectedRevision: legacyTask.revision,
+  });
+  assert.equal(verifiedLegacy.state, 'verified');
 });

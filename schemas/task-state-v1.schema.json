@@ -211,7 +211,7 @@
           "additionalProperties": false,
           "required": ["path", "sha256", "importedAt"],
           "properties": {
-            "path": { "type": "string", "pattern": "^\\.latchkit/notes/.+\\.md$" },
+            "path": { "type": "string", "pattern": "^(docs/plans/|\\.latchkit/notes/).+\\.md$" },
             "sha256": { "$ref": "#/$defs/sha256" },
             "importedAt": { "$ref": "#/$defs/timestamp" }
           }

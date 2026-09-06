@@ -4,6 +4,8 @@ Latchkit stores workflow state separately from configuration and installer recov
 
 Version 2 adds nullable, versioned [enhanced-workflow metadata](../schemas/enhanced-workflow-v1.schema.json) to every task. A null value preserves ordinary task behavior. Explicit registration records PRD and technical-plan hashes plus declared criterion/check mappings in the same locked task revision. It never interprets Markdown as an executable contract.
 
+Durable specifications and technical plans default to a collision-safe, readable filename under `docs/plans/`. Registration and import continue to accept the legacy `.latchkit/notes/` location so existing artifacts remain valid; nothing migrates implicitly. `docs/plans/` is an ordinary tracked project path, unlike `.latchkit/notes/`, which the source fingerprint used for evidence currency explicitly excludes: editing a plan under `docs/plans/` therefore changes the working-tree source snapshot and can invalidate evidence bound to the prior snapshot under the existing revision/source-matching policy, while a `.latchkit/notes/` edit alone does not. Re-registering an enhanced workflow after either kind of edit still increments `enhancedWorkflow.revision` and recomputes the artifact hash.
+
 ## Records and verification
 
 Stable prefixed UUIDs identify projects, tasks, runs, criteria, checkpoints, evidence, authorizations, owners, and mutation events. Task and store revisions provide optimistic concurrency. Callers should persist the returned task revision and supply it to the next mutation; a stale revision produces `TASK_REVISION_CONFLICT`.
@@ -48,6 +50,9 @@ latchkit spec decision-notes --project "path/to/project" --task task_<uuid> --ex
 latchkit spec decision-pause --project "path/to/project" --task task_<uuid> --expected-revision 2
 latchkit spec decision-build --project "path/to/project" --task task_<uuid> --expected-revision 3
 latchkit spec decision-inspect --project "path/to/project" --task task_<uuid>
+latchkit spec plan-path --project "path/to/project" --title "Enhanced spec enrollment"
+latchkit spec migrate-plan --project "path/to/project" --from ".latchkit/notes/example-spec.md" --dry-run
+latchkit spec migrate-plan --project "path/to/project" --from ".latchkit/notes/example-spec.md"
 ```
 
 The `spec decision-*` commands are the durable decision state machine behind the `latchkit-spec`
@@ -64,18 +69,26 @@ already-started build is returned unchanged rather than re-prompted or re-launch
 `--mutation-id` with different input is rejected (`SPEC_DECISION_IDEMPOTENCY_CONFLICT`) rather than
 silently applied.
 
+
+`spec plan-path` previews a collision-safe filename under `docs/plans/` for a new durable plan without
+creating anything; it never reuses or overwrites a name already on disk. `spec migrate-plan` explicitly
+copies one existing `.latchkit/notes/` plan to `docs/plans/`: it preserves the original file exactly,
+computes the destination itself unless `--to` names one, and refuses to run when a different file
+already occupies the destination. It is never invoked implicitly.
+
 Use `--mutation-id event_<uuid>` to retry resume or cancel safely. Creation, criteria, checkpoints, evidence, completion, and verification stay in the service boundary so the CLI cannot be mistaken for an automatic command runner or universal approval gate.
 
 `task start` requires both an adapter provider ID and `--host-local-authorized`; it will not add bypass flags, authenticate an account, or claim the provider's sandbox. For provider-native continuation, use `task resume --session session_<uuid> --host-local-authorized` after a session with a provider-issued resumable identity. Cursor IDE is manual-only: Latchkit returns its adapter's manual instructions rather than launching Cursor CLI as a replacement.
 
-## Importing existing Markdown notes
+## Importing existing Markdown plans
 
-Notes under `.latchkit/notes/` remain untouched. Import one explicitly:
+Plans under `docs/plans/` and legacy notes under `.latchkit/notes/` both remain untouched. Import one explicitly:
 
 ```sh
+latchkit task import --project "path/to/project" --note docs/plans/example-spec.md --title "Example"
 latchkit task import --project "path/to/project" --note .latchkit/notes/example-spec.md --title "Example"
 ```
 
-This records the note path and SHA-256 provenance but leaves the task awaiting a real decision. If this command itself is carrying current direct user authorization, provide both `--authorization-scope` and `--authorization-reference`. Note contents, repository instructions, and approval recorded for another task are never treated as authorization.
+This records the plan path and SHA-256 provenance but leaves the task awaiting a real decision. If this command itself is carrying current direct user authorization, provide both `--authorization-scope` and `--authorization-reference`. Plan contents, repository instructions, and approval recorded for another task are never treated as authorization.
 
 There is no implicit v0 migration because Markdown had no machine state contract. `latchkit spec migrate --dry-run` previews the explicit v1-to-v2 task-state migration. Applying it writes the exact original bytes to a content-addressed `.latchkit/backups/task-state.v1.<sha256>.json` path before atomically replacing active state; a backup conflict fails closed. Back up `.latchkit/tasks/` before manual repair; malformed active state or lock metadata is never guessed into a valid record.

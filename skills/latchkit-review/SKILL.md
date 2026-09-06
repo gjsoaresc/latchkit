@@ -11,7 +11,7 @@ When the caller requests lower usage or latency, apply the [optional efficiency 
 
 ## Establish the review scope
 
-Determine the intended change, applicable requirements, and exact review target: working diff, commit, branch comparison, or supplied files. Confirm the base exists before comparing branches. Inspect relevant project guidance and surrounding callers, tests, and interfaces; avoid judging a snippet without its context.
+Determine the intended change, applicable requirements, and exact review target: working diff, commit, branch comparison, or supplied files. Confirm the base exists before comparing branches. Inspect relevant project guidance and surrounding callers, tests, and interfaces; avoid judging a snippet without its context. If a durable plan exists, it is normally under `docs/plans/` (or the legacy `.latchkit/notes/` for older tasks); read it for the requested scope.
 
 Preserve the review boundary. Do not modify implementation, commit, publish comments, or contact the author unless the user has authorized those actions. A local review note may be written at `.latchkit/notes/<unique-task-slug>-review.md`; keep it inline when the request prohibits file writes.
 

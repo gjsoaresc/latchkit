@@ -40,8 +40,10 @@ import { createAcceptanceVerifier } from './acceptance/service.js';
 import {
   inspectTask,
   listTasks,
+  migrateLegacyPlan,
   migrateTaskState,
   registerEnhancedWorkflow,
+  resolveCollisionSafePlanPath,
   verifyTask,
 } from './task-state/service.js';
 import {
@@ -524,6 +526,14 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         } else if (pathname === '/api/spec/migration' && req.method === 'POST') {
           const body = await readJson<{ dryRun?: boolean }>(req);
           respond(res, 200, await serialize(() => migrateTaskState(root, body)));
+        } else if (pathname === '/api/spec/plan-path' && req.method === 'GET') {
+          await pendingMutation;
+          const title = requestUrl.searchParams.get('title');
+          if (!title) throw fail(400, 'A plan title is required.');
+          respond(res, 200, { path: await resolveCollisionSafePlanPath(root, title) });
+        } else if (pathname === '/api/spec/migrate-plan' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof migrateLegacyPlan>[1]>(req);
+          respond(res, 200, await serialize(() => migrateLegacyPlan(root, body)));
         } else if (pathname === '/api/spec/verify' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof verifyTask>[1]>(req);
           respond(res, 200, await serialize(() => verifyTask(root, body)));
