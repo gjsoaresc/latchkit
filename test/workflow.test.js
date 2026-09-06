@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -18,6 +18,7 @@ import { mutateWorkflow, readWorkflow } from '../dist/src/workflows/store.js';
 import { claimExecutionFence, releaseExecutionFence } from '../dist/src/runtime/execution-fence.js';
 import { createTaskController } from '../dist/src/runtime/task-controller.js';
 import { createTask } from '../dist/src/task-state/service.js';
+import { configureUsage, inspectUsage } from '../dist/src/usage/service.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const source = (name) => ({ revision: null, dirtyFingerprint: name ? hash(name) : null });
@@ -293,6 +294,141 @@ async function rootFixture(t) {
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return root;
 }
+
+test('opted-in workflow phases record raw usage once per action before result validation', async (t) => {
+  const root = await rootFixture(t);
+  await configureUsage(root, { enabled: true });
+  const fixture = harness();
+  fixture.adapter.contract.id = 'claude';
+  const originalPlan = fixture.adapter.operations.planInvocation;
+  fixture.adapter.operations.planInvocation = (options) => ({
+    ...originalPlan(options),
+    args: ['-p', 'fixture-inference'],
+  });
+  let probes = 0;
+  let invocations = 0;
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['claude', fixture.adapter]]),
+    tasks: fixture.tasks,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+    launch: async (options) => {
+      if (options.plan.args.length === 1 && options.plan.args[0] === '--version') {
+        probes += 1;
+        assert.equal(options.timeoutMs, 5000);
+        assert.equal(options.outputLimitBytes, 4096);
+        return { status: 'exited', exitCode: 0, stdout: '2.1.258 (Claude Code)' };
+      }
+      invocations += 1;
+      const result = await fixture.launch(options);
+      return {
+        ...result,
+        stdout: JSON.stringify({
+          type: 'result',
+          session_id: 'fixture-shared-session',
+          result: result.stdout,
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        }),
+      };
+    },
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    providerId: 'claude',
+    executionAuthorized: true,
+  });
+  const planned = await controller.wait(started.taskId);
+  assert.equal(planned.status, 'awaiting-approval');
+  assert.equal((await inspectUsage(root)).records.length, 2);
+  await controller.approve({
+    taskId: planned.taskId,
+    expectedRevision: planned.revision,
+    planDigest: planned.plan.digest,
+    requirementsDigest: planned.requirements.digest,
+    checksDigest: planned.plan.checksDigest,
+    scope: 'fixture',
+    reference: 'fixture',
+  });
+  assert.equal((await controller.wait(planned.taskId)).status, 'verified');
+  const usage = await inspectUsage(root);
+  assert.equal(usage.records.length, 4);
+  assert.equal(usage.summary.tokens.input, 40);
+  assert.ok(
+    usage.records.every(
+      (item) =>
+        item.taskId === fixture.task.id &&
+        item.providerVersion === '2.1.258' &&
+        item.sessionId === 'fixture-shared-session',
+    ),
+  );
+  assert.equal(probes, invocations);
+  assert.equal(invocations, 4);
+});
+
+test('disabled workflow usage adds no probes or usage state', async (t) => {
+  const root = await rootFixture(t);
+  const fixture = harness();
+  fixture.adapter.contract.id = 'claude';
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['claude', fixture.adapter]]),
+    tasks: fixture.tasks,
+    launch: fixture.launch,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    providerId: 'claude',
+    executionAuthorized: true,
+  });
+  assert.equal((await controller.wait(started.taskId)).status, 'awaiting-approval');
+  assert.equal(fixture.calls.filter((item) => item.type === 'launch').length, 2);
+  await assert.rejects(readFile(path.join(root, '.latchkit/usage/state-v1.json')), {
+    code: 'ENOENT',
+  });
+});
+
+test('workflow usage survives malformed provider business output', async (t) => {
+  const root = await rootFixture(t);
+  await configureUsage(root, { enabled: true });
+  const fixture = harness();
+  fixture.adapter.contract.id = 'claude';
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['claude', fixture.adapter]]),
+    tasks: fixture.tasks,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+    launch: async ({ plan }) =>
+      plan.args.length === 1
+        ? { status: 'exited', exitCode: 0, stdout: '2.1.258 (Claude Code)' }
+        : {
+            status: 'exited',
+            exitCode: 0,
+            stdout: JSON.stringify({
+              type: 'result',
+              result: 'malformed business output',
+              usage: { input_tokens: 17, output_tokens: 2 },
+            }),
+          },
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    providerId: 'claude',
+    executionAuthorized: true,
+  });
+  assert.equal((await controller.wait(started.taskId)).status, 'blocked');
+  const usage = await inspectUsage(root);
+  assert.equal(usage.records.length, 1);
+  assert.equal(usage.summary.tokens.input, 17);
+});
 
 test('TypeScript policy gates plans and parses strict outcomes', async () => {
   const version = await policy_version_async();

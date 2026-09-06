@@ -88,9 +88,8 @@ function unavailable(
       providerVersion,
       input.taskId ?? null,
       input.sessionId ?? null,
-      at,
+      input.sourceEventId ?? at,
       source,
-      input.sourceEventId ?? null,
     ]),
   );
   return {
@@ -436,9 +435,29 @@ export async function recordProviderUsage(
     retain(state, options.clock ?? (() => new Date()));
     const stored: UsageRecord[] = [];
     for (const candidate of records) {
-      const index = state.records.findIndex(
+      let index = state.records.findIndex(
         (item) => item.deduplicationKey === candidate.deduplicationKey,
       );
+      // Earlier unavailable records included observation time in the key even
+      // with an explicit invocation ID. Recognize that exact old key on replay;
+      // preserve its record ID instead of duplicating existing local history.
+      if (index === -1 && candidate.status === 'unavailable' && input.sourceEventId)
+        index = state.records.findIndex(
+          (item) =>
+            item.status === 'unavailable' &&
+            item.deduplicationKey ===
+              digest(
+                JSON.stringify([
+                  candidate.provider,
+                  candidate.providerVersion,
+                  input.taskId ?? null,
+                  input.sessionId ?? null,
+                  item.occurredAt,
+                  candidate.source,
+                  input.sourceEventId,
+                ]),
+              ),
+        );
       if (index === -1) {
         state.records.push(candidate);
         stored.push(candidate);
