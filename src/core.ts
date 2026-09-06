@@ -5,6 +5,7 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { SKILLS } from './catalog.js';
 import { loadPack } from './packs/index.js';
+import { gitCacheResource, loadMaterializedGitPack, materializeGitPack } from './packs/git.js';
 import { PROVIDERS } from './providers/registry.js';
 import {
   CURRENT_CONFIG_SCHEMA_VERSION,
@@ -66,6 +67,10 @@ interface PackMetadata {
   source: PackSelection['source'];
   pinned: boolean;
   provenance: string;
+  author?: string;
+  license?: 'MIT';
+  resolvedCommit?: string;
+  files: Array<{ path: string; sha256: string }>;
 }
 interface DuplicateDiscovery {
   providers: string[];
@@ -97,6 +102,10 @@ interface SyncOptions {
   planId?: string;
   faultBoundary?: (boundary: string, journal: unknown) => Promise<void> | void;
 }
+interface MaterializePackOptions {
+  id?: string;
+  faultBoundary?: (boundary: string, journal: unknown) => Promise<void> | void;
+}
 interface SyncDescription {
   changes: SyncChange[];
   conflicts: SyncConflict[];
@@ -123,6 +132,38 @@ const contractOptions = {
 
 export const validateConfig = (config: unknown) => validateConfigContract(config, contractOptions);
 const parseProjectConfig = (raw: string) => parseConfig(raw, contractOptions);
+
+function packCacheResources(packs: readonly PackSelection[]) {
+  return packs.flatMap((selection) => {
+    const resource = gitCacheResource(selection);
+    return resource ? [resource] : [];
+  });
+}
+
+async function registryFor(
+  root: Root,
+  manifest: LatchkitManifest,
+  desired: Map<string, string> = new Map(),
+  desiredSections: Map<string, string> = new Map(),
+) {
+  let packs: PackSelection[] = [];
+  try {
+    packs = (await readConfig(root)).packs ?? [];
+  } catch {
+    // A malformed configuration is reported by the caller; recovery still covers known resources.
+  }
+  return createResourceRegistry([
+    ...[
+      ...new Set([
+        ...Object.keys(manifest.files),
+        ...Object.keys(manifest.sections),
+        ...desired.keys(),
+        ...desiredSections.keys(),
+      ]),
+    ].map((relative) => ({ id: resourceIdForPath(relative), path: relative })),
+    ...packCacheResources(packs),
+  ]);
+}
 
 export async function readConfig(root: Root): Promise<LatchkitConfig> {
   root = await projectRoot(root);
@@ -288,7 +329,10 @@ async function makePlan(root: Root, removing = false): Promise<ManagedPlan> {
   const packMetadata: PackMetadata[] = [];
   const destinationOwners = new Map<string, string>();
   for (const selection of config.packs) {
-    const pack = await loadPack(selection);
+    const pack =
+      selection.source.type === 'git'
+        ? await loadMaterializedGitPack(root, selection)
+        : await loadPack(selection);
     if (pack.id !== selection.id || pack.version !== selection.version)
       throw new Error(
         `Requested pack ${selection.id}@${selection.version} does not match source ${pack.id}@${pack.version}.`,
@@ -308,26 +352,38 @@ async function makePlan(root: Root, removing = false): Promise<ManagedPlan> {
       source: selection.source,
       pinned: selection.pinned,
       provenance: pack.provenance,
+      ...(pack.author === undefined ? {} : { author: pack.author }),
+      ...(pack.license === undefined ? {} : { license: pack.license }),
+      ...(selection.source.type === 'git' ? { resolvedCommit: selection.source.commit } : {}),
+      files: pack.files.map((file) => ({ path: file.path, sha256: hash(file.bytes) })),
     });
+    const packSkills = new Set<string>();
+    const primarySkills = new Set<string>();
     for (const file of pack.files) {
       const parts = file.path.split('/');
-      if (parts.length !== 3 || parts[0] !== 'skills' || parts[2] !== 'SKILL.md')
-        throw new Error(`Pack ${pack.id} file is not a portable skill: ${file.path}`);
+      if (parts.length < 3 || parts[0] !== 'skills')
+        throw new Error(`Pack ${pack.id} resource is not inside a portable skill: ${file.path}`);
       const skillName = parts[1];
       if (!skillName) throw new Error(`Pack ${pack.id} has an invalid skill path: ${file.path}`);
+      const skillRelative = parts.slice(2).join('/');
+      packSkills.add(skillName);
+      if (parts.length === 3 && parts[2] === 'SKILL.md') primarySkills.add(skillName);
       if (
         pack.id === 'latchkit-core' &&
         !config.skills.includes(skillName.replace(/^latchkit-/, ''))
       )
         continue;
       for (const directory of directories) {
-        const relative = `${directory}/${skillName}/SKILL.md`;
+        const relative = `${directory}/${skillName}/${skillRelative}`;
         const owner = destinationOwners.get(relative);
         if (owner) throw new Error(`Pack collision at ${relative}: ${owner} and ${pack.id}.`);
         destinationOwners.set(relative, pack.id);
         desired.set(relative, file.bytes.toString('utf8'));
       }
     }
+    for (const skillName of packSkills)
+      if (!primarySkills.has(skillName))
+        throw new Error(`Pack ${pack.id} resource set has no SKILL.md for ${skillName}.`);
   }
   const ruleExport: {
     model: ProjectInstructionModel;
@@ -618,16 +674,7 @@ async function applySync(
       } else delete nextManifest.sections[change.path];
     }
     if (transactionChanges.length) {
-      const registry = createResourceRegistry(
-        [
-          ...new Set([
-            ...Object.keys(plan.manifest.files),
-            ...Object.keys(plan.manifest.sections),
-            ...plan.desired.keys(),
-            ...plan.desiredSections.keys(),
-          ]),
-        ].map((relative) => ({ id: resourceIdForPath(relative), path: relative })),
-      );
+      const registry = await registryFor(root, plan.manifest, plan.desired, plan.desiredSections);
       await applyRegisteredTransaction(root, {
         operation: removing ? 'remove' : 'sync',
         registry,
@@ -649,6 +696,51 @@ export const syncProject = (root: Root, options?: SyncOptions) => applySync(root
 export const removeProjectSkills = (root: Root, options?: SyncOptions) =>
   applySync(root, true, options);
 
+/**
+ * Explicitly fetch one selected immutable Git source into the project-local cache.
+ * Configuration reads and synchronization consume only this cache and never invoke Git.
+ */
+export async function materializePackSource(root: Root, options: MaterializePackOptions = {}) {
+  root = await projectRoot(root);
+  return withLock(root, async () => {
+    const config = await readConfig(root);
+    const selected = config.packs ?? [];
+    const matches = selected.filter(
+      (pack) => pack.source.type === 'git' && (options.id === undefined || pack.id === options.id),
+    );
+    if (options.id && !matches.length)
+      throw new Error(`No selected immutable Git pack has ID ${options.id}.`);
+    if (!matches.length)
+      return { materialized: [], message: 'No selected immutable Git pack sources.' };
+    const manifestRaw = await readOptional(root, manifestPath);
+    const manifest = await readManifest(root);
+    const materialized = [];
+    for (const selection of matches) {
+      const fetched = await materializeGitPack(selection);
+      const registry = createResourceRegistry([fetched.resource]);
+      await applyRegisteredTransaction(root, {
+        operation: 'pack-fetch',
+        registry,
+        changes: [{ resourceId: fetched.resource.id, bytes: fetched.bytes }],
+        manifest:
+          manifestRaw ?? `${JSON.stringify({ ...manifest, packs: manifest.packs }, null, 2)}\n`,
+        faultBoundary: options.faultBoundary,
+      });
+      if (selection.source.type !== 'git')
+        throw new Error('Selected source changed while materializing Git pack.');
+      materialized.push({
+        id: fetched.pack.id,
+        version: fetched.pack.version,
+        repository: selection.source.repository,
+        commit: selection.source.commit,
+        cachePath: fetched.resource.path,
+        files: fetched.pack.files.map((file) => ({ path: file.path, sha256: hash(file.bytes) })),
+      });
+    }
+    return { materialized };
+  });
+}
+
 export async function inspectRecovery(root: Root) {
   root = await projectRoot(root);
   const manifest = await readManifest(root);
@@ -656,19 +748,7 @@ export async function inspectRecovery(root: Root) {
     desired: new Map<string, string>(),
     desiredSections: new Map<string, string>(),
   }));
-  const registry = createResourceRegistry(
-    [
-      ...new Set([
-        ...Object.keys(manifest.files),
-        ...Object.keys(manifest.sections),
-        ...plan.desired.keys(),
-        ...plan.desiredSections.keys(),
-      ]),
-    ].map((relative) => ({
-      id: resourceIdForPath(relative),
-      path: relative,
-    })),
-  );
+  const registry = await registryFor(root, manifest, plan.desired, plan.desiredSections);
   return {
     lock: await inspectProjectLock(root),
     transaction: await inspectTransaction(root, registry),
@@ -696,19 +776,7 @@ export async function recoverProject(root: Root) {
     desired: new Map(),
     desiredSections: new Map(),
   }));
-  const registry = createResourceRegistry(
-    [
-      ...new Set([
-        ...Object.keys(manifest.files),
-        ...Object.keys(manifest.sections),
-        ...plan.desired.keys(),
-        ...plan.desiredSections.keys(),
-      ]),
-    ].map((relative) => ({
-      id: resourceIdForPath(relative),
-      path: relative,
-    })),
-  );
+  const registry = await registryFor(root, manifest, plan.desired, plan.desiredSections);
   const result = await withProjectLock(root, () => recoverTransaction(root, registry));
   return { ...result, cleanedLock };
 }

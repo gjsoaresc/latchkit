@@ -1,4 +1,5 @@
 import { errorMessage, type JsonObject, type JsonValue } from '../types.js';
+import path from 'node:path';
 
 export const CURRENT_CONFIG_SCHEMA_VERSION = 3;
 export const SUPPORTED_CONFIG_SCHEMA_VERSIONS = Object.freeze([1, 2, 3] as const);
@@ -15,10 +16,18 @@ export interface LocalPackSource {
   type: 'local';
   path: string;
 }
+export interface GitPackSource {
+  type: 'git';
+  repository: string;
+  /** Immutable object ID. A branch or tag is intentionally not accepted here. */
+  commit: string;
+  /** Optional portable subdirectory containing latchkit-pack.json. */
+  path?: string;
+}
 export interface PackSelection {
   id: string;
   version: string;
-  source: BundledPackSource | LocalPackSource;
+  source: BundledPackSource | LocalPackSource | GitPackSource;
   pinned: boolean;
 }
 export interface LatchkitConfig {
@@ -60,6 +69,18 @@ function record(value: unknown): value is JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+function safeGitRepository(value: string): boolean {
+  if (!value.trim() || value.startsWith('-') || /[\r\n\0]/.test(value)) return false;
+  if (path.isAbsolute(value)) return true;
+  if (value.startsWith('file:///')) return true;
+  try {
+    const url = new URL(value);
+    return ['https:', 'ssh:', 'git:'].includes(url.protocol);
+  } catch {
+    return /^[^@\s/:]+@[^\s/:]+:[^\s]+$/.test(value);
+  }
 }
 
 function isConfigSchemaVersion(value: unknown): value is 1 | 2 | 3 {
@@ -194,11 +215,53 @@ export function validateConfig(
         )
           throw new ConfigContractError('Local packs require a source path.', `${packPath}.source`);
         source = { type: 'local', path: pack.source.path };
+      } else if (pack.source.type === 'git') {
+        const sourcePath = pack.source.path;
+        if (
+          !Object.keys(pack.source).every((key) =>
+            ['type', 'repository', 'commit', 'path'].includes(key),
+          ) ||
+          typeof pack.source.repository !== 'string' ||
+          !safeGitRepository(pack.source.repository) ||
+          typeof pack.source.commit !== 'string' ||
+          !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(pack.source.commit) ||
+          (sourcePath !== undefined &&
+            (typeof sourcePath !== 'string' ||
+              !sourcePath ||
+              sourcePath.includes('\\') ||
+              path.posix.isAbsolute(sourcePath) ||
+              sourcePath !== sourcePath.normalize('NFC') ||
+              sourcePath
+                .split('/')
+                .some(
+                  (part) =>
+                    part === '' ||
+                    part === '.' ||
+                    part === '..' ||
+                    /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(part) ||
+                    /[<>:"|?*]/.test(part),
+                )))
+        )
+          throw new ConfigContractError(
+            'Git packs require a repository, lowercase immutable commit, and an optional portable path.',
+            `${packPath}.source`,
+          );
+        if (pack.pinned !== true)
+          throw new ConfigContractError(
+            'Git packs must be pinned to their immutable commit.',
+            `${packPath}.pinned`,
+          );
+        source = {
+          type: 'git',
+          repository: pack.source.repository,
+          commit: pack.source.commit,
+          ...(sourcePath === undefined ? {} : { path: sourcePath }),
+        };
       } else if (pack.source.type === 'bundled' && Object.keys(pack.source).length === 1)
         source = { type: 'bundled' };
       else
         throw new ConfigContractError(
-          'Expected a bundled or local pack source.',
+          'Expected a bundled, local, or immutable Git pack source.',
           `${packPath}.source`,
         );
       if (typeof pack.pinned !== 'boolean')

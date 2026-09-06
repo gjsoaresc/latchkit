@@ -6,6 +6,7 @@ import {
   doctor,
   initProject,
   inspectRecovery,
+  materializePackSource,
   migrateConfig,
   planConfigMigration,
   planSync,
@@ -72,6 +73,7 @@ Usage: latchkit <command> [options]
   migrate    Upgrade configuration; use --dry-run to preview
   recover    Inspect or recover an interrupted mutation
   sync       Install selected skills; use --dry-run to preview
+  pack fetch Materialize selected immutable Git pack sources locally
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
@@ -212,6 +214,7 @@ try {
         'usage',
         'acceptance',
         'diff',
+        'pack',
       ].includes(command) &&
       extra.length
     )
@@ -299,6 +302,7 @@ try {
         'session',
         'retention-days',
       ],
+      pack: ['project', 'id'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -353,6 +357,10 @@ try {
       const result = await (values['dry-run'] ? planSync(root) : syncProject(root));
       print(result);
       if (result.conflicts.length) process.exitCode = 1;
+    } else if (command === 'pack') {
+      if (extra.length !== 1 || extra[0] !== 'fetch')
+        throw new Error('Usage: latchkit pack fetch [--project <path>] [--id <pack-id>].');
+      print(await materializePackSource(root, { ...(values.id ? { id: values.id } : {}) }));
     } else if (command === 'remove') print(await removeProjectSkills(root));
     else if (command === 'diagnostics') {
       if (values.clear) {
