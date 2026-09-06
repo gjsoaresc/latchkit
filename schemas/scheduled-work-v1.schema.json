@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/scheduled-work-v1.schema.json",
+  "title": "Latchkit opt-in local scheduled work v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "revision", "schedules", "createdAt", "updatedAt"],
+  "properties": { "schemaVersion": { "const": 1 }, "project": { "type": "object" }, "revision": { "type": "integer", "minimum": 0 }, "schedules": { "type": "array" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } }
+}

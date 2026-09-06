@@ -45,6 +45,10 @@ Usage records are deduplicated by their normalized provider/session/task/event i
 
 Any dollar value is a public API list-price estimate only when callers supply its source URL, version, date, currency, and assumptions. The record retains those assumptions. Existing subscriptions such as Claude Max and actual provider billing remain unknown; estimates do not imply savings, a budget, or billing control.
 
+## Optional foreground local scheduler
+
+`latchkit schedule` persists explicit local schedules but runs them only while `latchkit schedule start` stays in the foreground. It installs no operating-system scheduler or background service. Schedules use existing adapter command plans and process limits; they retain the provider's current authentication, sandbox, and approval behavior. A missing `--host-local-authorized` flag records a blocked run and never starts a provider command. See [ADR 0003](adr/0003-foreground-local-scheduler.md) for Windows, Linux/macOS, and separate WSL behavior.
+
 ## Upstream platform requirements
 
 | Provider        | Windows                                                                                                                      | Linux and macOS                        | Official source                                                                                                    |

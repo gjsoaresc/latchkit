@@ -55,6 +55,18 @@ import {
   inspectUsage,
   recordProviderUsage,
 } from './usage/service.js';
+import {
+  cancelScheduleRun,
+  createForegroundScheduler,
+  createSchedule,
+  editSchedule,
+  exportSchedules,
+  inspectSchedule,
+  listSchedules,
+  pauseSchedule,
+  removeSchedule,
+  resumeSchedule,
+} from './scheduler/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -85,6 +97,7 @@ Usage: latchkit <command> [options]
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   usage      Enable, inspect, import, export, retain, or delete local usage records
+  schedule   Create and operate an explicit foreground local scheduler
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -130,6 +143,10 @@ Options:
   --resolution <decision> workflow resume: observed, abandon, or retry an interrupted action
   --action-id <id>    workflow resume: interrupted action being resolved
   --file <path>       workflow run: versioned acceptance checks
+  --timezone <iana>   schedule create/edit: IANA timezone
+  --every-minutes <n> schedule create/edit: recurrence interval
+  --scope <text>      schedule create: authorized task scope
+  --reference <text>  schedule create: authorization reference
   --install-root <path> self: user-local installation directory
   --to <version>      self upgrade/rollback: exact release version
   --bundle <path>     self install/upgrade: extracted local bundle
@@ -195,6 +212,13 @@ try {
       bundle: { type: 'string' },
       'retention-days': { type: 'string' },
       'provider-version': { type: 'string' },
+      timezone: { type: 'string' },
+      'every-minutes': { type: 'string' },
+      scope: { type: 'string' },
+      reference: { type: 'string' },
+      'timeout-ms': { type: 'string' },
+      'output-limit-bytes': { type: 'string' },
+      'max-runs': { type: 'string' },
     },
   });
   cliValues = values;
@@ -215,6 +239,7 @@ try {
         'acceptance',
         'diff',
         'pack',
+        'schedule',
       ].includes(command) &&
       extra.length
     )
@@ -303,6 +328,21 @@ try {
         'retention-days',
       ],
       pack: ['project', 'id'],
+      schedule: [
+        'project',
+        'id',
+        'provider',
+        'prompt',
+        'timezone',
+        'every-minutes',
+        'scope',
+        'reference',
+        'host-local-authorized',
+        'timeout-ms',
+        'output-limit-bytes',
+        'max-runs',
+        'expected-revision',
+      ],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -788,6 +828,90 @@ try {
             output,
           }),
         );
+      }
+    } else if (command === 'schedule') {
+      if (
+        ![
+          'create',
+          'list',
+          'inspect',
+          'edit',
+          'pause',
+          'resume',
+          'remove',
+          'cancel',
+          'export',
+          'start',
+        ].includes(extra[0] ?? '') ||
+        extra.length !== 1
+      )
+        throw new Error(
+          'Usage: latchkit schedule <create|list|inspect|edit|pause|resume|remove|cancel|export|start> [options].',
+        );
+      const action = extra[0];
+      const number = (name: 'every-minutes' | 'timeout-ms' | 'output-limit-bytes' | 'max-runs') =>
+        values[name] === undefined ? undefined : Number(values[name]);
+      const limits = {
+        ...(number('timeout-ms') === undefined ? {} : { timeoutMs: number('timeout-ms')! }),
+        ...(number('output-limit-bytes') === undefined
+          ? {}
+          : { outputLimitBytes: number('output-limit-bytes')! }),
+        ...(number('max-runs') === undefined ? {} : { maxRuns: number('max-runs')! }),
+      };
+      if (action === 'list') print(await listSchedules(root));
+      else if (action === 'export') print(await exportSchedules(root));
+      else if (action === 'inspect')
+        print(await inspectSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'create')
+        print(
+          await createSchedule(root, {
+            timezone: values.timezone,
+            everyMinutes: number('every-minutes')!,
+            providerId: requiredOption(values.provider, 'provider'),
+            instructions: requiredOption(values.prompt, 'prompt'),
+            authorization: {
+              scope: requiredOption(values.scope, 'scope'),
+              reference: requiredOption(values.reference, 'reference'),
+              executionAuthorized: values['host-local-authorized'] === true,
+            },
+            limits,
+          }),
+        );
+      else if (action === 'edit')
+        print(
+          await editSchedule(root, requiredOption(values.id, 'id'), {
+            ...(values.timezone === undefined ? {} : { timezone: values.timezone }),
+            ...(number('every-minutes') === undefined
+              ? {}
+              : { everyMinutes: number('every-minutes')! }),
+            ...(values.provider === undefined ? {} : { providerId: values.provider }),
+            ...(values.prompt === undefined ? {} : { instructions: values.prompt }),
+            ...(Object.keys(limits).length ? { limits } : {}),
+            ...(values['expected-revision'] === undefined
+              ? {}
+              : { expectedRevision: Number(values['expected-revision']) }),
+          }),
+        );
+      else if (action === 'pause')
+        print(await pauseSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'resume')
+        print(await resumeSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'remove')
+        print(await removeSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'cancel')
+        print(await cancelScheduleRun(root, requiredOption(values.id, 'id')));
+      else {
+        const scheduler = createForegroundScheduler({ root });
+        await scheduler.recover();
+        scheduler.start();
+        console.log('Foreground scheduler running. Ctrl+C to stop.');
+        await new Promise<void>((resolve) => {
+          const stop = () => {
+            void scheduler.stop().finally(resolve);
+          };
+          process.once('SIGINT', stop);
+          process.once('SIGTERM', stop);
+        });
       }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
