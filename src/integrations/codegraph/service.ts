@@ -145,6 +145,8 @@ export async function syncCodegraph(root: string): Promise<Record<string, unknow
   const before = await inspectCodegraph(root);
   if (!before.enabled || (before.executable as { status?: string }).status !== 'ready')
     return { ...before, result: 'fallback', reason: 'CodeGraph is not enabled and supported.' };
+  if (before.index === 'unsafe')
+    return { ...before, result: 'fallback', reason: 'CodeGraph index path is unsafe.' };
   try {
     await run('codegraph', ['sync'], {
       cwd: before.project as string,
@@ -194,8 +196,15 @@ export async function exploreCodegraph(
       maxBuffer: MAX_OUTPUT,
       windowsHide: true,
     });
+    const revalidated = await inspectCodegraph(root);
+    if (revalidated.index !== 'present' || revalidated.freshness !== 'current')
+      return {
+        ...revalidated,
+        result: 'fallback',
+        reason: 'CodeGraph source or index changed while the query was running.',
+      };
     return {
-      ...status,
+      ...revalidated,
       result: 'graph',
       output: result.stdout.slice(0, MAX_OUTPUT),
       truncated: result.stdout.length > MAX_OUTPUT,
