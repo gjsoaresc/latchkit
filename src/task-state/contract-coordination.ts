@@ -48,6 +48,17 @@ type Journal = {
   baseDigest: string;
   target: Document;
 };
+export type ContractAssociationFaultHooks = {
+  afterPreparedJournal?: (root: string, journal: Journal) => Promise<void> | void;
+  afterStateWrite?: (root: string, journal: Journal) => Promise<void> | void;
+};
+let faultHooks: ContractAssociationFaultHooks | undefined;
+/** Test-only deterministic I/O fault seam. Production callers never configure it. */
+export function setContractAssociationFaultHooksForTest(
+  hooks: ContractAssociationFaultHooks | undefined,
+): void {
+  faultHooks = hooks;
+}
 const empty = (): Document => ({ schemaVersion: 1, associations: [] });
 async function readDocument(root: string): Promise<Document> {
   const raw = await readOptional(root, PATH);
@@ -122,7 +133,19 @@ async function commit(
     JOURNAL,
     `${JSON.stringify({ ...journal, state: 'prepared', baseDigest: hash(base), target }, null, 2)}\n`,
   );
+  await faultHooks?.afterPreparedJournal?.(root, {
+    ...journal,
+    state: 'prepared',
+    baseDigest: hash(base),
+    target,
+  });
   await write(root, target);
+  await faultHooks?.afterStateWrite?.(root, {
+    ...journal,
+    state: 'prepared',
+    baseDigest: hash(base),
+    target,
+  });
   await writeAtomic(
     root,
     JOURNAL,

@@ -14,6 +14,7 @@ import {
   createContractAssociation,
   inspectContractImpact,
   proposeContractRevision,
+  setContractAssociationFaultHooksForTest,
 } from '../dist/src/task-state/contract-coordination.js';
 import { presentResultDecision } from '../dist/src/workflows/result-decision-service.js';
 
@@ -36,6 +37,19 @@ async function decision(root, task, text) {
     authorization: { source: 'user', scope: 'test', reference: 'test' },
   });
   return { task: updated, record: updated.records.at(-1) };
+}
+
+async function linkedFixture(root) {
+  const producer = await createTask(root, { title: 'API', authorizationRequired: false, criteria: [{ description: 'response', required: true }] });
+  const consumer = await createTask(root, { title: 'client', authorizationRequired: false });
+  const p = await decision(root, producer, 'response has name');
+  const c = await decision(root, consumer, 'consume name');
+  return { p, c, input: (mutationId, provenance = 'test') => ({
+    producerTaskId: p.task.id, consumerTaskId: c.task.id,
+    producerRecordId: p.record.id, consumerRecordId: c.record.id,
+    criterionIds: [p.task.criteria[0].id], expectedProducerRevision: p.task.revision,
+    expectedConsumerRevision: c.task.revision, provenance, mutationId,
+  }) };
 }
 
 test('explicit association retains accepted history and identifies an old consumer digest without inferring unrelated work', async (t) => {
@@ -112,4 +126,42 @@ test('explicit association retains accepted history and identifies an old consum
   });
   assert.equal(impact.affected.length, 1);
   assert.equal(impact.unknownCoverage.state, 'unknown');
+});
+
+test('prepared association journal replays after an interrupted state write and preserves conflicting state', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-contracts-'));
+  t.after(() => { setContractAssociationFaultHooksForTest(); return fs.rm(root, { recursive: true, force: true }); });
+  const fixture = await linkedFixture(root);
+  const input = fixture.input('event_22222222-2222-4222-8222-222222222222');
+  setContractAssociationFaultHooksForTest({ afterPreparedJournal: () => { throw new Error('injected prepared failure'); } });
+  await assert.rejects(createContractAssociation(root, input), /injected prepared failure/);
+  setContractAssociationFaultHooksForTest();
+  const replay = await createContractAssociation(root, input);
+  assert.equal(replay.producerTaskId, fixture.p.task.id);
+
+  const rootConflict = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-contracts-'));
+  t.after(() => fs.rm(rootConflict, { recursive: true, force: true }));
+  const conflict = await linkedFixture(rootConflict);
+  setContractAssociationFaultHooksForTest({ afterPreparedJournal: async (projectRoot) => {
+    await fs.mkdir(path.join(projectRoot, '.latchkit', 'tasks'), { recursive: true });
+    await fs.writeFile(path.join(projectRoot, '.latchkit', 'tasks', 'contract-associations-v1.json'), '{"schemaVersion":1,"associations":[{"external":true}]}\n');
+    throw new Error('injected external writer');
+  } });
+  await assert.rejects(createContractAssociation(rootConflict, conflict.input('event_33333333-3333-4333-8333-333333333333')), /injected external writer/);
+  setContractAssociationFaultHooksForTest();
+  await assert.rejects(inspectContractImpact(rootConflict, { producerTaskId: conflict.p.task.id, producerRecordId: conflict.p.record.id }), { code: 'TASK_CONTRACT_CONFLICT' });
+  assert.ok(await fs.readFile(path.join(rootConflict, '.latchkit', 'tasks', 'contract-associations-v1.journal.json'), 'utf8'));
+});
+
+test('state-written journal finalizes on retry and mutation ids reject different payloads', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-contracts-'));
+  t.after(() => { setContractAssociationFaultHooksForTest(); return fs.rm(root, { recursive: true, force: true }); });
+  const fixture = await linkedFixture(root);
+  const input = fixture.input('event_44444444-4444-4444-8444-444444444444');
+  setContractAssociationFaultHooksForTest({ afterStateWrite: () => { throw new Error('injected post-write failure'); } });
+  await assert.rejects(createContractAssociation(root, input), /injected post-write failure/);
+  setContractAssociationFaultHooksForTest();
+  const replay = await createContractAssociation(root, input);
+  assert.equal(replay.id.startsWith('contract_'), true);
+  await assert.rejects(createContractAssociation(root, fixture.input(input.mutationId, 'different payload')), { code: 'TASK_CONTRACT_CONFLICT' });
 });
