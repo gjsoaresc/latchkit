@@ -1,0 +1,7 @@
+# Original fixture file for Latchkit's test suite, in the documented
+# `openspec/config.yaml` shape. The `store:` key below is a pointer to a
+# separately registered store repository — this fixture exists to prove
+# Latchkit's adapter reports the pointer as a warning and never resolves or
+# reads whatever it names.
+schema: spec-driven
+store: team-plans

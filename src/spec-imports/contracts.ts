@@ -1,7 +1,7 @@
 // Read-only discovery/preview adapters for external specification frameworks
-// (issue #114, first increment: GitHub Spec Kit only). This module never
-// writes to disk, never spawns a process, and never follows a reference
-// outside the caller-selected root. See docs/spec-imports.md.
+// (issue #114). This module never writes to disk, never spawns a process,
+// and never follows a reference outside the caller-selected root. See
+// docs/spec-imports.md.
 
 export class SpecImportError extends Error {
   code: string;
@@ -16,6 +16,15 @@ export class SpecImportError extends Error {
 
 export const SPEC_IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 
+/** Shape shared by every adapter's pinned-upstream record (contracts.ts). */
+export type SpecImportUpstreamPin = {
+  repository: string;
+  ref: string;
+  commit: string;
+  publishedAt: string;
+  pinnedTemplatePaths: readonly string[];
+};
+
 export const SPEC_KIT_ADAPTER_ID = 'spec-kit';
 /** This adapter's own version, independent of the pinned upstream commit. */
 export const SPEC_KIT_ADAPTER_VERSION = '1.0.0';
@@ -27,7 +36,7 @@ export const SPEC_KIT_ADAPTER_VERSION = '1.0.0';
  * upstream template change requires a new pinned adapter version, not a
  * silent behavior change here.
  */
-export const SPEC_KIT_UPSTREAM = Object.freeze({
+export const SPEC_KIT_UPSTREAM: SpecImportUpstreamPin = Object.freeze({
   repository: 'https://github.com/github/spec-kit',
   ref: 'v1.0.4',
   commit: 'cb610277fdea781fcfa83d20522c2db37c94068d',
@@ -38,6 +47,40 @@ export const SPEC_KIT_UPSTREAM = Object.freeze({
     'templates/tasks-template.md',
   ]) as readonly string[],
 });
+
+export const OPENSPEC_ADAPTER_ID = 'openspec';
+/** This adapter's own version, independent of the pinned upstream commit. */
+export const OPENSPEC_ADAPTER_VERSION = '1.0.0';
+
+/**
+ * The exact upstream OpenSpec release this adapter parses against. Recorded
+ * from `gh api repos/Fission-AI/OpenSpec/{tags,releases}` on 2026-09-06; see
+ * the adapter compatibility table in docs/spec-imports.md. The pinned
+ * template paths are the built-in `spec-driven` schema's scaffold files,
+ * which document the recognizable marker headings this adapter checks for.
+ */
+export const OPENSPEC_UPSTREAM: SpecImportUpstreamPin = Object.freeze({
+  repository: 'https://github.com/Fission-AI/OpenSpec',
+  ref: 'v1.12.0',
+  commit: 'e062b9572be933564ba3899d059377dfa1393e32',
+  publishedAt: '2026-09-03T00:09:15Z',
+  pinnedTemplatePaths: Object.freeze([
+    'schemas/spec-driven/templates/proposal.md',
+    'schemas/spec-driven/templates/design.md',
+    'schemas/spec-driven/templates/tasks.md',
+    'schemas/spec-driven/templates/spec.md',
+  ]) as readonly string[],
+});
+
+// TinySpec (issue #114, third increment) constants are added alongside its
+// adapter module; see below in this file once that increment lands.
+
+export type SpecImportAdapterId = typeof SPEC_KIT_ADAPTER_ID | typeof OPENSPEC_ADAPTER_ID;
+
+const KNOWN_ADAPTER_IDS: readonly SpecImportAdapterId[] = Object.freeze([
+  SPEC_KIT_ADAPTER_ID,
+  OPENSPEC_ADAPTER_ID,
+]);
 
 export type SpecImportLimits = {
   /** Feature directories scanned under `<root>/specs/`. */
@@ -131,14 +174,23 @@ export type SpecImportDeclaredStatus = {
   provenance: 'source-declared-claim';
 };
 
+/**
+ * Only meaningful for a source framework that itself documents this
+ * distinction (OpenSpec: `current` specs vs. an `active` or `archived`
+ * change). `null` when the framework does not document the concept (Spec
+ * Kit, TinySpec) — never guessed.
+ */
+export type SpecImportLifecycle = 'current' | 'active' | 'archived';
+
 export type SpecImportEntry = {
-  /** The feature directory name; stable and unique within one discovery. */
+  /** The feature directory (or, for a file-per-entry framework, file) identity; stable and unique within one discovery. */
   id: string;
-  /** Directory name with a leading `NNN-` numeric prefix stripped, if present. */
+  /** Human-facing short name with any adapter-specific prefix (numeric, date, or group) stripped, if present. */
   slug: string;
-  /** Root-relative feature directory path, e.g. `specs/001-example`. */
+  /** Root-relative path to the entry's directory or file, e.g. `specs/001-example`. */
   directory: string;
   status: SpecImportEntryStatus;
+  lifecycle: SpecImportLifecycle | null;
   sourceDeclaredStatus: SpecImportDeclaredStatus;
   artifacts: SpecImportArtifact[];
   declaredLinks: SpecImportDeclaredLink[];
@@ -153,9 +205,9 @@ export type SpecImportEntry = {
 export type SpecImportManifest = {
   schemaVersion: 1;
   adapter: {
-    id: typeof SPEC_KIT_ADAPTER_ID;
+    id: SpecImportAdapterId;
     version: string;
-    upstream: typeof SPEC_KIT_UPSTREAM;
+    upstream: SpecImportUpstreamPin;
   };
   discoveredAt: string;
   sourceRoot: { path: string };
@@ -315,8 +367,15 @@ function validateTask(value: unknown, path: string) {
     path,
   );
   const task = value as SpecImportTaskIdentifier;
-  if (typeof task.id !== 'string' || !/^T\d{3,}$/.test(task.id))
-    throw new SpecImportError('Expected a Txxx task ID.', 'SPEC_IMPORT_INVALID', `${path}.id`);
+  // Task ID shape is adapter-specific (Spec Kit: "T001"; OpenSpec: "1.1";
+  // TinySpec: "A", "A.1", or a customized non-empty label) — only bounded
+  // and non-empty is enforced here, not one adapter's own convention.
+  if (typeof task.id !== 'string' || !task.id || task.id.length > 64)
+    throw new SpecImportError(
+      'Expected a non-empty task ID no longer than 64 characters.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.id`,
+    );
   bool(task.checked, `${path}.checked`);
   bool(task.parallel, `${path}.parallel`);
   text(task.userStory, `${path}.userStory`, { nullable: true });
@@ -336,6 +395,8 @@ function validateUserStory(value: unknown, path: string) {
   text(story.priority, `${path}.priority`, { nullable: true });
 }
 
+const ENTRY_LIFECYCLES = ['current', 'active', 'archived'];
+
 function validateEntry(value: unknown, path: string) {
   fields(
     value,
@@ -344,6 +405,7 @@ function validateEntry(value: unknown, path: string) {
       'slug',
       'directory',
       'status',
+      'lifecycle',
       'sourceDeclaredStatus',
       'artifacts',
       'declaredLinks',
@@ -356,6 +418,7 @@ function validateEntry(value: unknown, path: string) {
       'slug',
       'directory',
       'status',
+      'lifecycle',
       'sourceDeclaredStatus',
       'artifacts',
       'declaredLinks',
@@ -373,6 +436,12 @@ function validateEntry(value: unknown, path: string) {
   relativePath(entry.directory, `${path}.directory`);
   if (!ENTRY_STATUSES.includes(entry.status))
     throw new SpecImportError('Unknown entry status.', 'SPEC_IMPORT_INVALID', `${path}.status`);
+  if (entry.lifecycle !== null && !ENTRY_LIFECYCLES.includes(entry.lifecycle))
+    throw new SpecImportError(
+      'Expected null, "current", "active", or "archived".',
+      'SPEC_IMPORT_INVALID',
+      `${path}.lifecycle`,
+    );
   fields(
     entry.sourceDeclaredStatus,
     ['value', 'provenance'],
@@ -470,7 +539,7 @@ export function validateSpecImportManifest(input: unknown): SpecImportManifest {
       '$.schemaVersion',
     );
   fields(value.adapter, ['id', 'version', 'upstream'], ['id', 'version', 'upstream'], '$.adapter');
-  if (value.adapter.id !== SPEC_KIT_ADAPTER_ID)
+  if (!KNOWN_ADAPTER_IDS.includes(value.adapter.id))
     throw new SpecImportError('Unknown adapter ID.', 'SPEC_IMPORT_INVALID', '$.adapter.id');
   text(value.adapter.version, '$.adapter.version');
   if (typeof value.discoveredAt !== 'string' || !Number.isFinite(Date.parse(value.discoveredAt)))

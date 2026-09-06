@@ -6,9 +6,11 @@
 import { createHash } from 'node:crypto';
 import { resolveProjectRoot } from '../storage.js';
 import { errorCode } from '../types.js';
+import { buildOpenSpecManifest } from './openspec-adapter.js';
 import { buildSpecKitManifest } from './spec-kit-adapter.js';
 import {
   DEFAULT_SPEC_IMPORT_LIMITS,
+  OPENSPEC_ADAPTER_ID,
   SPEC_KIT_ADAPTER_ID,
   SpecImportError,
   type SpecImportArtifact,
@@ -26,11 +28,13 @@ type AdapterBuilder = (
 
 const SUPPORTED_ADAPTERS = new Map<string, AdapterBuilder>([
   [SPEC_KIT_ADAPTER_ID, buildSpecKitManifest],
+  [OPENSPEC_ADAPTER_ID, buildOpenSpecManifest],
 ]);
-// OpenSpec and TinySpec are explicitly out of scope for this increment (issue
-// #114 asks for one pinned dialect first). Naming them here gives a caller a
-// clear "not yet" instead of an opaque unknown-adapter error.
-const PLANNED_ADAPTERS = new Set(['openspec', 'tinyspec']);
+// TinySpec is explicitly out of scope for this increment (issue #114
+// delivers adapters incrementally: Spec Kit, then OpenSpec, then TinySpec).
+// Naming it here gives a caller a clear "not yet" instead of an opaque
+// unknown-adapter error.
+const PLANNED_ADAPTERS = new Set(['tinyspec']);
 
 function resolveAdapter(adapter: string): AdapterBuilder {
   const builder = SUPPORTED_ADAPTERS.get(adapter);
