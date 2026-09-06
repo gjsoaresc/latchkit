@@ -96,6 +96,21 @@ import {
   removeSchedule,
   resumeSchedule,
 } from './scheduler/service.js';
+import {
+  applyOnboardingSetup,
+  backStep as backOnboardingStep,
+  completeOnboarding,
+  dismissOnboarding,
+  inspectOnboarding,
+  previewOnboardingSetup,
+  selectProject as selectOnboardingProject,
+  skipStep as skipOnboardingStep,
+  startOnboarding,
+  updateProjectSelection as updateOnboardingProjectSelection,
+  updateUsagePreference as updateOnboardingUsagePreference,
+  updateVerificationPreference as updateOnboardingVerificationPreference,
+  updateWorkspacePreference as updateOnboardingWorkspacePreference,
+} from './onboarding/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -135,24 +150,26 @@ Usage: latchkit <command> [options]
   verification Inspect or configure the project's default fast/standard verification mode
   schedule   Create and operate an explicit foreground local scheduler
   mcp        Preview, apply, remove, inspect, recover, or health-check optional MCP configuration
+  onboarding Inspect, drive, or resume the project/provider/workflow setup wizard (CLI fallback
+             for the browser console's onboarding page); prints state and exits, no prompts
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
   --project <path>    Project directory (default: current directory)
-  --providers <csv>   init: claude,codex,antigravity,cursor,cursor-cli
-  --skills <csv>      init: requirements,spec,build,fix,review,handoff,setup
+  --providers <csv>   init: claude,codex,antigravity,cursor,cursor-cli; also onboarding project/providers
+  --skills <csv>      init: requirements,spec,build,fix,review,handoff,setup; also onboarding project/providers
   --port <number>     ui: local port (default: automatically selected)
   --to <version>      migrate: target schema version (default: current)
   --dry-run           migrate/recover/sync: preview without writing files
   --task <id>         task: stable task identifier
-  --verification-mode <mode> task/workflow: fast or standard; verification: project default
+  --verification-mode <mode> task/workflow: fast or standard; verification/onboarding: project default
   --expected-revision <n>  task resume/cancel/result-approve/-notes/-defer: optimistic revision
   --mutation-id <id>  task mutation: retry-safe event identifier
   --branch <name>     workspace create: explicit new branch name
   --revision <ref>    workspace create: base commit (default: HEAD)
   --mode <name>       workspace inspect/create: isolated or direct
-  --worktree-root <path>  workspace inspect/create/preference: worktree-root override or setting
-  --execution <name>  workspace preference: ask, always-worktree, or direct
+  --worktree-root <path>  workspace inspect/create/preference/onboarding workspace: worktree root
+  --execution <name>  workspace preference/onboarding workspace: ask, always-worktree, or direct
   --authorized        workspace cleanup: direct user authorization
   --provider <id>     task start/resume: provider adapter ID
   --prompt <text>     task start/resume: provider prompt
@@ -317,6 +334,7 @@ try {
         'pack',
         'schedule',
         'tool',
+        'onboarding',
       ].includes(command) &&
       extra.length
     )
@@ -461,6 +479,14 @@ try {
         'expected-revision',
       ],
       mcp: ['project', 'file', 'authorized', 'dry-run', 'id'],
+      onboarding: [
+        'project',
+        'providers',
+        'skills',
+        'execution',
+        'worktree-root',
+        'verification-mode',
+      ],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -1447,6 +1473,98 @@ try {
         print(result);
         if (result.diagnostics.length) process.exitCode = 1;
       }
+      // --- Onboarding (#100): CLI fallback for the browser console's
+      // onboarding page. Every action prints its result and exits; there is
+      // no interactive prompt anywhere in this CLI, so this is inherently
+      // "non-interactive-safe" — it never blocks on a TTY.
+    } else if (command === 'onboarding') {
+      const action = extra[0] ?? 'inspect';
+      const stepActions = new Set(['skip', 'back']);
+      const validActions = [
+        'inspect',
+        'start',
+        'project',
+        'providers',
+        'workspace',
+        'verification',
+        'usage',
+        'preview',
+        'apply',
+        'skip',
+        'back',
+        'complete',
+        'dismiss',
+        'cancel',
+      ];
+      if (
+        !validActions.includes(action) ||
+        (stepActions.has(action) || action === 'usage' ? extra.length !== 2 : extra.length > 1)
+      )
+        throw new Error(
+          'Usage: latchkit onboarding [inspect|start|project|providers|workspace|verification|' +
+            'usage <enable|disable>|preview|apply|skip <step>|back <step>|complete|dismiss|cancel] [options].',
+        );
+      const providerList = () =>
+        values.providers === undefined ? undefined : values.providers.split(',').filter(Boolean);
+      const skillList = () =>
+        values.skills === undefined ? undefined : values.skills.split(',').filter(Boolean);
+      if (action === 'inspect') print(await inspectOnboarding(root));
+      else if (action === 'start') print(await startOnboarding(root));
+      else if (action === 'project')
+        print(
+          await selectOnboardingProject(root, {
+            ...(providerList() !== undefined ? { providers: providerList() } : {}),
+            ...(skillList() !== undefined ? { skills: skillList() } : {}),
+          }),
+        );
+      else if (action === 'providers')
+        print(
+          await updateOnboardingProjectSelection(root, {
+            ...(providerList() !== undefined ? { providers: providerList() } : {}),
+            ...(skillList() !== undefined ? { skills: skillList() } : {}),
+          }),
+        );
+      else if (action === 'workspace') {
+        if (values.execution === undefined && values['worktree-root'] === undefined)
+          throw new Error('onboarding workspace requires --execution and/or --worktree-root.');
+        if (
+          values.execution !== undefined &&
+          !['ask', 'always-worktree', 'direct'].includes(values.execution)
+        )
+          throw new Error('--execution must be ask, always-worktree, or direct.');
+        print(
+          await updateOnboardingWorkspacePreference(root, {
+            ...(values.execution !== undefined
+              ? { executionPreference: values.execution as 'ask' | 'always-worktree' | 'direct' }
+              : {}),
+            ...(values['worktree-root'] !== undefined
+              ? { worktreeRoot: values['worktree-root'] }
+              : {}),
+          }),
+        );
+      } else if (action === 'verification') {
+        if (
+          values['verification-mode'] === undefined ||
+          !['fast', 'standard'].includes(values['verification-mode'])
+        )
+          throw new Error('onboarding verification requires --verification-mode fast|standard.');
+        print(
+          await updateOnboardingVerificationPreference(
+            root,
+            values['verification-mode'] as 'fast' | 'standard',
+          ),
+        );
+      } else if (action === 'usage') {
+        if (!['enable', 'disable'].includes(extra[1] ?? ''))
+          throw new Error('Usage: latchkit onboarding usage <enable|disable>.');
+        print(await updateOnboardingUsagePreference(root, extra[1] === 'enable'));
+      } else if (action === 'preview') print(await previewOnboardingSetup(root));
+      else if (action === 'apply') print(await applyOnboardingSetup(root));
+      else if (action === 'skip' || action === 'back') {
+        const stepId = requiredOption(extra[1], 'step');
+        print(await (action === 'skip' ? skipOnboardingStep : backOnboardingStep)(root, stepId));
+      } else if (action === 'complete') print(await completeOnboarding(root));
+      else print(await dismissOnboarding(root)); // 'dismiss' | 'cancel'
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -1457,6 +1575,18 @@ try {
       console.log(
         `Latchkit console for ${root}\n${url}\nOpen this link in your browser. Keep its session token private. Ctrl+C to stop.`,
       );
+      // Onboarding (#100): clearly offer onboarding on a first launch — best
+      // effort only, never blocks starting the console.
+      try {
+        const { readOnboardingHandoffState, shouldOfferOnboarding } =
+          await import('./installation/onboarding-state.js');
+        if (shouldOfferOnboarding(await readOnboardingHandoffState()))
+          console.log(
+            'First time here? Open the Onboarding section in the console (or run `latchkit onboarding`) to finish setup.',
+          );
+      } catch {
+        /* Best-effort hint only; never blocks starting the console. */
+      }
       for (const signal of ['SIGINT', 'SIGTERM'])
         process.once(signal, () => {
           server.close();

@@ -4,6 +4,7 @@ import { ArrowUpRight, CheckCircle2, CircleDot, ExternalLink, RefreshCw, Save } 
 import { createConsoleStore } from './console-store.js';
 import { FccConsole } from './fcc.js';
 import { exportMemory, MemoryConsole } from './memory.js';
+import { OnboardingConsole } from './onboarding.js';
 import { ThemeToggle } from './theme.js';
 import { UsageConsole } from './usage.js';
 import type { ConsoleState, WorkspacePreference } from './types.js';
@@ -323,6 +324,9 @@ function Console() {
           <a className="nav-item active" href="#workspace">
             <span aria-hidden="true">◈</span>Workspace
           </a>
+          <a className="nav-item" href="#onboarding">
+            <span aria-hidden="true">✓</span>Onboarding
+          </a>
           <a className="nav-item" href="#configuration">
             <span aria-hidden="true">≡</span>Configuration
           </a>
@@ -396,6 +400,7 @@ function Console() {
             {snapshot.notice.message}
           </div>
         )}
+        <OnboardingConsole />
         <Summary state={state} />
         <FccConsole />
         <section id="configuration" className="config-section" aria-labelledby="providers-heading">

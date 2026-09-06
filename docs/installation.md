@@ -147,24 +147,29 @@ available as a bare command.
 
 ## Onboarding hook point
 
-Issue #100 owns a dedicated first-launch onboarding flow; it does not exist
-yet. Until it lands, a successful `install` run through
-`src/installation/entry.ts` (i.e., through `install.ps1`/`install.sh`)
-prints one of two messages, decided by `src/installation/onboarding.ts`:
+Issue #100's onboarding flow is `latchkit onboarding` (a CLI wizard that also
+works as an accessible fallback with no browser) and the browser console's
+onboarding page (`web/onboarding.tsx`, served by `latchkit ui`) — see
+[Onboarding](#onboarding) below for what each step does. A successful
+`install` run through `src/installation/entry.ts` (i.e., through
+`install.ps1`/`install.sh`) prints one of two messages, decided by
+`src/installation/onboarding.ts`:
 
 - **Interactive** (both stdin and stdout are a TTY, and neither `CI` nor
   `LATCHKIT_NON_INTERACTIVE=1` is set, and `--non-interactive` was not
-  passed): a suggested next command pointing at `latchkit ui`, the closest
-  existing entrypoint (the local configuration console) — e.g. `Next: run
-  "<root>/bin/latchkit ui --project <your-project-path>" to open the local
-  console and finish setup.`
+  passed): a suggested next command pointing at `latchkit onboarding` — e.g.
+  `Next: run "<root>/bin/latchkit onboarding --project <your-project-path>"
+  to see setup status, or add "ui" in place of "onboarding" to finish setup
+  ... in the browser console.`
 - **Non-interactive** (CI, a script, `--non-interactive`, or no attached
-  TTY): a status line confirming the install is ready and naming the same
-  next command, and nothing else. **It never launches a server, opens a
-  browser, or blocks waiting for input** — this is asserted directly by
-  `test/installation-onboarding.test.js`, including the default (no flag)
-  case, so automation that pipes `install.ps1`/`install.sh` output never
-  hangs.
+  TTY): a status line confirming the install is ready, that onboarding was
+  deferred, and naming the same next command, and nothing else. **It never
+  launches a server, opens a browser, or blocks waiting for input** — this is
+  asserted directly by `test/installation-onboarding.test.js`, including the
+  default (no flag) case, so automation that pipes `install.ps1`/`install.sh`
+  output never hangs. `latchkit onboarding` itself is equally safe to name
+  here: with no subcommand it only inspects and prints current onboarding
+  state (see below) and exits — it never prompts or launches anything either.
 
 This message is printed to stderr as plain text (not part of the JSON on
 stdout), and it is scoped to the literal `install` command only — both
@@ -174,11 +179,45 @@ a fresh install from an upgrade internally), so this covers exactly the
 `latchkit self install` invoked directly from an already-installed CLI does
 not go through `entry.ts` and does not print this message.
 
-When #100 ships a real onboarding flow, replace the interactive branch in
-`resolveOnboardingHandoff` (`src/installation/onboarding.ts`) to invoke it
-directly instead of only printing a suggested command. Keep the
-non-interactive branch's "never launch anything, never hang" behavior — see
-the comment at the top of that file.
+## Onboarding
+
+`latchkit onboarding [action] [options]` drives a resumable, skippable setup
+wizard for one project. Every action prints its resulting JSON state and
+exits immediately — there is no interactive prompt anywhere in this CLI, so
+it is inherently safe to run from a script or a TTY-less shell:
+
+```powershell
+& $latchkit onboarding --project "C:/path/to/project"                              # inspect (default action)
+& $latchkit onboarding project --project "C:/path/to/project"                      # select/initialize the project
+& $latchkit onboarding providers --project "C:/path/to/project" --providers 'claude,codex' --skills 'spec,build'
+& $latchkit onboarding workspace --project "C:/path/to/project" --execution ask
+& $latchkit onboarding verification --project "C:/path/to/project" --verification-mode fast
+& $latchkit onboarding usage enable --project "C:/path/to/project"
+& $latchkit onboarding preview --project "C:/path/to/project"                      # reuses sync --dry-run
+& $latchkit onboarding apply --project "C:/path/to/project"                        # reuses sync
+& $latchkit onboarding complete --project "C:/path/to/project"
+```
+
+`skip <step>` and `back <step>` move between steps without losing anything
+already saved (every step writes straight to its own existing store —
+`config.json`, verification settings, usage settings — so nothing here is a
+second copy); `dismiss`/`cancel` stop the current run without discarding
+saved settings, and any later step action resumes it automatically. Progress
+for one project lives in `.latchkit/onboarding/state-v1.json`; whether
+onboarding has been offered/completed/dismissed *on this machine* (so an
+ordinary launch or upgrade does not repeat it) is tracked separately, beside
+the installation's own activation state
+(`<install-root>/onboarding-state.json`, next to `current` and
+`.launchers.json` — see `src/installation/onboarding-state.ts`).
+
+The same steps are available as a guided wizard in the browser console
+(`latchkit ui`, `#onboarding` section): it distinguishes an agent that is
+*unavailable* (not found on PATH), *installed* (found, not yet selected), and
+*configured* (found and selected) — and reports authentication as *unknown*
+always, since no adapter here can verify a signed-in provider session. It
+previews the exact files a sync would change (reusing `sync --dry-run`)
+before applying anything, through the same registered-resource transaction
+layer as `latchkit sync`.
 
 ## Homebrew and WinGet
 

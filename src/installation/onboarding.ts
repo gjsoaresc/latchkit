@@ -1,20 +1,18 @@
 /**
  * Onboarding hand-off hook point for the standalone installer.
  *
- * Issue #100 owns the dedicated first-launch onboarding flow. Latchkit has no
- * such flow yet: `latchkit ui` (the local configuration console) is the
- * closest existing entrypoint. Until #100 lands, a successful interactive
+ * Issue #100 owns the dedicated first-launch onboarding flow: `latchkit
+ * onboarding` (CLI, see src/onboarding/service.ts and the `onboarding`
+ * command in src/cli.ts) and the browser console's onboarding page
+ * (web/onboarding.tsx, served by `latchkit ui`). A successful interactive
  * `latchkit self install` (invoked through install.ps1/install.sh) prints a
  * suggested next command instead of launching anything automatically —
  * launching a long-running server/browser from an installer without explicit
  * user action would be surprising and could hang unattended runs. A
- * non-interactive install prints an equivalent status line and never blocks.
- *
- * When #100 ships a real onboarding entrypoint, replace the interactive
- * branch below to invoke it directly (or exec it) instead of only printing a
- * suggested command. Keep the non-interactive branch's "never hang, never
- * launch anything" behavior — that is a requirement, not an artifact of the
- * current placeholder.
+ * non-interactive install prints an equivalent status line, names the same
+ * command to run onboarding later, and never blocks: `latchkit onboarding`
+ * itself never prompts or launches a server, so it is safe to suggest from
+ * both branches.
  */
 import path from 'node:path';
 
@@ -57,17 +55,17 @@ export function resolveOnboardingHandoff(options: {
 }): OnboardingHandoff {
   const launcherName = options.target.startsWith('win32-') ? 'latchkit.ps1' : 'latchkit';
   const launcher = path.join(options.root, 'bin', launcherName);
-  const command = [launcher, 'ui', '--project', '<your-project-path>'];
+  const command = [launcher, 'onboarding', '--project', '<your-project-path>'];
   const rendered = command.map((token) => (token.includes(' ') ? `"${token}"` : token)).join(' ');
   if (options.interactive)
     return {
       interactive: true,
-      message: `Latchkit ${options.version} installed. Next: run ${rendered} to open the local console and finish setup. (Onboarding hook point for #100; see docs/installation.md#onboarding-hook-point.)`,
+      message: `Latchkit ${options.version} installed. Next: run ${rendered} to see setup status, or add "ui" in place of "onboarding" to finish setup (choose your project, agents, and workflow preferences) in the browser console.`,
       command,
     };
   return {
     interactive: false,
-    message: `Latchkit ${options.version} installed non-interactively. Setup status: ready, onboarding skipped. Run ${rendered} when you want to open the local console.`,
+    message: `Latchkit ${options.version} installed non-interactively. Setup status: ready, onboarding deferred. Run ${rendered} when you want to finish setup.`,
     command,
   };
 }
