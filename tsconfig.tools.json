@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist"
+  },
+  "include": [
+    "scripts/build.ts",
+    "scripts/browser-licenses.ts",
+    "scripts/check.ts",
+    "scripts/reconcile.ts",
+    "scripts/validate-skills.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

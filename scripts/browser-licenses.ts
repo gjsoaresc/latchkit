@@ -1,35 +1,66 @@
 import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { reconcileDirectory } from './reconcile.js';
+import type { Metafile } from 'esbuild';
+
+type PackageMetadata = { name: string; version: string; license?: unknown };
+type BrowserLicenseRecord = {
+  name: string;
+  version: string;
+  license: string;
+  path: string;
+  notices: string[];
+};
+
+function isPackageMetadata(value: unknown): value is PackageMetadata {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { name?: unknown }).name === 'string' &&
+    typeof (value as { version?: unknown }).version === 'string'
+  );
+}
 
 // esbuild records the modules that actually contribute bytes to the browser
 // output. Preserve their package notices even when npm classifies them as
 // development dependencies because no node_modules tree ships at runtime.
-export async function collectBrowserLicenses(root, destination, metafile) {
-  const inputs = new Set();
+export async function collectBrowserLicenses(
+  root: string,
+  destination: string,
+  metafile: Metafile,
+): Promise<BrowserLicenseRecord[]> {
+  const inputs = new Set<string>();
   for (const output of Object.values(metafile.outputs))
     for (const [input, contribution] of Object.entries(output.inputs))
       if (contribution.bytesInOutput > 0 && input.replaceAll('\\', '/').includes('node_modules/'))
         inputs.add(path.resolve(root, input));
   // The generated stylesheet incorporates Tailwind's theme and utilities.
   inputs.add(path.join(root, 'node_modules', 'tailwindcss', 'theme.css'));
-  const packages = new Map();
+  const packages = new Map<string, { directory: string; metadata: PackageMetadata }>();
   for (const input of inputs) {
     let directory = path.dirname(input);
     while (directory !== root && directory !== path.dirname(directory)) {
       try {
-        const metadata = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
-        if (metadata.name && metadata.version) {
+        const metadata: unknown = JSON.parse(
+          await readFile(path.join(directory, 'package.json'), 'utf8'),
+        );
+        if (isPackageMetadata(metadata)) {
           packages.set(`${metadata.name}@${metadata.version}`, { directory, metadata });
           break;
         }
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
+      } catch (error: unknown) {
+        if (!(
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          error.code === 'ENOENT'
+        ))
+          throw error;
       }
       directory = path.dirname(directory);
     }
   }
-  const records = [];
+  const records: BrowserLicenseRecord[] = [];
   // Packages come and go across builds (upgrades, replacements, removals),
   // and each keeps its own version-keyed directory name. Track exactly which
   // relative files this run intends to keep so a stale directory left by a

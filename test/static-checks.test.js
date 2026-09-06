@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findSkillFiles, validateSkillTree } from '../scripts/validate-skills.js';
+import { findSkillFiles, validateSkillTree } from '../dist/scripts/validate-skills.js';
 
 async function withSkillTree(callback) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-skills-'));

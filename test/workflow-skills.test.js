@@ -11,7 +11,7 @@ import {
   syncProject,
 } from '../dist/src/core.js';
 import { loadBundledPack, resolvePackResourceDependencies } from '../dist/src/packs/index.js';
-import { findSkillFiles, validateSkillTree } from '../scripts/validate-skills.js';
+import { findSkillFiles, validateSkillTree } from '../dist/scripts/validate-skills.js';
 
 const ids = ['requirements', 'spec', 'build', 'fix', 'review', 'handoff', 'setup'];
 const referenceFiles = [
