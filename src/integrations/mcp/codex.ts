@@ -1,4 +1,6 @@
 import { readOptional } from '../../storage.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { withProjectLock } from '../../installer/lock.js';
 import {
   applyRegisteredTransaction,
@@ -25,6 +27,7 @@ const registry = createResourceRegistry([
   { id: 'mcp-codex-config', path: CONFIG },
   { id: 'mcp-codex-state', path: STATE },
 ]);
+const execute = promisify(execFile);
 
 export interface CodexMcpQualification {
   version: string;
@@ -54,8 +57,52 @@ export function codexMcpQualification(versionOutput: unknown): CodexMcpQualifica
     );
   return { version, schema: CODEX_MCP_SCHEMA };
 }
+/** A bounded read-only probe. No MCP server is started and no account action is taken. */
+export async function probeCodexMcpQualification(
+  executable = 'codex',
+): Promise<CodexMcpQualification> {
+  try {
+    const { stdout } = await execute(executable, ['--version'], {
+      windowsHide: true,
+      timeout: 5_000,
+      maxBuffer: 4 * 1024,
+    });
+    return codexMcpQualification(stdout);
+  } catch {
+    throw new McpContractError(
+      'Codex MCP activation requires a readable qualified installed Codex CLI version.',
+      'MCP_RUNTIME_DENIED',
+    );
+  }
+}
 export const codexMcpRuntimeDigest = (qualification: CodexMcpQualification) =>
   entryHash({ provider: 'codex', qualification });
+
+export async function hasCodexManagedMcp(root: string): Promise<boolean> {
+  return parseState(await readOptional(root, STATE)).entries.length > 0;
+}
+export async function inspectCodexManagedMcp(root: string) {
+  const state = parseState(await readOptional(root, STATE));
+  const raw = (await readOptional(root, CONFIG)) ?? '';
+  return state.entries.map((entry) => {
+    const found = range(raw, entry.id);
+    return {
+      id: entry.id,
+      provider: 'codex' as const,
+      configured: found !== null,
+      enabled: found !== null && entryHash(raw.slice(...found).trimEnd() + '\n') === entry.sha256,
+      authorized: entry.qualification.schema === CODEX_MCP_SCHEMA,
+      definition: entry.definition,
+      missingEnvironment: [],
+    };
+  });
+}
+export async function codexManagedMcpSnapshotDigest(root: string): Promise<string> {
+  return entryHash({
+    config: await readOptional(root, CONFIG),
+    state: await readOptional(root, STATE),
+  });
+}
 
 function quote(value: string) {
   return JSON.stringify(value);
@@ -143,6 +190,41 @@ function range(raw: string, id: string): [number, number] | null {
   const nextMatch = next.exec(tail);
   return [match.index, nextMatch?.index === undefined ? raw.length : after + nextMatch.index];
 }
+/** This deliberately accepts only the TOML forms this serializer can safely
+ * preserve. It is not a permissive partial parser: malformed source blocks a
+ * write instead of risking repair/normalization of user configuration. */
+function assertTomlPreservable(raw: string): void {
+  for (const line of raw.split(/\r?\n/)) {
+    const text = line.replace(/\s+#.*$/, '').trim();
+    if (!text || text.startsWith('#')) continue;
+    if (text.startsWith('[')) {
+      if (!/^\[[^[\]\r\n]+\]$/.test(text))
+        throw new McpContractError(
+          'Refusing malformed or unsupported TOML in .codex/config.toml.',
+          'MCP_TOML_CONFLICT',
+        );
+      continue;
+    }
+    const equals = text.indexOf('=');
+    if (equals <= 0 || !text.slice(equals + 1).trim())
+      throw new McpContractError(
+        'Refusing malformed or unsupported TOML in .codex/config.toml.',
+        'MCP_TOML_CONFLICT',
+      );
+    const value = text.slice(equals + 1).trim();
+    const doubleQuotes = [...value.matchAll(/(?<!\\)"/g)].length;
+    if (doubleQuotes % 2 || /\[\s*$/.test(value) || /,\s*\]$/.test(value))
+      throw new McpContractError(
+        'Refusing malformed or unsupported TOML in .codex/config.toml.',
+        'MCP_TOML_CONFLICT',
+      );
+  }
+  if (/\[\s*$|=\s*\[\s*$/m.test(raw))
+    throw new McpContractError(
+      'Refusing malformed or unsupported TOML in .codex/config.toml.',
+      'MCP_TOML_CONFLICT',
+    );
+}
 function removeOwned(raw: string, entries: readonly StateEntry[]): string {
   let result = raw;
   for (const entry of entries) {
@@ -166,11 +248,12 @@ function build(
   qualification: CodexMcpQualification,
 ) {
   let retained = raw ?? '';
+  if (raw !== null) assertTomlPreservable(raw);
   if (old.entries.length) retained = removeOwned(retained, old.entries);
   const active = definitions.filter((item) => item.enabled && item.providers.includes('codex'));
   const diagnostics: CodexMcpPlan['diagnostics'] = [];
   const seen = new Set<string>();
-  const chunks: string[] = [];
+  const rendered: Array<{ definition: McpIntegration; text: string }> = [];
   for (const definition of active) {
     if (seen.has(definition.id)) {
       diagnostics.push({
@@ -190,7 +273,7 @@ function build(
       continue;
     }
     try {
-      chunks.push(table(definition));
+      rendered.push({ definition, text: table(definition) });
     } catch (error) {
       diagnostics.push({
         code: error instanceof McpContractError ? error.code : 'MCP_RUNTIME_DENIED',
@@ -199,20 +282,16 @@ function build(
       });
     }
   }
-  const rendered = chunks.length
-    ? `${retained.trimEnd()}${retained.trim() ? '\n\n' : ''}${chunks.join('\n')}`
+  const next = rendered.length
+    ? `${retained.trimEnd()}${retained.trim() ? '\n\n' : ''}${rendered.map((item) => item.text).join('\n')}`
     : retained;
-  const entries = chunks.length
-    ? active
-        .filter((definition) => !diagnostics.some((item) => item.message.includes(definition.id)))
-        .map((definition) => ({
-          id: definition.id,
-          sha256: entryHash(table(definition)),
-          definition,
-          qualification,
-        }))
-    : [];
-  const bytes = rendered || raw === null ? rendered || null : null;
+  const entries = rendered.map(({ definition, text }) => ({
+    id: definition.id,
+    sha256: entryHash(text),
+    definition,
+    qualification,
+  }));
+  const bytes = next || raw === null ? next || null : null;
   const stateBytes = entries.length
     ? `${JSON.stringify({ schemaVersion: 1, entries, ...(old.createdConfig || raw === null ? { createdConfig: true } : {}) }, null, 2)}\n`
     : null;
@@ -241,22 +320,41 @@ function build(
 export async function planCodexManagedMcp(
   root: string,
   values: readonly unknown[],
-  versionOutput: unknown,
+  options: { authorized?: boolean; versionOutput?: unknown; executable?: string } = {},
 ): Promise<CodexMcpPlan> {
-  const qualification = codexMcpQualification(versionOutput);
+  const qualification =
+    options.versionOutput === undefined
+      ? await probeCodexMcpQualification(options.executable)
+      : codexMcpQualification(options.versionOutput);
   const definitions = values.map(validateMcpIntegration);
-  return build(
+  const built = build(
     await readOptional(root, CONFIG),
     parseState(await readOptional(root, STATE)),
     definitions,
     qualification,
   ).plan;
+  if (
+    !options.authorized &&
+    definitions.some((item) => item.enabled && item.providers.includes('codex'))
+  )
+    built.diagnostics.push({
+      code: 'MCP_RUNTIME_DENIED',
+      message: 'The exact Codex MCP definition requires explicit local authorization.',
+      evidence: CODEX_MCP_EVIDENCE,
+    });
+  return built;
 }
 export async function applyCodexManagedMcp(
   root: string,
   values: readonly unknown[],
-  versionOutput: unknown,
-  options: { faultBoundary?: TransactionInput['faultBoundary'] } = {},
+  options: {
+    authorized?: boolean;
+    versionOutput?: unknown;
+    executable?: string;
+    faultBoundary?: TransactionInput['faultBoundary'];
+    expectedSnapshotDigest?: string;
+    expectedPlanDigest?: string;
+  } = {},
 ): Promise<CodexMcpPlan> {
   return withProjectLock(root, async () => {
     const manifest = await readOptional(root, MANIFEST);
@@ -265,7 +363,15 @@ export async function applyCodexManagedMcp(
         'Initialize and sync Latchkit before managing MCP.',
         'MCP_PROJECT_UNINITIALIZED',
       );
-    const qualification = codexMcpQualification(versionOutput);
+    if (!options.authorized)
+      throw new McpContractError(
+        'The exact Codex MCP definition requires explicit local authorization.',
+        'MCP_RUNTIME_DENIED',
+      );
+    const qualification =
+      options.versionOutput === undefined
+        ? await probeCodexMcpQualification(options.executable)
+        : codexMcpQualification(options.versionOutput);
     const raw = await readOptional(root, CONFIG);
     const stateRaw = await readOptional(root, STATE);
     const built = build(
@@ -274,6 +380,17 @@ export async function applyCodexManagedMcp(
       values.map(validateMcpIntegration),
       qualification,
     );
+    const snapshotDigest = entryHash({ config: raw, state: stateRaw });
+    if (
+      (options.expectedSnapshotDigest !== undefined &&
+        options.expectedSnapshotDigest !== snapshotDigest) ||
+      (options.expectedPlanDigest !== undefined &&
+        options.expectedPlanDigest !== entryHash(built.plan))
+    )
+      throw new McpContractError(
+        'The reviewed Codex MCP preview no longer matches the managed configuration. Review it again.',
+        'MCP_EDIT_CONFLICT',
+      );
     if (built.plan.diagnostics.length)
       throw new McpContractError('Codex MCP plan has diagnostics.', 'MCP_PLAN_REFUSED');
     const changes = [
@@ -297,10 +414,14 @@ export async function applyCodexManagedMcp(
  * observe the managed configuration. */
 export async function assertCodexManagedMcpRuntime(
   root: string,
-  versionOutput: unknown,
+  options: { executable?: string; versionOutput?: unknown } = {},
 ): Promise<void> {
-  const qualification = codexMcpQualification(versionOutput);
   const state = parseState(await readOptional(root, STATE));
+  if (!state.entries.length) return;
+  const qualification =
+    options.versionOutput === undefined
+      ? await probeCodexMcpQualification(options.executable)
+      : codexMcpQualification(options.versionOutput);
   const raw = await readOptional(root, CONFIG);
   const config = raw ?? '';
   for (const entry of state.entries) {

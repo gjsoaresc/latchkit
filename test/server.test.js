@@ -50,6 +50,7 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.headers.get('cache-control'), 'no-store');
 });
 
+<<<<<<< HEAD
 test('review cancellation uses a separate request and is not queued behind a long review', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-review-api-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -170,7 +171,7 @@ test('server close cancels a long review before Node waits for its POST socket',
   assert.equal((await (await run).json()).state, 'cancelled');
 });
 
-test('MCP API preview is inert, apply requires the exact reviewed preview, and unsupported providers stay refused', async (t) => {
+test('MCP API preview is inert, apply requires the exact reviewed preview, and Codex qualification is explicit', async (t) => {
   const { root, origin, headers } = await fixture(t);
   const definition = {
     schemaVersion: 1,
@@ -210,7 +211,7 @@ test('MCP API preview is inert, apply requires the exact reviewed preview, and u
     }),
   });
   assert.equal(unsupported.status, 200);
-  assert.equal((await unsupported.json()).plan.diagnostics[0].code, 'MCP_PROVIDER_UNSUPPORTED');
+  assert.notEqual((await unsupported.json()).plan.diagnostics[0]?.code, 'MCP_PROVIDER_UNSUPPORTED');
 });
 
 test('MCP apply refuses stale managed state and a preview that did not review activation', async (t) => {

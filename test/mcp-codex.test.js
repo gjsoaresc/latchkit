@@ -9,6 +9,7 @@ import {
   codexMcpQualification,
   planCodexManagedMcp,
 } from '../dist/src/integrations/mcp/codex.js';
+import { inspectManagedMcp } from '../dist/src/integrations/mcp/managed.js';
 
 const version = 'codex-cli 0.153.2';
 const definition = (overrides = {}) => ({
@@ -51,9 +52,12 @@ test('Codex project serializer preserves user TOML and applies native enabled_to
     path.join(root, '.codex/config.toml'),
     '# personal configuration\nmodel = "gpt-5"\n\n[mcp_servers.personal]\ncommand = "personal"\n',
   );
-  const plan = await planCodexManagedMcp(root, [definition()], version);
+  const plan = await planCodexManagedMcp(root, [definition()], {
+    authorized: true,
+    versionOutput: version,
+  });
   assert.deepEqual(plan.diagnostics, []);
-  await applyCodexManagedMcp(root, [definition()], version);
+  await applyCodexManagedMcp(root, [definition()], { authorized: true, versionOutput: version });
   const config = await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8');
   assert.match(config, /model = "gpt-5"/);
   assert.match(config, /\[mcp_servers\.personal\]/);
@@ -61,6 +65,10 @@ test('Codex project serializer preserves user TOML and applies native enabled_to
   assert.match(config, /env_vars = \["FIXTURE_TOKEN"\]/);
   assert.match(config, /enabled_tools = \["read"\]/);
   assert.match(config, /enabled = true/);
+  assert.deepEqual(
+    (await inspectManagedMcp(root)).integrations.map((item) => item.provider),
+    ['codex'],
+  );
 });
 
 test('Codex rejects legacy SSE and preserves tool narrowing and owner state on incompatible upgrade', async (t) => {
@@ -75,17 +83,61 @@ test('Codex rejects legacy SSE and preserves tool narrowing and owner state on i
         args: undefined,
       }),
     ],
-    version,
+    { authorized: true, versionOutput: version },
   );
   assert.equal(rejected.diagnostics[0].code, 'MCP_TRANSPORT_UNSUPPORTED');
-  await applyCodexManagedMcp(root, [definition()], version);
-  await assertCodexManagedMcpRuntime(root, version);
+  await applyCodexManagedMcp(root, [definition()], { authorized: true, versionOutput: version });
+  await assertCodexManagedMcpRuntime(root, { versionOutput: version });
   const before = await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8');
-  await assert.rejects(applyCodexManagedMcp(root, [definition()], 'codex-cli 0.153.3'), {
-    code: 'MCP_RUNTIME_DENIED',
-  });
-  await assert.rejects(assertCodexManagedMcpRuntime(root, 'codex-cli 0.153.3'), {
+  await assert.rejects(
+    applyCodexManagedMcp(root, [definition()], {
+      authorized: true,
+      versionOutput: 'codex-cli 0.153.3',
+    }),
+    {
+      code: 'MCP_RUNTIME_DENIED',
+    },
+  );
+  await assert.rejects(assertCodexManagedMcpRuntime(root, { versionOutput: 'codex-cli 0.153.3' }), {
     code: 'MCP_RUNTIME_DENIED',
   });
   assert.equal(await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8'), before);
+});
+
+test('Codex refuses malformed TOML and never records invalid or duplicate entries as owned', async (t) => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, '.codex'));
+  const config = path.join(root, '.codex/config.toml');
+  await fs.writeFile(config, 'model = [\n');
+  await assert.rejects(
+    planCodexManagedMcp(root, [definition()], { authorized: true, versionOutput: version }),
+    { code: 'MCP_TOML_CONFLICT' },
+  );
+  await fs.writeFile(config, 'model = "gpt-5"\n');
+  const invalid = definition({
+    id: 'legacy',
+    transport: 'sse',
+    endpoint: 'http://127.0.0.1/sse',
+    executable: undefined,
+    args: undefined,
+  });
+  const planned = await planCodexManagedMcp(root, [definition(), invalid, definition()], {
+    authorized: true,
+    versionOutput: version,
+  });
+  assert.deepEqual(planned.diagnostics.map((item) => item.code).sort(), [
+    'MCP_DUPLICATE_ID',
+    'MCP_TRANSPORT_UNSUPPORTED',
+  ]);
+  await assert.rejects(
+    applyCodexManagedMcp(root, [definition(), invalid, definition()], {
+      authorized: true,
+      versionOutput: version,
+    }),
+    { code: 'MCP_PLAN_REFUSED' },
+  );
+  await assert.rejects(fs.readFile(path.join(root, '.latchkit/mcp-codex-state.json')), {
+    code: 'ENOENT',
+  });
+  assert.equal(await fs.readFile(config, 'utf8'), 'model = "gpt-5"\n');
 });

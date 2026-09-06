@@ -19,6 +19,13 @@ import {
   type McpIntegration,
   type RuntimeMcpGrant,
 } from './contracts.js';
+import {
+  applyCodexManagedMcp,
+  codexManagedMcpSnapshotDigest,
+  hasCodexManagedMcp,
+  inspectCodexManagedMcp,
+  planCodexManagedMcp,
+} from './codex.js';
 
 const STATE = '.latchkit/mcp-state.json';
 const MANIFEST = '.latchkit/manifest.json';
@@ -282,6 +289,25 @@ export async function planManagedMcp(
   grants: readonly RuntimeMcpGrant[] = [],
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<McpPlan> {
+  const definitions = values.map(validateMcpIntegration);
+  if (
+    (definitions.length > 0 &&
+      definitions.every(
+        (definition) => definition.providers.length === 1 && definition.providers[0] === 'codex',
+      )) ||
+    (definitions.length === 0 && (await hasCodexManagedMcp(root)))
+  ) {
+    const plan = await planCodexManagedMcp(root, definitions, {
+      authorized: grants.some((grant) => grant.provider === 'codex' && grant.authorized),
+    });
+    return {
+      changes: plan.changes,
+      definitions,
+      diagnostics: plan.diagnostics.map((item) => ({ ...item, provider: 'codex' })),
+      implications: plan.implications,
+      missingEnvironment: [],
+    };
+  }
   return (await buildPlan(root, values, grants, environment)).plan;
 }
 
@@ -289,8 +315,8 @@ export async function planManagedMcp(
  * unrelated project files and never exposes configuration bytes to API consumers. */
 export async function managedMcpSnapshotDigest(root: string): Promise<string> {
   return entryHash({
-    config: await readOptional(root, TARGET),
-    state: await readOptional(root, STATE),
+    claude: { config: await readOptional(root, TARGET), state: await readOptional(root, STATE) },
+    codex: await codexManagedMcpSnapshotDigest(root),
   });
 }
 export async function applyManagedMcp(
@@ -304,6 +330,26 @@ export async function applyManagedMcp(
     expectedPlanDigest?: string;
   } = {},
 ): Promise<McpPlan> {
+  const definitions = values.map(validateMcpIntegration);
+  if (
+    (definitions.length > 0 &&
+      definitions.every(
+        (definition) => definition.providers.length === 1 && definition.providers[0] === 'codex',
+      )) ||
+    (definitions.length === 0 && (await hasCodexManagedMcp(root)))
+  ) {
+    const plan = await applyCodexManagedMcp(root, definitions, {
+      authorized: grants.some((grant) => grant.provider === 'codex' && grant.authorized),
+      faultBoundary: options.faultBoundary,
+    });
+    return {
+      changes: plan.changes,
+      definitions,
+      diagnostics: plan.diagnostics.map((item) => ({ ...item, provider: 'codex' })),
+      implications: plan.implications,
+      missingEnvironment: [],
+    };
+  }
   return withProjectLock(root, async () => {
     const manifest = await readOptional(root, MANIFEST);
     if (manifest === null)
@@ -312,7 +358,10 @@ export async function applyManagedMcp(
         'MCP_PROJECT_UNINITIALIZED',
       );
     const built = await buildPlan(root, values, grants, options.environment ?? process.env);
-    const snapshotDigest = entryHash({ config: built.raw, state: built.stateRaw });
+    const snapshotDigest = entryHash({
+      claude: { config: built.raw, state: built.stateRaw },
+      codex: await codexManagedMcpSnapshotDigest(root),
+    });
     if (
       (options.expectedSnapshotDigest !== undefined &&
         options.expectedSnapshotDigest !== snapshotDigest) ||
@@ -365,21 +414,24 @@ export async function inspectManagedMcp(
   const state = parseState(await readOptional(root, STATE));
   const servers = serversFrom(parseObject(await readOptional(root, TARGET), TARGET));
   return {
-    integrations: state.entries.map((entry) => ({
-      id: entry.id,
-      provider: entry.provider,
-      configured: Object.hasOwn(servers, entry.id),
-      enabled: entryHash(servers[entry.id]) === entry.sha256,
-      authorized: Boolean(
-        entry.definition &&
-        entry.runtimeDigest === mcpRuntimeDigest(providerById(entry.provider)) &&
-        entryHash(server(entry.definition)) === entry.sha256,
-      ),
-      definition: entry.definition,
-      missingEnvironment: entry.definition
-        ? environmentMissing([entry.definition], environment)
-        : [],
-    })),
+    integrations: [
+      ...state.entries.map((entry) => ({
+        id: entry.id,
+        provider: entry.provider,
+        configured: Object.hasOwn(servers, entry.id),
+        enabled: entryHash(servers[entry.id]) === entry.sha256,
+        authorized: Boolean(
+          entry.definition &&
+          entry.runtimeDigest === mcpRuntimeDigest(providerById(entry.provider)) &&
+          entryHash(server(entry.definition)) === entry.sha256,
+        ),
+        definition: entry.definition,
+        missingEnvironment: entry.definition
+          ? environmentMissing([entry.definition], environment)
+          : [],
+      })),
+      ...(await inspectCodexManagedMcp(root)),
+    ],
   };
 }
 /** Called by the process runner immediately before launching provider-owned sessions.
