@@ -66,7 +66,9 @@ test('supports keyboard completion, accessible names, empty selections, and narr
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page);
-  await expect(page.getByRole('group')).toHaveCount(2);
+  // Provider selection, skill selection, and the task workspace preference each form a group.
+  await expect(page.getByRole('group')).toHaveCount(3);
+  await expect(page.getByRole('group', { name: 'Task execution preference' })).toBeVisible();
   await expect(page.getByLabel(/Codex/)).toHaveAccessibleName(/Codex/);
   await page.keyboard.press('Tab');
   await expect(page.locator(':focus')).toBeVisible();
@@ -156,7 +158,12 @@ test('local usage stays opt-in and renders unknown totals without suggesting zer
   await open(page);
   const usage = page.getByRole('region', { name: 'Understand each session.' });
   await expect(usage.getByText('Collection disabled', { exact: true })).toBeVisible();
-  await expect(usage.getByText('Unknown', { exact: true })).toHaveCount(2);
+  // Recorded totals stay unknown while collection is disabled; the overview's estimated cost
+  // card renders its own unknown value, so scope the count to the totals grid and make sure
+  // nothing in the region suggests zero spend.
+  const totals = usage.locator('[aria-label="Recorded usage totals"]');
+  await expect(totals.getByText('Unknown', { exact: true })).toHaveCount(2);
+  await expect(usage.getByText('$0.0000', { exact: true })).toHaveCount(0);
   await usage.getByRole('button', { name: 'Enable local collection' }).click();
   await expect(usage.getByText('Collection enabled', { exact: true })).toBeVisible();
   await usage.getByLabel('Retention days').fill('7');

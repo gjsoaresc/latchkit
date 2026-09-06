@@ -67,7 +67,10 @@ function fixtureAdapter(plans) {
 }
 
 async function gitFixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-controller-workspace-'));
+  // Canonicalize so expectations match the paths Git reports (8.3 temp names on CI runners).
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-controller-workspace-')),
+  );
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   await git(root, ['init']);
   await git(root, ['config', 'user.email', 'test@example.invalid']);
