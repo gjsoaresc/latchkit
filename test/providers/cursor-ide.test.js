@@ -317,7 +317,16 @@ test('explicit Cursor hook evidence accepts Windows BOM framing and records boun
   const concurrent = await Promise.all(
     inputs.slice(1).map((input) => runHook(root, input, ['--evidence', evidencePath])),
   );
-  assert.ok(concurrent.every((result) => result.exitCode === 0));
+  assert.deepEqual(
+    concurrent
+      .map(({ exitCode, stderr }, index) => ({
+        event: inputs[index + 1].hook_event_name,
+        exitCode,
+        stderr,
+      }))
+      .filter(({ exitCode }) => exitCode !== 0),
+    [],
+  );
 
   const inspection = await inspectCursorIdeHookEvidence(root);
   assert.equal(inspection.configured, true);

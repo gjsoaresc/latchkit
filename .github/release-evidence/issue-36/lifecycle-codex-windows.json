@@ -2,12 +2,12 @@
   "schemaVersion": 1,
   "kind": "live-lifecycle-qualification",
   "candidate": {
-    "commit": "b12483fe449dcdd21bdcb2013ecbeafe3131f9c3",
+    "commit": "783567be209d09202dd26570cb03cba644c153ae",
     "package": "latchkit@1.0.0-rc.1",
-    "archiveSha256": "7c2bab36b27f8928afffe2bc28c38595658dd4e91d04c5fa03864c948dafb682"
+    "archiveSha256": "16ed09a0b6d5d4b59975ae68616b6f51bf30dece61e188cdc3b83be5d8b47fb4"
   },
-  "testedAt": "2026-09-06T01:31:07.946Z",
-  "startedAt": "2026-09-06T01:28:25.882Z",
+  "testedAt": "2026-09-06T02:06:49.377Z",
+  "startedAt": "2026-09-06T02:04:04.955Z",
   "runtime": {
     "platform": "win32",
     "release": "10.0.26200",
