@@ -1,5 +1,6 @@
 import { cp, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { reconcileDirectory } from './reconcile.js';
 
 // esbuild records the modules that actually contribute bytes to the browser
 // output. Preserve their package notices even when npm classifies them as
@@ -29,6 +30,12 @@ export async function collectBrowserLicenses(root, destination, metafile) {
     }
   }
   const records = [];
+  // Packages come and go across builds (upgrades, replacements, removals),
+  // and each keeps its own version-keyed directory name. Track exactly which
+  // relative files this run intends to keep so a stale directory left by a
+  // package that no longer contributes bytes gets reclaimed below instead of
+  // silently accumulating alongside the current set.
+  const keep = new Set(['manifest.json']);
   for (const [id, { directory, metadata }] of [...packages].sort(([a], [b]) =>
     a.localeCompare(b),
   )) {
@@ -41,12 +48,14 @@ export async function collectBrowserLicenses(root, destination, metafile) {
       if (!(await stat(path.join(directory, name))).isFile()) continue;
       await cp(path.join(directory, name), path.join(target, name));
       notices.push(name);
+      keep.add(`${relative}/${name}`);
     }
     if (!notices.length && id === 'react-remove-scroll-bar@2.3.8') {
       const reviewed = path.join(root, 'scripts/licenses/react-remove-scroll-bar-2.3.8');
       for (const name of ['LICENSE', 'SOURCE.md']) {
         await cp(path.join(reviewed, name), path.join(target, name));
         notices.push(name);
+        keep.add(`${relative}/${name}`);
       }
     }
     if (!notices.length) throw new Error(`Bundled browser dependency has no license file: ${id}`);
@@ -58,6 +67,10 @@ export async function collectBrowserLicenses(root, destination, metafile) {
       notices,
     });
   }
+  // Reclaim directories for packages that no longer contribute bytes (a
+  // removed dependency, or an upgrade that changed the version-keyed
+  // directory name) before publishing the fresh manifest.
+  await reconcileDirectory(destination, keep);
   await writeFile(path.join(destination, 'manifest.json'), `${JSON.stringify(records, null, 2)}\n`);
   return records;
 }

@@ -123,6 +123,7 @@ The direction is an open engineering workflow layer: requirements → plan → i
 - [Compatibility and primary documentation](docs/compatibility.md)
 - [Workflow scenarios](docs/workflows.md)
 - [Local workflow workbench](docs/workflow-workbench.md)
+- [Generated output inventory and cleanup](docs/generated-outputs.md)
 - [Contributing](CONTRIBUTING.md)
 
 ```sh

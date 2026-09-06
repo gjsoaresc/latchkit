@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { publishArchiveSet } from './atomic-publish.js';
 
 const run = promisify(execFile);
 const repository = path.resolve(import.meta.dirname, '..');
@@ -226,25 +227,45 @@ export async function buildBundle({
     );
     const archiveName = `latchkit-${version}-${target}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`;
     const finalArchive = path.join(output, archiveName);
-    if (process.platform === 'win32') {
-      const script = path.join(temporary, 'archive.ps1');
-      await writeFile(
-        script,
-        'param($Source, $Archive)\n$ErrorActionPreference="Stop"\nAdd-Type -AssemblyName System.IO.Compression.FileSystem\nif (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive }\n[System.IO.Compression.ZipFile]::CreateFromDirectory($Source, $Archive)\n',
-      );
-      await run(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-File', script, bundle, finalArchive],
-        { windowsHide: true, timeout: 120_000 },
-      );
-    } else await run('tar', ['-czf', finalArchive, '-C', bundle, '.'], { timeout: 120_000 });
-    const archiveHash = hash(await readFile(finalArchive));
-    await writeFile(`${finalArchive}.sha256`, `${archiveHash}  ${archiveName}\n`);
-    await writeFile(
-      `${finalArchive}.manifest.json`,
-      `${JSON.stringify({ ...manifest, archive: archiveName, sha256: archiveHash }, null, 2)}\n`,
-    );
-    await cp(path.join(bundle, 'sbom.spdx.json'), `${finalArchive}.spdx.json`);
+    // Stage the archive itself next to its final name (same directory as
+    // `output`, so the eventual rename in publishArchiveSet is a
+    // same-device operation even when the system temp root lives on a
+    // different drive) before touching `output` for real.
+    const stagedArchive = `${finalArchive}.${randomUUID()}.tmp`;
+    let archiveHash;
+    try {
+      if (process.platform === 'win32') {
+        const script = path.join(temporary, 'archive.ps1');
+        await writeFile(
+          script,
+          'param($Source, $Archive)\n$ErrorActionPreference="Stop"\nAdd-Type -AssemblyName System.IO.Compression.FileSystem\nif (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive }\n[System.IO.Compression.ZipFile]::CreateFromDirectory($Source, $Archive)\n',
+        );
+        await run(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-File', script, bundle, stagedArchive],
+          { windowsHide: true, timeout: 120_000 },
+        );
+      } else await run('tar', ['-czf', stagedArchive, '-C', bundle, '.'], { timeout: 120_000 });
+      archiveHash = hash(await readFile(stagedArchive));
+      await publishArchiveSet(finalArchive, stagedArchive, [
+        { path: `${finalArchive}.sha256`, bytes: `${archiveHash}  ${archiveName}\n` },
+        {
+          path: `${finalArchive}.spdx.json`,
+          bytes: await readFile(path.join(bundle, 'sbom.spdx.json')),
+        },
+        {
+          path: `${finalArchive}.manifest.json`,
+          bytes: `${JSON.stringify({ ...manifest, archive: archiveName, sha256: archiveHash }, null, 2)}\n`,
+        },
+      ]);
+    } catch (error) {
+      // publishArchiveSet already reclaims everything it staged or
+      // committed; this guards the case where archive creation itself
+      // (the tar/PowerShell step above) failed or was interrupted before
+      // reaching that call, possibly after partially writing stagedArchive.
+      await rm(stagedArchive, { force: true });
+      throw error;
+    }
     return { archive: finalArchive, sha256: archiveHash, version, target, commit, dirty };
   } finally {
     // temporary is an absolute directory created by this function under the system temp root.

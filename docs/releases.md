@@ -140,3 +140,21 @@ release artifact. For an interrupted project mutation, run
 upgrade, inspect the active version and use `self rollback`; the previous
 version remains usable because activation happens only after staging and smoke
 checks succeed.
+
+`npm run build` reconciles `dist/` against the current source on every run
+(removed or renamed `.ts`/`.cts` sources, skills, schemas, and stale browser
+license version directories are all reclaimed, not just layered over) rather
+than requiring `npm run build:clean`. For everything else this repository's
+tooling generates -- `dist/`, `test-results/`, `coverage/`,
+`.latchkit-typecheck.log`, `npm pack` archives, local `release-artifacts*`
+staging, and orphaned temporary directories from an interrupted
+build/bundle/smoke run -- `npm run clean` is a standalone, cleanup-only
+command; run it bare for a dry-run report of what it would remove and why,
+or `npm run clean:apply` to remove it. Local release staging is excluded
+from the default scope (`npm run clean --scope release-artifacts --apply`
+removes it explicitly) because deciding which staged release is still
+referenced is release domain knowledge that command does not have. See the
+[generated output inventory](generated-outputs.md) for the complete list,
+ownership, retention policy, and cleanup entrypoint of every location, plus
+how release archive and sidecar publication now stages and commits as a set
+so a failure never leaves a partial, misleading artifact behind.
