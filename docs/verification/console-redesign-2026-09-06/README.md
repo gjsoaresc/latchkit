@@ -52,3 +52,28 @@ takes a full-viewport screenshot. No visual state was hand-edited or fabricated.
   from ad hoc manual testing on the machine that produced these screenshots (this console's
   multi-project registry is user-machine-global by design, see `docs/projects.md`); it is not
   representative of a fresh install and is unrelated to this issue's scope.
+
+## Follow-up: skill card title/description separation (2026-09-06)
+
+`04-settings-light-desktop.jpg` and `05-settings-light-narrow.jpg` above show a defect
+introduced by the #90 page split: the Settings page's skill-selection cards (`.skill-card` in
+`web/settings.tsx`) rendered their title (`<strong>`) and description (`.skill-description`) as
+plain inline text with no class linking the title to the design system's `.skill-name` rule, so
+the two ran together on one line (e.g. "Write a specificationTurn accepted requirements into a
+scoped, reviewable delivery plan."). The provider cards directly above them were unaffected
+because `.provider-name` was already `display: block` with its own top margin.
+
+Fix: `web/settings.tsx`'s `SkillGrid` now puts the existing (previously unused) `skill-name`
+class on the `<strong>` title, and `web/style.css`'s `.skill-description` rule gained an explicit
+`display: block` so its `margin-top` reliably takes effect. The onboarding wizard
+(`web/onboarding.tsx`) uses the same `.skill-card` class but combines it with `.onboarding-row`,
+whose flexbox layout already blockifies the `<strong>`/description children — it rendered
+correctly before and after this fix and needed no changes.
+
+- `10-settings-skills-fix-light-desktop.jpg` / `11-settings-skills-fix-light-narrow.jpg`: the
+  Settings page's `.skills-section` after the fix, at desktop width and 390×844, captured the
+  same way as the screenshots above (real `startServer()` instance, freshly initialized temporary
+  project, JPEG quality 60). Titles now sit on their own bold line above the description, matching
+  the provider cards. Dark mode was checked the same way (not saved here — the axe-core scan in
+  `test/browser/config-console.spec.js` ("has no automated accessibility violations on the
+  Settings page in dark mode") already covers dark-mode color-contrast for this page and passed).
