@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "kind": "live-workflow-qualification",
+  "attemptId": "60c30fce-94ff-4a7d-875b-8fade1ab752c",
+  "startedAt": "2026-09-06T15:35:09.477Z",
+  "finishedAt": "2026-09-06T15:37:02.667Z",
+  "candidate": {
+    "archiveSha256": "12a057584630b30b8188c70280b3727d28a8bc96635c4d4f77a1a43dd83794c8",
+    "commit": "d6ee85d8aff58c3159aaaca2b5aa7c83f8dcc509",
+    "version": "1.0.0-dogfood.20260906.3",
+    "target": "win32-x64",
+    "nodeVersion": "24.20.0",
+    "privateNodeVersion": "v24.20.0"
+  },
+  "provider": {
+    "id": "codex",
+    "version": "codex-cli 0.153.2",
+    "modelOverride": "gpt-5.6-luna",
+    "reasoningEffortOverride": "medium",
+    "settingsPreserved": true
+  },
+  "bounds": {
+    "providerTimeoutMs": 120000,
+    "totalTimeoutMs": 900000,
+    "outputLimitBytes": 1048576,
+    "providerProcessStarts": 11,
+    "processStarts": {
+      "inference": 5,
+      "versionProbe": 5,
+      "acceptance": 1
+    }
+  },
+  "usage": {
+    "enabled": true,
+    "records": 5,
+    "unavailable": 0,
+    "tokens": {
+      "input": 265717,
+      "output": 3100,
+      "cacheRead": 212224,
+      "cacheCreation": null,
+      "thinking": 1016
+    },
+    "knownTokens": {
+      "input": 265717,
+      "output": 3100,
+      "cacheRead": 212224,
+      "cacheCreation": 0,
+      "thinking": 1016
+    },
+    "estimatedPublicApiListPriceUsd": null,
+    "estimates": [],
+    "billing": {
+      "status": "unknown",
+      "reason": "Provider subscriptions and actual charges are not collected or inferred."
+    },
+    "providers": [
+      "codex"
+    ],
+    "providerVersions": [
+      "0.153.2"
+    ],
+    "sources": [
+      "codex-jsonl-turn-completed"
+    ],
+    "allRecordsBelongToTask": true,
+    "everyInferenceSessionRecorded": true
+  },
+  "workflow": {
+    "workflowId": "workflow_9661da67-123b-4827-bd66-91b20cd6ebd3",
+    "taskId": "task_47bf2710-ec95-486a-ba05-d2b23e5a1727",
+    "revision": 17,
+    "status": "verified",
+    "phase": "handoff",
+    "policyVersion": "latchkit-workflow-v1",
+    "policyDigest": "80291c4773cabd36c89bea4495126c0119d0a6db7a003fffdc37a54a6191a2f9",
+    "packagedPolicyDigest": "80291c4773cabd36c89bea4495126c0119d0a6db7a003fffdc37a54a6191a2f9",
+    "promptDigest": "46ca35f4190db4709ef69673332e50f8f4fbda3c51fbd5f3734c47e2b7c2eb17",
+    "requirementsDigest": "7e7bda48106ba2d84160382f6051bc44710a75db4c9c180d10f54b8fafeb5e54",
+    "planDigest": "b8c802c879aff54e72e030897ac196c184d3b99ce650f1063a40c9a285845b87",
+    "checksDigest": "99e48b76a4864acedd4cad1daa3d4eb6180d1001e4457f628018fd1cbc837863",
+    "approval": {
+      "planDigest": "b8c802c879aff54e72e030897ac196c184d3b99ce650f1063a40c9a285845b87",
+      "requirementsDigest": "7e7bda48106ba2d84160382f6051bc44710a75db4c9c180d10f54b8fafeb5e54",
+      "checksDigest": "99e48b76a4864acedd4cad1daa3d4eb6180d1001e4457f628018fd1cbc837863",
+      "criteriaDigest": "b38d9f17c0e8f2ffcf3e532328398cc1aec180076211a8f165db54f198be352b",
+      "scope": "src/calculator.js only; requirements and tests are immutable",
+      "reference": "archive:12a057584630b30b8188c70280b3727d28a8bc96635c4d4f77a1a43dd83794c8;commit:d6ee85d8aff58c3159aaaca2b5aa7c83f8dcc509;version:1.0.0-dogfood.20260906.3",
+      "source": {
+        "revision": "a9fbe4fdfd3f0be6140ae863fb4eed70d60d7d7e",
+        "dirtyFingerprint": null
+      },
+      "approvedAt": "2026-09-06T15:35:37.541Z"
+    },
+    "repairAttempts": 0,
+    "actions": [
+      {
+        "kind": "invoke",
+        "phase": "requirements",
+        "status": "passed",
+        "inputDigest": "7bdc44d97c4fee5dac2ed5a165c33c7f621d20343142a931b643b14d102a5b39",
+        "resultDigest": "6668b82eaf386a0d28a9783ea281f3eccba286113f00a4ed56c9a5370327102d"
+      },
+      {
+        "kind": "invoke",
+        "phase": "plan",
+        "status": "passed",
+        "inputDigest": "db8bb714aed5d9bb06b751433f477a44ee8691a0ff6f4e81713377ce853693f1",
+        "resultDigest": "14ba0659ead5b4bb8d097ecac12bafd61d0382b87cd5b87d11d4670f04c7a551"
+      },
+      {
+        "kind": "invoke",
+        "phase": "implementation",
+        "status": "passed",
+        "inputDigest": "439116911082f7e0072691bfe2c7a20e0125ae5b04e7db5c190215a10d678920",
+        "resultDigest": "609332c2f4142c33abc421390b93a7b0b51c18f3a1edabd62a16b508de12a148"
+      },
+      {
+        "kind": "verify",
+        "phase": "verification",
+        "status": "passed",
+        "inputDigest": "99e48b76a4864acedd4cad1daa3d4eb6180d1001e4457f628018fd1cbc837863",
+        "resultDigest": "f061520bcf95a74757eb85db159e87f5e9c26fad73da7205ba4c18c4793de687"
+      },
+      {
+        "kind": "review",
+        "phase": "review",
+        "status": "passed",
+        "inputDigest": "d2e438bfdfdfeafb1541abbfed5cd0f0e0fa57f8d843944155a0d92657b98918",
+        "resultDigest": "6d05396a16d7e28c0447a89b30b7082bac3d35d3a02def95f90b62e00f83f610"
+      },
+      {
+        "kind": "invoke",
+        "phase": "handoff",
+        "status": "passed",
+        "inputDigest": "5c8caadc35acd6536499212f0fb959fc3591840d67720a8b9124be7dbef8e696",
+        "resultDigest": "9cd47c931a3bfef7fef23ae39e5bf44f632838dd4ed435ae95b79d3a02e69e8f"
+      },
+      {
+        "kind": "complete",
+        "phase": "handoff",
+        "status": "passed",
+        "inputDigest": "e9c3a03f00f515782ce7c33e1db3340768f31eaf3864d487145af7dd16f92728",
+        "resultDigest": "bccf4aaf95df5312dbc68fa06aa507c884f0e24ab5294c5ab4f240dfcf88fc5b"
+      }
+    ],
+    "handoffDigest": "38c7a96ce09de7dd2f78bdf382a532f4e8a60b76c82f52676386e2281776c6e0"
+  },
+  "proof": {
+    "awaitedExactApproval": true,
+    "exactChecksApproved": true,
+    "immutableRequirementsSha256": "fd7045a64c030930eed0e70513496ca4e8ac003cf777a16a933d18000722ef4b",
+    "immutableTestsSha256": "9db91024964f4e252209cf8249b72e3c0f45c01625b9c97bd78d8c10765b363d",
+    "implementationSha256": "a6e255c2ee8460672928b14f36f16fea04a18c69c54820ef985856c2c4746490",
+    "finalPrivateNodeCheck": "passed",
+    "independentReview": "passed",
+    "handoff": "present",
+    "taskState": "verified",
+    "gitScope": {
+      "headUnchanged": true,
+      "changedPaths": [
+        "src/calculator.js"
+      ],
+      "unexpectedPathCount": 0
+    }
+  }
+}

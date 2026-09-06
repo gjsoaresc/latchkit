@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-06T15:38:17.957Z",
+  "target": "verified standalone app directory; embedded manifest binding verified",
+  "standalone": {
+    "app": "%USERPROFILE%/.local/share/latchkit/versions/1.0.0-dogfood.20260906.3-win32-x64/app",
+    "version": "1.0.0-dogfood.20260906.3",
+    "commit": "d6ee85d8aff58c3159aaaca2b5aa7c83f8dcc509",
+    "target": "win32-x64",
+    "nodeVersion": "24.20.0",
+    "archive": "not asserted; no archive digest was supplied to this benchmark",
+    "pathRedacted": true
+  },
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "node": "v24.20.0",
+    "nodeExecutable": "node.exe"
+  },
+  "datasets": {
+    "startupRuns": 7,
+    "largePackFiles": 1000,
+    "memoryRecords": 10000,
+    "diffChangedFiles": 300,
+    "heavyRuns": 3
+  },
+  "measurements": {
+    "cliVersionStartup": {
+      "runs": 7,
+      "medianMs": 35.3027,
+      "p95Ms": 35.5907,
+      "minMs": 34.4462,
+      "maxMs": 35.5907,
+      "rssAfterBytes": 57311232,
+      "resourceUsageMaxRssBytes": 57352192,
+      "samples": [
+        {
+          "durationMs": 35.5907,
+          "rssAfterBytes": 56897536,
+          "resourceUsageMaxRssBytes": 57143296
+        },
+        {
+          "durationMs": 35.3027,
+          "rssAfterBytes": 56975360,
+          "resourceUsageMaxRssBytes": 57110528
+        },
+        {
+          "durationMs": 35.4759,
+          "rssAfterBytes": 57028608,
+          "resourceUsageMaxRssBytes": 57352192
+        },
+        {
+          "durationMs": 35.0269,
+          "rssAfterBytes": 56868864,
+          "resourceUsageMaxRssBytes": 57036800
+        },
+        {
+          "durationMs": 35.5796,
+          "rssAfterBytes": 56975360,
+          "resourceUsageMaxRssBytes": 56975360
+        },
+        {
+          "durationMs": 34.4656,
+          "rssAfterBytes": 56901632,
+          "resourceUsageMaxRssBytes": 57065472
+        },
+        {
+          "durationMs": 34.4462,
+          "rssAfterBytes": 57311232,
+          "resourceUsageMaxRssBytes": 57311232
+        }
+      ]
+    },
+    "largePackSync": {
+      "runs": 3,
+      "medianMs": 2631.8464,
+      "p95Ms": 2652.8275,
+      "minMs": 2627.5299,
+      "maxMs": 2652.8275,
+      "rssAfterBytes": 155090944,
+      "resourceUsageMaxRssBytes": 183951360,
+      "samples": [
+        {
+          "durationMs": 2652.8275,
+          "rssAfterBytes": 116371456,
+          "resourceUsageMaxRssBytes": 183951360,
+          "installedFiles": 1000
+        },
+        {
+          "durationMs": 2631.8464,
+          "rssAfterBytes": 155090944,
+          "resourceUsageMaxRssBytes": 183951360,
+          "installedFiles": 1000
+        },
+        {
+          "durationMs": 2627.5299,
+          "rssAfterBytes": 149843968,
+          "resourceUsageMaxRssBytes": 183951360,
+          "installedFiles": 1000
+        }
+      ]
+    },
+    "memorySearch": {
+      "runs": 3,
+      "medianMs": 31.0642,
+      "p95Ms": 34.6152,
+      "minMs": 28.7229,
+      "maxMs": 34.6152,
+      "rssAfterBytes": 249036800,
+      "resourceUsageMaxRssBytes": 249036800,
+      "samples": [
+        {
+          "durationMs": 28.7229,
+          "rssAfterBytes": 162598912,
+          "resourceUsageMaxRssBytes": 183951360,
+          "matchedRecords": 20
+        },
+        {
+          "durationMs": 34.6152,
+          "rssAfterBytes": 182743040,
+          "resourceUsageMaxRssBytes": 224174080,
+          "matchedRecords": 20
+        },
+        {
+          "durationMs": 31.0642,
+          "rssAfterBytes": 249036800,
+          "resourceUsageMaxRssBytes": 249036800,
+          "matchedRecords": 20
+        }
+      ]
+    },
+    "isolatedWorktreeDiff": {
+      "runs": 3,
+      "medianMs": 503.6177,
+      "p95Ms": 523.1379,
+      "minMs": 487.3771,
+      "maxMs": 523.1379,
+      "rssAfterBytes": 215330816,
+      "resourceUsageMaxRssBytes": 250912768,
+      "samples": [
+        {
+          "durationMs": 487.3771,
+          "rssAfterBytes": 211652608,
+          "resourceUsageMaxRssBytes": 250912768,
+          "diffBytes": 51380,
+          "truncated": false
+        },
+        {
+          "durationMs": 503.6177,
+          "rssAfterBytes": 213307392,
+          "resourceUsageMaxRssBytes": 250912768,
+          "diffBytes": 51380,
+          "truncated": false
+        },
+        {
+          "durationMs": 523.1379,
+          "rssAfterBytes": 215330816,
+          "resourceUsageMaxRssBytes": 250912768,
+          "diffBytes": 51380,
+          "truncated": false
+        }
+      ]
+    }
+  },
+  "method": {
+    "startup": "Fresh Node child imports the emitted CLI with --version and emits post-operation memory measurements.",
+    "largePackSync": "Each sample creates a fresh initialized project and synchronizes one validated local pack containing 1,000 synthetic portable skill files. --profile-sync records journal and ordered-resource boundary times; it intentionally preserves ordered resource writes for that diagnostic run.",
+    "memorySearch": "Each sample writes a validated project-memory state with 10,000 synthetic records, then measures searchProjectMemory only.",
+    "diff": "Each sample creates a temporary Git repository, records an owned task, creates an isolated worktree, changes 300 tracked files, then measures inspectDiff only.",
+    "memory": "rssAfterBytes is sampled after each operation. resourceUsageMaxRssBytes is Node maxRSS converted from KiB and is process cumulative on this host; it is not a per-operation allocator trace."
+  },
+  "limitations": [
+    "Fixtures use local temporary directories and synthetic data; they do not represent an end-user repository or a final release bundle.",
+    "The measurement is a development baseline, not a native-worker selection benchmark.",
+    "No Go or Rust worker recommendation follows automatically from these measurements."
+  ]
+}

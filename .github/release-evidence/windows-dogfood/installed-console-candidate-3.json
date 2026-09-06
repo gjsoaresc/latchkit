@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-06T15:37:22.517Z",
+  "version": "1.0.0-dogfood.20260906.3",
+  "archiveSha256": "12a057584630b30b8188c70280b3727d28a8bc96635c4d4f77a1a43dd83794c8",
+  "browser": "153.0.8010.12",
+  "status": "passed",
+  "checks": [
+    "actual installed UI",
+    "persisted project usage",
+    "owned running FCC",
+    "loopback Admin link",
+    "dark theme"
+  ],
+  "pageErrors": 0
+}

@@ -1,0 +1,379 @@
+{
+  "schemaVersion": 1,
+  "kind": "main-thread-cpu-profile-interpretation",
+  "recordedAt": "2026-09-06T15:46:58.440Z",
+  "standalone": {
+    "version": "1.0.0-dogfood.20260906.3",
+    "commit": "d6ee85d8aff58c3159aaaca2b5aa7c83f8dcc509",
+    "target": "win32-x64",
+    "nodeVersion": "24.20.0",
+    "identity": "Benchmark verified embedded manifest binding; this CPU profile does not independently assert an archive digest."
+  },
+  "environment": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "node": "v24.20.0",
+    "nodeExecutable": "node.exe"
+  },
+  "datasets": {
+    "startupRuns": 7,
+    "largePackFiles": 1000,
+    "memoryRecords": 10000,
+    "diffChangedFiles": 300,
+    "heavyRuns": 3
+  },
+  "sources": {
+    "benchmark": ".github/release-evidence/windows-dogfood/benchmarks-installed-candidate-3.json",
+    "rawProfile": "main.cpuprofile (private diagnostic artifact; not committed)",
+    "rawProfileSha256": "6ed2afba5833f0abd2d505913cde7c60bec5fa8aad7ce46043f435ceba2f64e7",
+    "instrumentedMeasurements": "instrumented-benchmarks.json (private diagnostic artifact; not committed)",
+    "publicEvidenceContainsAbsolutePaths": false
+  },
+  "method": {
+    "scope": "One main-thread V8 profile covering the complete diagnostic benchmark process, including fixture setup and cleanup.",
+    "weighting": "Each leaf sample receives its matching timeDeltas entry in microseconds. Identical function/source/line frames are combined across calling contexts. Categories are exclusive self attribution, not inclusive stack totals.",
+    "nativeAttribution": "Idle, program, and garbage collector samples are explicit categories. Node built-ins and application sources determine remaining categories. URL-less native frames inherit the closest recognizable ancestor category.",
+    "percentageDenominator": "Sum of sampled timeDeltas, including idle time; these percentages are not whole-system CPU utilization.",
+    "sourceSanitization": "Only node: built-ins and app/repository-relative source labels are emitted; unrecognized local locations become other-local-source."
+  },
+  "profile": {
+    "nodes": 851,
+    "samples": 11218,
+    "elapsedMs": 16856.42,
+    "sampledElapsedMs": 16856.313,
+    "unsampledTailMs": 0.107,
+    "averageSampleDeltaMs": 1.503
+  },
+  "categories": [
+    {
+      "category": "idle",
+      "sampledSelfMs": 13078.496,
+      "percentOfSampledTime": 77.588
+    },
+    {
+      "category": "node-filesystem",
+      "sampledSelfMs": 1566.179,
+      "percentOfSampledTime": 9.291
+    },
+    {
+      "category": "program-unresolved",
+      "sampledSelfMs": 732.237,
+      "percentOfSampledTime": 4.344
+    },
+    {
+      "category": "node-process-launch",
+      "sampledSelfMs": 555.165,
+      "percentOfSampledTime": 3.294
+    },
+    {
+      "category": "latchkit-application",
+      "sampledSelfMs": 337.58,
+      "percentOfSampledTime": 2.003
+    },
+    {
+      "category": "node-path",
+      "sampledSelfMs": 218.685,
+      "percentOfSampledTime": 1.297
+    },
+    {
+      "category": "node-other",
+      "sampledSelfMs": 184.877,
+      "percentOfSampledTime": 1.097
+    },
+    {
+      "category": "node-crypto",
+      "sampledSelfMs": 92.297,
+      "percentOfSampledTime": 0.548
+    },
+    {
+      "category": "garbage-collector",
+      "sampledSelfMs": 60.653,
+      "percentOfSampledTime": 0.36
+    },
+    {
+      "category": "node-module-loading",
+      "sampledSelfMs": 15.343,
+      "percentOfSampledTime": 0.091
+    },
+    {
+      "category": "benchmark-harness",
+      "sampledSelfMs": 14.801,
+      "percentOfSampledTime": 0.088
+    }
+  ],
+  "topMainThreadSelfFrames": [
+    {
+      "functionName": "(idle)",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 13078.496,
+      "percentOfSampledTime": 77.588
+    },
+    {
+      "functionName": "(program)",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 732.237,
+      "percentOfSampledTime": 4.344
+    },
+    {
+      "functionName": "spawn",
+      "source": "node:internal/child_process",
+      "line": 356,
+      "sampledSelfMs": 540.472,
+      "percentOfSampledTime": 3.206
+    },
+    {
+      "functionName": "lstat",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 477.574,
+      "percentOfSampledTime": 2.833
+    },
+    {
+      "functionName": "handleErrorFromBinding",
+      "source": "node:internal/fs/promises",
+      "line": 179,
+      "sampledSelfMs": 247.032,
+      "percentOfSampledTime": 1.466
+    },
+    {
+      "functionName": "lstat",
+      "source": "node:internal/fs/promises",
+      "line": 1728,
+      "sampledSelfMs": 183.941,
+      "percentOfSampledTime": 1.091
+    },
+    {
+      "functionName": "openFileHandle",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 138.715,
+      "percentOfSampledTime": 0.823
+    },
+    {
+      "functionName": "join",
+      "source": "node:path",
+      "line": 506,
+      "sampledSelfMs": 119.807,
+      "percentOfSampledTime": 0.711
+    },
+    {
+      "functionName": "open",
+      "source": "node:internal/fs/promises",
+      "line": 1341,
+      "sampledSelfMs": 67.093,
+      "percentOfSampledTime": 0.398
+    },
+    {
+      "functionName": "close",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 61.281,
+      "percentOfSampledTime": 0.364
+    },
+    {
+      "functionName": "safePath",
+      "source": "app/dist/src/storage.js",
+      "line": 15,
+      "sampledSelfMs": 61.032,
+      "percentOfSampledTime": 0.362
+    },
+    {
+      "functionName": "(garbage collector)",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 60.653,
+      "percentOfSampledTime": 0.36
+    },
+    {
+      "functionName": "update",
+      "source": "node:internal/crypto/hash",
+      "line": 145,
+      "sampledSelfMs": 45.428,
+      "percentOfSampledTime": 0.27
+    },
+    {
+      "functionName": "normalize",
+      "source": "node:path",
+      "line": 350,
+      "sampledSelfMs": 43.116,
+      "percentOfSampledTime": 0.256
+    },
+    {
+      "functionName": "readFileHandle",
+      "source": "node:internal/fs/promises",
+      "line": 1214,
+      "sampledSelfMs": 37.061,
+      "percentOfSampledTime": 0.22
+    },
+    {
+      "functionName": "read",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 33.35,
+      "percentOfSampledTime": 0.198
+    },
+    {
+      "functionName": "fstat",
+      "source": null,
+      "line": null,
+      "sampledSelfMs": 30.169,
+      "percentOfSampledTime": 0.179
+    },
+    {
+      "functionName": "(anonymous)",
+      "source": "node:internal/fs/utils",
+      "line": 702,
+      "sampledSelfMs": 30.081,
+      "percentOfSampledTime": 0.178
+    },
+    {
+      "functionName": "parseProjectMemory",
+      "source": "app/dist/src/project-memory/contracts.js",
+      "line": 126,
+      "sampledSelfMs": 24.324,
+      "percentOfSampledTime": 0.144
+    },
+    {
+      "functionName": "fields",
+      "source": "app/dist/src/project-memory/contracts.js",
+      "line": 23,
+      "sampledSelfMs": 22.335,
+      "percentOfSampledTime": 0.133
+    }
+  ],
+  "topApplicationSelfFrames": [
+    {
+      "functionName": "safePath",
+      "source": "app/dist/src/storage.js",
+      "line": 15,
+      "sampledSelfMs": 61.032,
+      "percentOfSampledTime": 0.362
+    },
+    {
+      "functionName": "parseProjectMemory",
+      "source": "app/dist/src/project-memory/contracts.js",
+      "line": 126,
+      "sampledSelfMs": 24.324,
+      "percentOfSampledTime": 0.144
+    },
+    {
+      "functionName": "fields",
+      "source": "app/dist/src/project-memory/contracts.js",
+      "line": 23,
+      "sampledSelfMs": 22.335,
+      "percentOfSampledTime": 0.133
+    },
+    {
+      "functionName": "(anonymous)",
+      "source": "app/dist/src/project-memory/service.js",
+      "line": 156,
+      "sampledSelfMs": 19.738,
+      "percentOfSampledTime": 0.117
+    },
+    {
+      "functionName": "writeProjectMemory",
+      "source": "app/dist/src/project-memory/store.js",
+      "line": 21,
+      "sampledSelfMs": 19.692,
+      "percentOfSampledTime": 0.117
+    },
+    {
+      "functionName": "timestamp",
+      "source": "app/dist/src/project-memory/contracts.js",
+      "line": 40,
+      "sampledSelfMs": 19.206,
+      "percentOfSampledTime": 0.114
+    },
+    {
+      "functionName": "validateMemory",
+      "source": "app/dist/src/project-memory/contracts.js",
+      "line": 59,
+      "sampledSelfMs": 18.352,
+      "percentOfSampledTime": 0.109
+    },
+    {
+      "functionName": "statIfExists",
+      "source": "app/dist/src/storage.js",
+      "line": 5,
+      "sampledSelfMs": 16.659,
+      "percentOfSampledTime": 0.099
+    },
+    {
+      "functionName": "loadLocalPack",
+      "source": "app/dist/src/packs/index.js",
+      "line": 106,
+      "sampledSelfMs": 13.644,
+      "percentOfSampledTime": 0.081
+    },
+    {
+      "functionName": "makePlan",
+      "source": "app/dist/src/core.js",
+      "line": 181,
+      "sampledSelfMs": 13.395,
+      "percentOfSampledTime": 0.079
+    }
+  ],
+  "benchmarkComparison": [
+    {
+      "measurement": "cliVersionStartup",
+      "runs": 7,
+      "baselineMedianMs": 35.3027,
+      "baselineP95Ms": 35.5907,
+      "profiledRunMedianMs": 34.7406,
+      "medianChangePercent": -1.592
+    },
+    {
+      "measurement": "largePackSync",
+      "runs": 3,
+      "baselineMedianMs": 2631.8464,
+      "baselineP95Ms": 2652.8275,
+      "profiledRunMedianMs": 2715.5031,
+      "medianChangePercent": 3.179
+    },
+    {
+      "measurement": "memorySearch",
+      "runs": 3,
+      "baselineMedianMs": 31.0642,
+      "baselineP95Ms": 34.6152,
+      "profiledRunMedianMs": 33.079,
+      "medianChangePercent": 6.486
+    },
+    {
+      "measurement": "isolatedWorktreeDiff",
+      "runs": 3,
+      "baselineMedianMs": 503.6177,
+      "baselineP95Ms": 523.1379,
+      "profiledRunMedianMs": 509.9192,
+      "medianChangePercent": 1.251
+    }
+  ],
+  "interpretation": {
+    "nativeRewriteJustified": false,
+    "conclusion": "This capture does not justify moving the application to Go or Rust. The main thread is predominantly idle, filesystem-related and process-launch frames dominate visible active categories, and application self frames are a small share of total sampled time.",
+    "observations": [
+      "Idle is 77.588% of sampled elapsed time; filesystem-related frames are 9.291%, process-launch frames 3.294%, application frames 2.003%, and garbage collection 0.360%. The unresolved program category is 4.344%.",
+      "The largest aggregated named frame is Node child-process spawn at 540.472 ms. Native lstat is 477.574 ms, filesystem error handling 247.032 ms, and the JavaScript lstat wrapper 183.941 ms across the complete capture.",
+      "Largest application self frame is safePath at 61.032 ms (0.362%). Memory parsing/validation also appears, but the unprofiled 10,000-record search median is 31.0642 ms.",
+      "Unprofiled medians are 35.3027 ms CLI startup, 2631.8464 ms for synchronizing 1,000 files, and 503.6177 ms for the 300-file worktree diff. These motivate scoped investigation of file and process work, rather than establishing a language bottleneck."
+    ],
+    "nextMeasurements": [
+      "Measure filesystem operation counts and latency within pack synchronization, especially repeated metadata probes and exception paths, while preserving path validation and transaction recovery guarantees.",
+      "Capture child Git/CLI startup and execution time plus Windows filesystem/worker activity before attributing parent idle samples to a particular cause.",
+      "Use allocation profiling and larger realistic memory datasets before treating process-cumulative RSS as an operation-specific memory problem.",
+      "Only compare a narrow Go or Rust worker after a remaining CPU-heavy hotspot and workload are isolated; compare end-to-end latency, memory, process startup, correctness, packaging, and cancellation under equivalent inputs."
+    ]
+  },
+  "limitations": [
+    "The main-thread profile excludes CPU inside child Git and CLI processes, kernel work, and libuv worker threads. Their work may overlap parent idle samples.",
+    "V8 sampled elapsed attribution is not a direct measurement of CPU utilization. The program category is unresolved and must not be assigned to application JavaScript.",
+    "The capture includes benchmark setup and teardown; no phase markers were supplied, so category totals cannot be assigned exclusively to synchronization, search, or diff.",
+    "CPU profiling can add overhead. Instrumented versus baseline median differences are from separate short runs and include normal variability; they are not a controlled estimate of profiler overhead.",
+    "Seven startup samples and three heavy samples are insufficient for reliable tail-latency claims; reported p95 values reflect these small sample sets.",
+    "Synthetic temporary repositories and local files do not establish real developer workload performance, storage variability, concurrency behavior, or non-Windows performance.",
+    "No Go or Rust comparison was executed. Low garbage-collector sample share does not prove the absence of allocation or memory-pressure problems.",
+    "Raw profiler paths and contents were omitted from this public evidence artifact."
+  ]
+}

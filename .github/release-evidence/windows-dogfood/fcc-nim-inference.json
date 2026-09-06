@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcc-nim-inference-qualification",
+  "status": "blocked",
+  "observedAt": "2026-09-06T15:32:12.711Z",
+  "platform": "win32",
+  "arch": "x64",
+  "fcc": {
+    "version": "5.22.8",
+    "sourceCommit": "c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a",
+    "origin": "http://127.0.0.1:8082",
+    "namespace": "nvidia_nim",
+    "route": "/v1/messages"
+  },
+  "proposedModel": "meta/llama-3.1-8b-instruct",
+  "proposedFccModel": "nvidia_nim/meta/llama-3.1-8b-instruct",
+  "bounds": {
+    "maxOutputTokens": 32,
+    "totalDeadlineMs": 60000,
+    "fallbackProviders": 0
+  },
+  "failure": {
+    "stage": "credential-validation",
+    "code": "NIM_KEY_FORMAT_INVALID",
+    "expectedCharacters": 70,
+    "requiredPrefix": "nvapi-",
+    "noCredentialContentRetained": true
+  },
+  "execution": {
+    "adminMutations": 0,
+    "providerRequests": 0,
+    "inferenceRequests": 0,
+    "authenticationAttempted": false
+  },
+  "usage": null,
+  "latencyMs": null,
+  "configurationChanged": false,
+  "modelSource": "https://docs.api.nvidia.com/nim/reference/meta-llama-3_1-8b-infer"
+}
