@@ -60,7 +60,6 @@ async function assertExportedLinksResolve(root, ...skillDirectories) {
     for (const match of content.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
       const reference = match[1]?.split(/[?#]/, 1)[0];
       if (!reference || /^[a-z][a-z+.-]*:/i.test(reference) || reference.startsWith('#')) continue;
-      if (reference.startsWith('../../')) continue; // out-of-tree repo docs link, not an exported resource
       const resolved = path.resolve(path.dirname(skillFile), reference);
       await assert.doesNotReject(
         access(resolved),
