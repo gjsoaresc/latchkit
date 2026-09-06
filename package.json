@@ -30,7 +30,7 @@
     "clean": "node scripts/clean.js",
     "clean:apply": "node scripts/clean.js --apply",
     "typecheck": "tsc --noEmit --project tsconfig.json",
-    "test": "npm run build && node --import ./test/env.js --test --test-timeout=120000 test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
+    "test": "npm run build && node --import ./test/env.js --test --test-timeout=120000 dist/test/benchmarks.test.js test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
     "test:browser": "npm run build && playwright test",
     "format": "prettier --write src web scripts test package.json tsconfig.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
     "format:check": "prettier --check src web scripts test package.json tsconfig.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
@@ -46,7 +46,7 @@
     "release:artifacts": "npm run build && node scripts/release-artifacts.js",
     "release:dry-run": "npm run build && node scripts/release-artifacts.js --dry-run",
     "smoke:bundle": "node scripts/bundle-smoke.js",
-    "benchmark:baseline": "node scripts/benchmarks.js"
+    "benchmark:baseline": "npm run build && node dist/scripts/benchmarks.js"
   },
   "keywords": [
     "agent-skills",

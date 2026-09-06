@@ -5,9 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import test from 'node:test';
-import { parseBenchmarkOptions, validateStandaloneApp } from '../scripts/benchmarks.js';
+import {
+  benchmarkRepositoryRoot,
+  parseBenchmarkOptions,
+  validateStandaloneApp,
+} from '../scripts/benchmarks.js';
 
-const digest = async (file) =>
+const digest = async (file: string) =>
   createHash('sha256')
     .update(await readFile(file))
     .digest('hex');
@@ -32,6 +36,12 @@ test('benchmark options preserve the development default and reject ambiguous in
   assert.throws(() => parseBenchmarkOptions(['--unknown']), /Unknown benchmark option/);
 });
 
+test('benchmark root resolution remains checkout-relative after TypeScript emission', () => {
+  const checkout = path.join(os.tmpdir(), 'latchkit-checkout');
+  assert.equal(benchmarkRepositoryRoot(path.join(checkout, 'scripts')), checkout);
+  assert.equal(benchmarkRepositoryRoot(path.join(checkout, 'dist', 'scripts')), checkout);
+});
+
 test('standalone benchmark input binds app receipts and the private runtime without an archive claim', async (t) => {
   const bundle = await mkdtemp(path.join(os.tmpdir(), 'latchkit-benchmark-app-'));
   t.after(() => rm(bundle, { recursive: true, force: true }));
@@ -45,14 +55,19 @@ test('standalone benchmark input binds app receipts and the private runtime with
   await writeFile(path.join(app, 'dist', 'package.json'), `${JSON.stringify(metadata)}\n`);
   const cli = path.join(app, 'dist', 'src', 'cli.js');
   await writeFile(cli, 'export {}\n');
-  const executable = path.basename(runtime);
+  const executable = process.platform === 'win32' ? 'node.exe' : 'node';
+  const receiptFiles: Array<[string, string]> = [
+    ['app/package.json', path.join(app, 'package.json')],
+    ['app/dist/package.json', path.join(app, 'dist', 'package.json')],
+    ['app/dist/src/cli.js', cli],
+    [`runtime/${executable}`, runtime],
+  ];
   const files = await Promise.all(
-    [
-      ['app/package.json', path.join(app, 'package.json')],
-      ['app/dist/package.json', path.join(app, 'dist', 'package.json')],
-      ['app/dist/src/cli.js', cli],
-      [`runtime/${executable}`, runtime],
-    ].map(async ([relative, file]) => ({ path: relative, bytes: 0, sha256: await digest(file) })),
+    receiptFiles.map(async ([relative, file]) => ({
+      path: relative,
+      bytes: 0,
+      sha256: await digest(file),
+    })),
   );
   await writeFile(
     path.join(bundle, 'bundle-manifest.json'),
