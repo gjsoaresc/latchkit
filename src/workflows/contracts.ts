@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { WorkflowPhase } from './policy.js';
 import type { Task } from '../task-state/contracts.js';
 import { computeIntentDigest } from '../task-state/records.js';
+import type { RouteSelection } from './routing.js';
 
 export const WORKFLOW_SCHEMA_VERSION = 1;
 export const WORKFLOW_STATE_PATH = '.latchkit/workflows/state-v1.json';
@@ -107,6 +108,7 @@ export type WorkflowRecord = {
   policyDigest: string;
   promptDigest: string;
   initialPrompt: string;
+  route?: RouteSelection | null;
   inputs: string[];
   proposedChecks: unknown | null;
   requirements: WorkflowArtifact | null;
@@ -361,6 +363,31 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
     );
   };
   const hasDispatchedContext = Object.hasOwn(value, 'lastDispatchedContext');
+  const hasRoute = Object.hasOwn(value, 'route');
+  const route = item.route;
+  const validRoute =
+    route === undefined ||
+    route === null ||
+    (typeof route === 'object' &&
+      !Array.isArray(route) &&
+      [
+        'answer-only',
+        'documentation',
+        'visual-local',
+        'bug-fix',
+        'feature',
+        'refactor',
+        'maintenance',
+        'high-impact',
+        'investigate',
+      ].includes((route as RouteSelection).id) &&
+      typeof (route as RouteSelection).policyVersion === 'string' &&
+      Array.isArray((route as RouteSelection).phases) &&
+      (route as RouteSelection).phases.every((phase) => phases.has(phase)) &&
+      typeof (route as RouteSelection).requiresApproval === 'boolean' &&
+      typeof (route as RouteSelection).requiresIndependentReview === 'boolean' &&
+      Array.isArray((route as RouteSelection).reasons) &&
+      Array.isArray((route as RouteSelection).unknowns));
   if (
     !exactKeys(value, [
       'schemaVersion',
@@ -377,6 +404,7 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
       'policyDigest',
       'promptDigest',
       'initialPrompt',
+      ...(hasRoute ? ['route'] : []),
       'inputs',
       'proposedChecks',
       'requirements',
@@ -404,11 +432,12 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
     !statuses.has(String(item.status)) ||
     typeof item.executionAuthorized !== 'boolean' ||
     !text(item.providerId) ||
-    !text(item.reviewProviderId) ||
+    (!text(item.reviewProviderId) && (!route || route.requiresIndependentReview)) ||
     !text(item.policyVersion) ||
     !digest(item.policyDigest) ||
     !digest(item.promptDigest) ||
     !text(item.initialPrompt, MAX_WORKFLOW_CONTEXT_BYTES) ||
+    !validRoute ||
     Buffer.byteLength(item.initialPrompt ?? '', 'utf8') > MAX_WORKFLOW_CONTEXT_BYTES ||
     !Array.isArray(item.inputs) ||
     item.inputs.length > 128 ||
@@ -597,6 +626,7 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
     );
   if (
     item.status === 'verified' &&
+    !item.route &&
     !item.artifacts.some((artifact) => artifact.phase === 'handoff')
   )
     throw new WorkflowError('Verified workflow requires a handoff.', 'WORKFLOW_STATE_INVALID');

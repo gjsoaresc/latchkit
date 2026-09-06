@@ -226,6 +226,18 @@ export function next_step(snapshot: WorkflowSnapshot, outcome: WorkflowOutcome):
     return index < 0 ? undefined : allowed[index + 1];
   };
   const needsApproval = snapshot.requires_approval ?? true;
+  if (
+    needsApproval &&
+    !snapshot.approval_valid &&
+    snapshot.phase !== 'requirements' &&
+    !(snapshot.phase === 'plan' && outcome.status === 'none')
+  )
+    return action(
+      'await-approval',
+      'plan',
+      'The current requirements, plan and checks require approval.',
+      '',
+    );
   if (outcome.status === 'none') {
     if (snapshot.phase === 'verification')
       return action('verify', 'verification', 'Run approved acceptance checks.', '');
@@ -233,13 +245,6 @@ export function next_step(snapshot: WorkflowSnapshot, outcome: WorkflowOutcome):
       return action('review', 'review', 'Run an independent review.', '');
     return action('invoke', snapshot.phase, 'Run the pending phase.', snapshot.context);
   }
-  if (needsApproval && snapshot.phase !== 'requirements' && !snapshot.approval_valid)
-    return action(
-      'await-approval',
-      'plan',
-      'The current requirements, plan and checks require approval.',
-      '',
-    );
   if (outcome.status === 'failed') {
     if (snapshot.phase === 'verification' || snapshot.phase === 'review') {
       if (snapshot.repair_attempts < 3)

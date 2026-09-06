@@ -43,6 +43,7 @@ import type { SourceSnapshot, Task } from '../task-state/contracts.js';
 import { computeIntentDigest } from '../task-state/records.js';
 import { bindDispatchContext } from '../context-brief/service.js';
 import { ContextBriefError } from '../context-brief/contracts.js';
+import { ROUTE_IDS, selectRoute, type RouteId, type RouteSelection } from './routing.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -164,6 +165,9 @@ export type WorkflowRunInput = {
    * when resuming an existing task: an existing task keeps its own persisted
    * mode unless explicitly changed through task-state's setVerificationMode. */
   verificationMode?: VerificationMode;
+  route?: RouteId;
+  mandatoryPlan?: boolean;
+  mandatoryReview?: boolean;
 };
 
 export type WorkflowResumeResolution = {
@@ -382,11 +386,20 @@ function workflowContext(record: WorkflowRecord, task: Task): string {
     plan: record.plan?.artifact ?? null,
     checks: record.plan?.checks ?? record.proposedChecks,
     lastOutcome: record.lastOutcome,
+    route: record.route ?? { id: 'legacy', reason: 'Stored before route selection.' },
     failures: record.completedActions
       .filter((item) => item.status === 'failed')
       .slice(-3)
       .map(({ phase, summary }) => ({ phase, summary })),
   });
+}
+
+function selectedPhases(record: WorkflowRecord): WorkflowPhase[] | undefined {
+  return record.route ? [...record.route.phases] : undefined;
+}
+
+function needsInitialChecks(route: RouteSelection): boolean {
+  return route.phases.includes('verification') && !route.phases.includes('plan');
 }
 
 function assertActionSemantics(record: WorkflowRecord, action: WorkflowAction): void {
@@ -1087,6 +1100,8 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
           policy_version: record.policyVersion,
           capability_ready: capabilityReady,
           context: workflowContext(record, inspected.task),
+          allowed_phases: selectedPhases(record),
+          requires_approval: record.route?.requiresApproval,
         }),
         new WorkflowOutcome({ ...record.lastOutcome }),
       );
@@ -1200,10 +1215,38 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
     const policyVersion = await policy.version();
     const source = await tasks.source(root);
     const at = now();
+    const changedPaths = await computeChangedPaths(root);
+    if (input.route !== undefined && !ROUTE_IDS.includes(input.route))
+      throw new WorkflowError('route must be a supported route ID.', 'WORKFLOW_ROUTE_INVALID');
+    const route =
+      input.prompt?.trim() || !input.taskId || input.route !== undefined
+        ? selectRoute({
+            request: prompt,
+            criteria: task.criteria.map((criterion) => criterion.description),
+            changedPaths,
+            requestedRoute: input.route,
+            mandatoryPlan: input.mandatoryPlan,
+            mandatoryReview: input.mandatoryReview,
+          })
+        : null;
+    if (
+      route?.requiresIndependentReview &&
+      !input.reviewProviderId &&
+      !['codex', 'claude'].includes(input.providerId)
+    )
+      throw new WorkflowError(
+        'The selected route requires an independent reviewer.',
+        'WORKFLOW_REVIEWER_REQUIRED',
+      );
+    if (route && needsInitialChecks(route) && !suppliedChecks)
+      throw new WorkflowError(
+        'A lightweight route needs an exact focused acceptance-checks document before execution.',
+        'WORKFLOW_CHECKS_REQUIRED',
+      );
     const reviewProviderId =
       input.reviewProviderId ??
       (input.providerId === 'codex' || input.providerId === 'claude' ? input.providerId : '');
-    if (!reviewProviderId)
+    if (route?.requiresIndependentReview && !reviewProviderId)
       throw new WorkflowError(
         'A Codex or Claude review provider must be selected.',
         'WORKFLOW_REVIEWER_REQUIRED',
@@ -1215,7 +1258,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       taskOwnerId: id('owner'),
       revision: 1,
       status: 'running',
-      phase: 'requirements',
+      phase: route?.phases[0] ?? 'requirements',
       providerId: input.providerId,
       reviewProviderId,
       executionAuthorized: true,
@@ -1223,10 +1266,22 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       policyDigest: currentPolicyDigest,
       promptDigest: sha256(prompt),
       initialPrompt: prompt,
+      ...(route ? { route } : {}),
       inputs: [],
       proposedChecks: suppliedChecks?.document ?? null,
       requirements: null,
-      plan: null,
+      plan:
+        suppliedChecks && route && needsInitialChecks(route)
+          ? {
+              phase: 'plan',
+              artifact: 'Focused verification plan selected before implementation.',
+              digest: sha256('Focused verification plan selected before implementation.'),
+              summary: route.reasons.join(' '),
+              createdAt: at,
+              checks: suppliedChecks.document,
+              checksDigest: suppliedChecks.digest,
+            }
+          : null,
       approval: null,
       repairAttempts: 0,
       retryOfActionId: null,
