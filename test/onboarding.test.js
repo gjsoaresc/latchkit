@@ -187,6 +187,28 @@ test('apply rejects a stale plan the same way sync --plan-id already does', asyn
   });
 });
 
+test('a locally edited managed file surfaces as a preview/apply conflict, never silently overwritten', async (t) => {
+  const root = await tempProject(t);
+  await selectProject(root, { providers: ['claude'], skills: ['spec'] });
+  const firstPreview = await previewOnboardingSetup(root);
+  assert.equal(firstPreview.conflicts.length, 0);
+  await applyOnboardingSetup(root, { planId: firstPreview.planId });
+
+  const managedFile = path.join(root, '.claude', 'skills', 'latchkit-spec', 'SKILL.md');
+  await fs.appendFile(managedFile, '\nlocally edited outside Latchkit\n');
+
+  const conflicted = await previewOnboardingSetup(root);
+  assert.ok(conflicted.conflicts.length > 0);
+  assert.match(conflicted.conflicts[0].reason, /local edits/i);
+
+  await assert.rejects(applyOnboardingSetup(root, { planId: conflicted.planId }), (error) => {
+    assert.ok(Array.isArray(error.conflicts) && error.conflicts.length > 0);
+    return true;
+  });
+  // The user's local edit is preserved, never silently overwritten.
+  assert.match(await fs.readFile(managedFile, 'utf8'), /locally edited outside Latchkit/);
+});
+
 test('the required "project" step cannot be skipped; every other step can be', async (t) => {
   const root = await tempProject(t);
   await assert.rejects(skipStep(root, 'project'), (error) => {
