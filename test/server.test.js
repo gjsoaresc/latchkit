@@ -340,7 +340,10 @@ test('configuration and sync API persist the selected skills with a read-only pr
   assert.equal(save.status, 200);
   assert.deepEqual(await readConfig(root), config);
   const preview = await (await fetch(`${origin}/api/plan`, { headers })).json();
-  assert.equal(preview.changes.filter((c) => c.action === 'create').length, 2);
+  // `latchkit-fix/SKILL.md`, `latchkit-review/SKILL.md`, and the shared
+  // `references/efficiency.md` resource `review` links to (`fix` links to
+  // no shared resource).
+  assert.equal(preview.changes.filter((c) => c.action === 'create').length, 3);
   await assert.rejects(readFile(path.join(root, '.agents/skills/latchkit-fix/SKILL.md')), {
     code: 'ENOENT',
   });

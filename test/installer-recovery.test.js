@@ -136,6 +136,7 @@ async function killChild(child) {
 }
 
 const skillPath = (root) => path.join(root, '.agents', 'skills', 'latchkit-spec', 'SKILL.md');
+const referencePath = (root, name) => path.join(root, '.agents', 'skills', 'references', name);
 
 test('a process killed immediately after journal publication leaves resources untouched and recoverable', async (t) => {
   const root = await temporaryProject(t);
@@ -179,6 +180,53 @@ test('a crash after manifest commit finalizes without removing installed resourc
   assert.match(contents, /name: latchkit-spec/);
   assert.equal((await recoverProject(root)).state, 'finalized');
   assert.equal(await fs.readFile(skillPath(root), 'utf8'), contents);
+});
+
+test('a crash while writing a shared skill resource rolls back the whole transaction, references included', async (t) => {
+  const root = await temporaryProject(t);
+  await initProject(root, { providers: ['codex'], skills: ['spec'] });
+  // Index 0 is `latchkit-spec/SKILL.md`; index 1 is the first shared
+  // resource it depends on (`references/efficiency.md`). The fault
+  // boundary fires after each resource is written, so by `resource:1`
+  // both files are already on disk but the manifest commit that would
+  // finalize the transaction has not happened yet -- proving rollback
+  // covers a shared-resource write, not only the skill's own primary file.
+  const child = await crashAt(root, 'sync', 'resource:1');
+  await killChild(child);
+  assert.equal(await exists(skillPath(root)), true);
+  assert.equal(await exists(referencePath(root, 'efficiency.md')), true);
+  assert.equal((await inspectRecovery(root)).transaction.state, 'pending');
+  assert.equal((await recoverProject(root)).state, 'rolled-back');
+  assert.equal(await exists(skillPath(root)), false);
+  assert.equal(await exists(referencePath(root, 'efficiency.md')), false);
+});
+
+test('a crash after manifest commit finalizes every installed shared resource', async (t) => {
+  const root = await temporaryProject(t);
+  await initProject(root, { providers: ['codex'], skills: ['spec'] });
+  const child = await crashAt(root, 'sync', 'manifest');
+  await killChild(child);
+  assert.equal((await inspectRecovery(root)).transaction.state, 'committed');
+  const efficiencyBefore = await fs.readFile(referencePath(root, 'efficiency.md'), 'utf8');
+  assert.match(efficiencyBefore, /efficiency/i);
+  assert.equal(await exists(referencePath(root, 'prd-template.md')), true);
+  assert.equal(await exists(referencePath(root, 'technical-plan-template.md')), true);
+  assert.equal((await recoverProject(root)).state, 'finalized');
+  assert.equal(await fs.readFile(referencePath(root, 'efficiency.md'), 'utf8'), efficiencyBefore);
+  assert.equal(await exists(referencePath(root, 'prd-template.md')), true);
+});
+
+test('removing a skill selection through the transaction layer rolls back a shared resource just as cleanly', async (t) => {
+  const root = await temporaryProject(t);
+  await initProject(root, { providers: ['codex'], skills: ['spec'] });
+  await syncProject(root);
+  const efficiency = referencePath(root, 'efficiency.md');
+  const before = await fs.readFile(efficiency);
+  const child = await crashAt(root, 'remove', 'resource:1');
+  await killChild(child);
+  assert.equal(await exists(efficiency), false);
+  assert.equal((await recoverProject(root)).state, 'rolled-back');
+  assert.deepEqual(await fs.readFile(efficiency), before);
 });
 
 test('interrupted removal restores exact managed bytes', async (t) => {
