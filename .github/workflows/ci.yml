@@ -8,6 +8,7 @@ jobs:
   test:
     name: Windows / Node 24
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +26,7 @@ jobs:
   browser:
     name: Browser console / Windows Chromium
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
