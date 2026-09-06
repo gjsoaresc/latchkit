@@ -118,6 +118,11 @@ async function reviewPaths(root: string): Promise<string[]> {
     .sort();
 }
 
+function isReviewContainer(names: string[], name: string): boolean {
+  const prefix = `${name}/`;
+  return names.some((candidate) => candidate.startsWith(prefix));
+}
+
 async function reviewManifest(root: string): Promise<string> {
   const names = await reviewPaths(root);
   const entries: string[] = [];
@@ -133,11 +138,14 @@ async function reviewManifest(root: string): Promise<string> {
           'Review snapshots do not copy untracked symbolic links.',
           'WORKSPACE_SNAPSHOT_UNSUPPORTED',
         );
+      if (stat.isDirectory() && isReviewContainer(names, name)) continue;
       if (!stat.isFile())
         throw new WorkspaceError(
           'Review snapshot contains an unsupported entry.',
           'WORKSPACE_SNAPSHOT_UNSUPPORTED',
         );
+      if (!(await noLinkPath(root, absolute)))
+        throw new WorkspaceError('Review snapshot source is redirected.', 'WORKSPACE_PATH_UNSAFE');
       entries.push(
         `${name}\0${stat.mode & 0o111 ? 'x' : '-'}\0${createHash('sha256')
           .update(await readFile(absolute))
@@ -568,11 +576,17 @@ export async function createReviewWorkspace(root: string, input: WorkspaceInput 
       if (errorCode(error) === 'ENOENT') return null;
       throw error;
     });
+    if (stat?.isDirectory() && isReviewContainer(names, name)) {
+      entries.push({ name, source, destination, stat: null });
+      continue;
+    }
     if (stat && (!stat.isFile() || stat.isSymbolicLink()))
       throw new WorkspaceError(
         'Review snapshot contains an unsupported entry.',
         'WORKSPACE_SNAPSHOT_UNSUPPORTED',
       );
+    if (stat && !(await noLinkPath(sourceRoot, source)))
+      throw new WorkspaceError('Review snapshot source is redirected.', 'WORKSPACE_PATH_UNSAFE');
     entries.push({ name, source, destination, stat });
   }
   for (const entry of entries

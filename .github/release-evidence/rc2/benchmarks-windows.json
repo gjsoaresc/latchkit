@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-09-06T11:12:04.505Z",
+  "recordedAt": "2026-09-06T12:13:49.145Z",
   "target": "development compiled tree; not a standalone release bundle",
   "environment": {
     "platform": "win32",
@@ -19,135 +19,135 @@
   "measurements": {
     "cliVersionStartup": {
       "runs": 7,
-      "medianMs": 29.2962,
-      "p95Ms": 30.3537,
-      "minMs": 28.8926,
-      "maxMs": 30.3537,
-      "rssAfterBytes": 50421760,
-      "resourceUsageMaxRssBytes": 50556928,
+      "medianMs": 29.5492,
+      "p95Ms": 30.2508,
+      "minMs": 29.1022,
+      "maxMs": 30.2508,
+      "rssAfterBytes": 50307072,
+      "resourceUsageMaxRssBytes": 50401280,
       "samples": [
         {
-          "durationMs": 29.2962,
-          "rssAfterBytes": 50147328,
-          "resourceUsageMaxRssBytes": 50364416
+          "durationMs": 29.5267,
+          "rssAfterBytes": 50008064,
+          "resourceUsageMaxRssBytes": 50184192
         },
         {
-          "durationMs": 29.6713,
-          "rssAfterBytes": 50245632,
-          "resourceUsageMaxRssBytes": 50483200
-        },
-        {
-          "durationMs": 28.9137,
-          "rssAfterBytes": 50298880,
-          "resourceUsageMaxRssBytes": 50483200
-        },
-        {
-          "durationMs": 30.3537,
-          "rssAfterBytes": 50225152,
-          "resourceUsageMaxRssBytes": 50343936
-        },
-        {
-          "durationMs": 28.8926,
-          "rssAfterBytes": 50315264,
-          "resourceUsageMaxRssBytes": 50556928
-        },
-        {
-          "durationMs": 29.2724,
-          "rssAfterBytes": 50155520,
-          "resourceUsageMaxRssBytes": 50364416
-        },
-        {
-          "durationMs": 29.7401,
-          "rssAfterBytes": 50421760,
+          "durationMs": 30.2508,
+          "rssAfterBytes": 50237440,
           "resourceUsageMaxRssBytes": 50335744
+        },
+        {
+          "durationMs": 29.6486,
+          "rssAfterBytes": 50307072,
+          "resourceUsageMaxRssBytes": 50356224
+        },
+        {
+          "durationMs": 29.1022,
+          "rssAfterBytes": 50204672,
+          "resourceUsageMaxRssBytes": 50335744
+        },
+        {
+          "durationMs": 29.436,
+          "rssAfterBytes": 50237440,
+          "resourceUsageMaxRssBytes": 50364416
+        },
+        {
+          "durationMs": 29.6336,
+          "rssAfterBytes": 50094080,
+          "resourceUsageMaxRssBytes": 50290688
+        },
+        {
+          "durationMs": 29.5492,
+          "rssAfterBytes": 50249728,
+          "resourceUsageMaxRssBytes": 50401280
         }
       ]
     },
     "largePackSync": {
       "runs": 3,
-      "medianMs": 5272.5537,
-      "p95Ms": 5351.4499,
-      "minMs": 5270.6465,
-      "maxMs": 5351.4499,
-      "rssAfterBytes": 141639680,
-      "resourceUsageMaxRssBytes": 142245888,
+      "medianMs": 4855.4675,
+      "p95Ms": 5022.543,
+      "minMs": 4828.9456,
+      "maxMs": 5022.543,
+      "rssAfterBytes": 144474112,
+      "resourceUsageMaxRssBytes": 144474112,
       "samples": [
         {
-          "durationMs": 5270.6465,
-          "rssAfterBytes": 111656960,
-          "resourceUsageMaxRssBytes": 112361472,
+          "durationMs": 5022.543,
+          "rssAfterBytes": 111824896,
+          "resourceUsageMaxRssBytes": 112701440,
           "installedFiles": 1000
         },
         {
-          "durationMs": 5272.5537,
-          "rssAfterBytes": 133328896,
-          "resourceUsageMaxRssBytes": 134373376,
+          "durationMs": 4855.4675,
+          "rssAfterBytes": 134836224,
+          "resourceUsageMaxRssBytes": 135524352,
           "installedFiles": 1000
         },
         {
-          "durationMs": 5351.4499,
-          "rssAfterBytes": 141639680,
-          "resourceUsageMaxRssBytes": 142245888,
+          "durationMs": 4828.9456,
+          "rssAfterBytes": 144474112,
+          "resourceUsageMaxRssBytes": 144474112,
           "installedFiles": 1000
         }
       ]
     },
     "memorySearch": {
       "runs": 3,
-      "medianMs": 32.3645,
-      "p95Ms": 35.0249,
-      "minMs": 31.9596,
-      "maxMs": 35.0249,
-      "rssAfterBytes": 200634368,
-      "resourceUsageMaxRssBytes": 200630272,
+      "medianMs": 34.1109,
+      "p95Ms": 34.8341,
+      "minMs": 32.5255,
+      "maxMs": 34.8341,
+      "rssAfterBytes": 198971392,
+      "resourceUsageMaxRssBytes": 198967296,
       "samples": [
         {
-          "durationMs": 35.0249,
-          "rssAfterBytes": 142532608,
-          "resourceUsageMaxRssBytes": 172793856,
+          "durationMs": 34.1109,
+          "rssAfterBytes": 144105472,
+          "resourceUsageMaxRssBytes": 174653440,
           "matchedRecords": 20
         },
         {
-          "durationMs": 32.3645,
-          "rssAfterBytes": 186740736,
-          "resourceUsageMaxRssBytes": 186675200,
+          "durationMs": 32.5255,
+          "rssAfterBytes": 188297216,
+          "resourceUsageMaxRssBytes": 188231680,
           "matchedRecords": 20
         },
         {
-          "durationMs": 31.9596,
-          "rssAfterBytes": 200634368,
-          "resourceUsageMaxRssBytes": 200630272,
+          "durationMs": 34.8341,
+          "rssAfterBytes": 198971392,
+          "resourceUsageMaxRssBytes": 198967296,
           "matchedRecords": 20
         }
       ]
     },
     "isolatedWorktreeDiff": {
       "runs": 3,
-      "medianMs": 518.2006,
-      "p95Ms": 583.6219,
-      "minMs": 510.2754,
-      "maxMs": 583.6219,
-      "rssAfterBytes": 175165440,
-      "resourceUsageMaxRssBytes": 205250560,
+      "medianMs": 498.5025,
+      "p95Ms": 507.0814,
+      "minMs": 488.3649,
+      "maxMs": 507.0814,
+      "rssAfterBytes": 169553920,
+      "resourceUsageMaxRssBytes": 199036928,
       "samples": [
         {
-          "durationMs": 510.2754,
-          "rssAfterBytes": 172298240,
-          "resourceUsageMaxRssBytes": 205250560,
+          "durationMs": 507.0814,
+          "rssAfterBytes": 166100992,
+          "resourceUsageMaxRssBytes": 199036928,
           "diffBytes": 51380,
           "truncated": false
         },
         {
-          "durationMs": 518.2006,
-          "rssAfterBytes": 173232128,
-          "resourceUsageMaxRssBytes": 205250560,
+          "durationMs": 498.5025,
+          "rssAfterBytes": 167505920,
+          "resourceUsageMaxRssBytes": 199036928,
           "diffBytes": 51380,
           "truncated": false
         },
         {
-          "durationMs": 583.6219,
-          "rssAfterBytes": 175165440,
-          "resourceUsageMaxRssBytes": 205250560,
+          "durationMs": 488.3649,
+          "rssAfterBytes": 169553920,
+          "resourceUsageMaxRssBytes": 199036928,
           "diffBytes": 51380,
           "truncated": false
         }

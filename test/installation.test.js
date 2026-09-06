@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -226,6 +226,28 @@ test(
     assert.deepEqual(await readdir(outside), []);
   },
 );
+
+test('uninstall rejects a redirected launcher parent without deleting outside content or current', async (t) => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-uninstall-link-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const version = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8')).version;
+  const { bundle, target } = await fixtureBundle(scratch, version);
+  const root = path.join(scratch, 'root');
+  const outside = path.join(scratch, 'outside');
+  await installBundle({ root, bundle, target });
+  const launcherName = process.platform === 'win32' ? 'latchkit.cmd' : 'latchkit';
+  const launcher = await readFile(path.join(root, 'bin', launcherName));
+  const current = await readFile(path.join(root, 'current'));
+  await mkdir(outside);
+  await writeFile(path.join(outside, launcherName), launcher);
+  await rm(path.join(root, 'bin'), { recursive: true });
+  if (process.platform === 'win32')
+    await run('cmd.exe', ['/d', '/c', 'mklink', '/J', path.join(root, 'bin'), outside]);
+  else await symlink(outside, path.join(root, 'bin'), 'dir');
+  await assert.rejects(() => uninstallInstallation(root), /symlink|junction/i);
+  assert.deepEqual(await readFile(path.join(root, 'current')), current);
+  assert.deepEqual(await readFile(path.join(outside, launcherName)), launcher);
+});
 
 test('launcher recovery records an already-written launcher after an interrupted ownership update', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-launcher-intent-'));

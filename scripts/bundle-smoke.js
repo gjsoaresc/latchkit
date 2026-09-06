@@ -187,7 +187,7 @@ async function main() {
       await mkdir(process.env.APPDATA, { recursive: true });
       await mkdir(process.env.LOCALAPPDATA, { recursive: true });
     }
-    for (const command of ['node', 'npm'])
+    for (const command of ['node', 'npm', 'baml'])
       await assert.rejects(run(command, ['--version'], { windowsHide: true, timeout: 5000 }));
     const nodeVersion = (
       await run(executable, ['--version'], { windowsHide: true, timeout: 10_000 })

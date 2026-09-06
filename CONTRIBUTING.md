@@ -4,6 +4,11 @@ Start with the [roadmap](docs/roadmap.md) and open an issue for substantial chan
 
 Use Node.js 22 or newer. From PowerShell or a POSIX shell, run `npm ci`, `npm run check`, and `npm test`. The application and browser code are strict TypeScript; `tsc` emits the Node ESM application and browser assets, while standalone CommonJS hooks use `.cts`. `npm start` opens a local server and prints its browser URL. `npm run format` applies the deterministic formatter; `npm run lint` and `npm run check:skills` run focused static checks. Workflow policy, prompts, and action contracts are strict TypeScript. The BAML integration is preserved separately on `feat/experimental-baml`. Run the API-backed console workflows with `npm run test:browser -- --project=chromium` after installing the matching Playwright browser. CI additionally runs Firefox and WebKit on Ubuntu and native Windows Chromium; unsupported local browser launchers should be reported as runner limitations.
 
+Linux contributors also need `bsdtar` for ZIP artifact verification; on Ubuntu,
+install the `libarchive-tools` package. macOS and Windows use their system `tar`.
+This is a development/release verification dependency, not part of an installed
+Latchkit application's runtime requirements.
+
 ## Issue-to-PR workflow
 
 1. Inspect current `main`, the issue, linked prerequisites, and the relevant architecture and compatibility docs before editing.

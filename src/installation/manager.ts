@@ -381,6 +381,10 @@ async function removeOwnedLauncher(root: string, relative: string): Promise<void
   if (!ownership.files[relative]) return;
   const destination = path.join(root, ...relative.split('/'));
   try {
+    await rejectSymlinksWithin(root, destination);
+    const info = await lstat(destination);
+    if (!info.isFile() || info.isSymbolicLink())
+      throw new Error(`Refusing symlink or non-regular launcher: ${relative}`);
     if (digest(await readFile(destination)) !== ownership.files[relative])
       throw new Error(`Refusing to delete changed launcher: ${relative}`);
     await rm(destination);
@@ -389,6 +393,20 @@ async function removeOwnedLauncher(root: string, relative: string): Promise<void
   }
   delete ownership.files[relative];
   await writeLauncherOwnership(root, ownership);
+}
+
+async function preflightManagedRemoval(root: string, relatives: readonly string[]): Promise<void> {
+  for (const relative of relatives) {
+    const destination = path.join(root, ...relative.split('/'));
+    await rejectSymlinksWithin(root, destination);
+    try {
+      const info = await lstat(destination);
+      if (!info.isFile() || info.isSymbolicLink())
+        throw new Error(`Refusing symlink or non-regular managed file: ${relative}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
 }
 
 async function withInstallationLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
@@ -626,6 +644,12 @@ export async function rollbackInstallation(
 export async function uninstallInstallation(root: string): Promise<InstallationInspection> {
   const resolved = await canonicalLocation(root);
   return withInstallationLock(resolved, async () => {
+    await preflightManagedRemoval(resolved, [
+      ACTIVE,
+      'bin/latchkit.cmd',
+      'bin/latchkit.ps1',
+      'bin/latchkit',
+    ]);
     await rm(path.join(resolved, ACTIVE), { force: true });
     await removeOwnedLauncher(resolved, 'bin/latchkit.cmd');
     await removeOwnedLauncher(resolved, 'bin/latchkit.ps1');
