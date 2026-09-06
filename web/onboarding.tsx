@@ -51,6 +51,18 @@ function toggled(list: string[], id: string, checked: boolean): string[] {
   return checked ? [...new Set([...list, id])] : list.filter((item) => item !== id);
 }
 
+function useActiveHash(): string {
+  const [hash, setHash] = useState(() =>
+    typeof window === 'undefined' ? '' : window.location.hash,
+  );
+  useEffect(() => {
+    const update = () => setHash(window.location.hash);
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
+  return hash;
+}
+
 export function OnboardingConsole() {
   const [state, setState] = useState<OnboardingView>();
   const [busy, setBusy] = useState(false);
@@ -62,6 +74,7 @@ export function OnboardingConsole() {
   const [verificationDraft, setVerificationDraft] = useState<'fast' | 'standard'>('standard');
   const [usageDraft, setUsageDraft] = useState(false);
   const [plan, setPlan] = useState<SyncPreview>();
+  const expanded = useActiveHash() === '#onboarding';
 
   async function load() {
     const data = await api<OnboardingView>('onboarding');
@@ -120,6 +133,30 @@ export function OnboardingConsole() {
     );
 
   const { progress, providers, skills, readiness } = state;
+  if (!expanded)
+    return (
+      <section id="onboarding" className="config-section" aria-labelledby="onboarding-heading">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">GET STARTED</p>
+            <h2 id="onboarding-heading">Finish setting up.</h2>
+            <p>
+              {progress.status === 'completed'
+                ? 'Onboarding is complete. Open it again to change these preferences.'
+                : progress.status === 'dismissed'
+                  ? 'Onboarding was dismissed. Nothing already saved is lost; open it to continue.'
+                  : 'Choose your project, agents, workspace, and workflow preferences step by step.'}
+            </p>
+          </div>
+          <span className="subtle-tag">{progress.status.replace('-', ' ').toUpperCase()}</span>
+        </div>
+        <div className="button-row">
+          <a className="button button-secondary" href="#onboarding">
+            Open onboarding
+          </a>
+        </div>
+      </section>
+    );
   const skip = (stepId: StepId) =>
     run(
       () => api('onboarding/skip', { method: 'POST', body: { stepId } }),

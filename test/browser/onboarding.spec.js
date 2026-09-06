@@ -18,6 +18,11 @@ test('the onboarding console drives project, agents, workspace, verification, us
   try {
     await page.goto(url);
     const onboarding = page.locator('#onboarding');
+    // The full wizard renders only while the Onboarding page is selected; the
+    // default page shows a compact card that links to it.
+    await expect(onboarding.getByRole('heading', { name: 'Finish setting up.' })).toBeVisible();
+    await expect(onboarding.getByRole('button', { name: 'Confirm project' })).toHaveCount(0);
+    await onboarding.getByRole('link', { name: 'Open onboarding' }).click();
     await expect(onboarding.getByRole('heading', { name: 'Finish setting up.' })).toBeVisible();
     await expect(onboarding.getByText('Project is initialized at', { exact: false })).toBeVisible();
 
