@@ -37,6 +37,7 @@
     "lint": "eslint src web scripts test",
     "check:skills": "node scripts/validate-skills.js",
     "evaluate:skills": "node scripts/skill-evaluations.js",
+    "evaluate:requirement-change": "node scripts/requirement-change-evaluations.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && node scripts/check.js",
     "verify:providers": "node scripts/provider-e2e.js",
     "verify:lifecycle": "node scripts/live-lifecycle-evidence.js",

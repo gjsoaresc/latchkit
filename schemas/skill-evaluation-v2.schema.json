@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/skill-evaluation-v2.schema.json",
+  "title": "Latchkit requirement-change evaluation scenario v2",
+  "description": "Versioned, additive extension of skill-evaluation-v1.schema.json (issue #116). It introduces a new 'requirement-change' scenario kind used to seed a late requirement change, a dependency with unknown impact, a memory record that becomes misleading after the change, and an implementation component that must be preserved untouched. It does not replace or modify the version-1 behavioral scenario shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "kind",
+    "title",
+    "fixture",
+    "instructions",
+    "environment",
+    "initialRequirement",
+    "changedRequirement",
+    "changePoint",
+    "changeTargets",
+    "unknownImpactDependencies",
+    "preserveArtifacts",
+    "memoryRecords",
+    "mandatoryConstraints",
+    "acceptance"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "id": { "type": "string", "minLength": 1 },
+    "kind": { "const": "requirement-change" },
+    "title": { "type": "string", "minLength": 1 },
+    "fixture": { "type": "string", "minLength": 1 },
+    "instructions": { "type": "string", "minLength": 1 },
+    "environment": {
+      "type": "object",
+      "required": ["requirements"],
+      "properties": { "requirements": { "type": "array" } },
+      "additionalProperties": false
+    },
+    "initialRequirement": { "type": "string", "minLength": 1 },
+    "changedRequirement": { "type": "string", "minLength": 1 },
+    "changePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["after", "description"],
+      "properties": {
+        "after": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "changeTargets": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "unknownImpactDependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "note"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "note": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "preserveArtifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "memoryRecords": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "misleadingAfterChange"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "misleadingAfterChange": { "type": "boolean" }
+        }
+      }
+    },
+    "mandatoryConstraints": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "assertions"],
+      "properties": {
+        "module": { "type": "string", "minLength": 1 },
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "description", "mandatory", "tag"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "description": { "type": "string", "minLength": 1 },
+              "mandatory": { "type": "boolean" },
+              "tag": { "enum": ["new-requirement", "preexisting"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

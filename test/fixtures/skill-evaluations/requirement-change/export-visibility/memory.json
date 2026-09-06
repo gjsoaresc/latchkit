@@ -1,0 +1,7 @@
+[
+  {
+    "id": "decision-export-scope",
+    "text": "Decision D-014: The order export intentionally includes every order in the system across all users; do not add per-user filtering to exportOrdersToCsv.",
+    "misleadingAfterChange": true
+  }
+]

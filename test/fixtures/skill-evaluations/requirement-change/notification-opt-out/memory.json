@@ -1,0 +1,7 @@
+[
+  {
+    "id": "decision-notify-all",
+    "text": "Decision D-002: All customers receive transactional order emails; opt-out preferences do not apply to order notifications.",
+    "misleadingAfterChange": true
+  }
+]
