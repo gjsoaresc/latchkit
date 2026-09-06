@@ -7,20 +7,10 @@ import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
-import { initProject, syncProject } from '../dist/src/core.js';
-import { validateProjectMemory } from '../dist/src/project-memory/contracts.js';
-import { searchProjectMemory } from '../dist/src/project-memory/service.js';
-import { writeProjectMemory } from '../dist/src/project-memory/store.js';
-import { inspectDiff } from '../dist/src/reviews/diff-annotations.js';
-import { createTask } from '../dist/src/task-state/service.js';
-import { createTaskWorkspace } from '../dist/src/workspaces/git.js';
-
 const execFile = promisify(execFileCallback);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const nodePath = process.execPath;
-const output = path.join(root, '.github', 'release-evidence', 'rc2', 'benchmarks-windows.json');
-const profileSync = process.argv.includes('--profile-sync');
 const packs = 1_000;
 const memories = 10_000;
 const diffFiles = 300;
@@ -31,6 +21,184 @@ const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const git = (directory, args) => execFile('git', ['-C', directory, ...args], { windowsHide: true });
 const now = () => new Date().toISOString();
 const toMilliseconds = (start) => Number(process.hrtime.bigint() - start) / 1_000_000;
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function samePath(left, right) {
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+export function parseBenchmarkOptions(args, repository = root) {
+  const options = {
+    app: undefined,
+    output: path.join(repository, '.github', 'release-evidence', 'rc2', 'benchmarks-windows.json'),
+    profileSync: false,
+  };
+  const supplied = new Set();
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--profile-sync') {
+      if (options.profileSync) throw new Error('--profile-sync can be supplied only once.');
+      options.profileSync = true;
+      continue;
+    }
+    if (argument !== '--app' && argument !== '--output')
+      throw new Error(`Unknown benchmark option: ${argument}`);
+    if (supplied.has(argument)) throw new Error(`${argument} can be supplied only once.`);
+    const value = args[++index];
+    if (!value || value.startsWith('--')) throw new Error(`${argument} needs a value.`);
+    options[argument.slice(2)] = path.resolve(value);
+    supplied.add(argument);
+  }
+  return options;
+}
+
+async function requiredFile(filename, description) {
+  let stat;
+  try {
+    stat = await fs.lstat(filename);
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`${description} is missing: ${filename}`);
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink())
+    throw new Error(`${description} must be a regular file.`);
+}
+
+async function readJson(filename, description) {
+  try {
+    const value = JSON.parse(await fs.readFile(filename, 'utf8'));
+    if (!isRecord(value)) throw new Error('not an object');
+    return value;
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`${description} is missing: ${filename}`);
+    if (error instanceof SyntaxError || error.message === 'not an object')
+      throw new Error(`${description} is not a JSON object.`);
+    throw error;
+  }
+}
+
+function manifestFile(manifest, relative) {
+  const entry = manifest.files.find((item) => isRecord(item) && item.path === relative);
+  if (!entry || typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256))
+    throw new Error(`Bundle manifest has no valid receipt for ${relative}.`);
+  return entry;
+}
+
+/** Validates an extracted or installed standalone app directory without claiming archive provenance. */
+export async function validateStandaloneApp(app, { callerNode = process.execPath } = {}) {
+  const application = path.resolve(app);
+  const applicationStat = await fs.lstat(application).catch((error) => {
+    if (error.code === 'ENOENT')
+      throw new Error(`Standalone app directory is missing: ${application}`);
+    throw error;
+  });
+  if (!applicationStat.isDirectory() || applicationStat.isSymbolicLink())
+    throw new Error('--app must name a regular standalone app directory.');
+  const bundle = path.dirname(application);
+  const manifestPath = path.join(bundle, 'bundle-manifest.json');
+  const manifest = await readJson(manifestPath, 'Adjacent bundle manifest');
+  const target = `${process.platform}-${process.arch}`;
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.package !== 'latchkit' ||
+    typeof manifest.version !== 'string' ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest.version) ||
+    manifest.target !== target ||
+    typeof manifest.nodeVersion !== 'string' ||
+    !/^\d+\.\d+\.\d+$/.test(manifest.nodeVersion) ||
+    typeof manifest.commit !== 'string' ||
+    !/^[a-f0-9]{40}$/.test(manifest.commit) ||
+    manifest.dirty !== false ||
+    !Array.isArray(manifest.files) ||
+    !Array.isArray(manifest.packages)
+  )
+    throw new Error('Adjacent bundle manifest is not a clean native standalone bundle binding.');
+  for (const [name, version, location] of [
+    ['latchkit', manifest.version, 'app'],
+    ['node', manifest.nodeVersion, 'runtime'],
+  ]) {
+    if (
+      !manifest.packages.some(
+        (item) =>
+          isRecord(item) &&
+          item.name === name &&
+          item.version === version &&
+          item.path === location,
+      )
+    )
+      throw new Error(`Bundle manifest does not bind ${name} ${version} at ${location}.`);
+  }
+  const executable = process.platform === 'win32' ? 'node.exe' : 'node';
+  const runtime = path.join(bundle, 'runtime', executable);
+  const receipts = [
+    ['app/package.json', path.join(application, 'package.json')],
+    ['app/dist/package.json', path.join(application, 'dist', 'package.json')],
+    ['app/dist/src/cli.js', path.join(application, 'dist', 'src', 'cli.js')],
+    [`runtime/${executable}`, runtime],
+  ];
+  for (const [relative, filename] of receipts) {
+    await requiredFile(filename, `Standalone bundle file ${relative}`);
+    const receipt = manifestFile(manifest, relative);
+    if (sha256(await fs.readFile(filename)) !== receipt.sha256)
+      throw new Error(`Standalone bundle file does not match its manifest receipt: ${relative}`);
+  }
+  for (const filename of [
+    path.join(application, 'package.json'),
+    path.join(application, 'dist', 'package.json'),
+  ]) {
+    const metadata = await readJson(filename, 'Standalone package metadata');
+    if (metadata.version !== manifest.version)
+      throw new Error('Standalone app version does not match its adjacent bundle manifest.');
+  }
+  const [resolvedRuntime, resolvedCaller] = await Promise.all([
+    fs.realpath(runtime),
+    fs.realpath(callerNode),
+  ]);
+  if (!samePath(resolvedRuntime, resolvedCaller))
+    throw new Error('Run this benchmark through the standalone app private Node runtime.');
+  const reportedRuntime = (
+    await execFile(runtime, ['--version'], { windowsHide: true, timeout: 10_000, maxBuffer: 1024 })
+  ).stdout.trim();
+  if (reportedRuntime !== `v${manifest.nodeVersion}`)
+    throw new Error('Standalone private Node runtime does not match its adjacent bundle manifest.');
+  return {
+    app: application,
+    dist: path.join(application, 'dist'),
+    runtime,
+    manifest: {
+      version: manifest.version,
+      target: manifest.target,
+      commit: manifest.commit,
+      nodeVersion: manifest.nodeVersion,
+    },
+  };
+}
+
+async function loadApplicationModules(dist) {
+  const load = (relative) => import(pathToFileURL(path.join(dist, ...relative.split('/'))).href);
+  const [core, contracts, memory, memoryStore, reviews, tasks, workspaces] = await Promise.all([
+    load('src/core.js'),
+    load('src/project-memory/contracts.js'),
+    load('src/project-memory/service.js'),
+    load('src/project-memory/store.js'),
+    load('src/reviews/diff-annotations.js'),
+    load('src/task-state/service.js'),
+    load('src/workspaces/git.js'),
+  ]);
+  return {
+    initProject: core.initProject,
+    syncProject: core.syncProject,
+    validateProjectMemory: contracts.validateProjectMemory,
+    searchProjectMemory: memory.searchProjectMemory,
+    writeProjectMemory: memoryStore.writeProjectMemory,
+    inspectDiff: reviews.inspectDiff,
+    createTask: tasks.createTask,
+    createTaskWorkspace: workspaces.createTaskWorkspace,
+  };
+}
 
 function statistics(samples) {
   const durations = samples.map((sample) => sample.durationMs).sort((left, right) => left - right);
@@ -103,11 +271,11 @@ async function createLargePack(base) {
   return packRoot;
 }
 
-async function largePackSync(packRoot) {
+async function largePackSync(packRoot, application, profileSync) {
   return temporary('latchkit-bench-pack-', async (base) => {
     const project = path.join(base, 'project');
     await fs.mkdir(project);
-    await initProject(project, {
+    await application.initProject(project, {
       providers: ['codex'],
       skills: [],
       packs: [
@@ -128,7 +296,7 @@ async function largePackSync(packRoot) {
         manifestMs: null,
         resourceCount: 0,
       };
-      const result = await syncProject(
+      const result = await application.syncProject(
         project,
         profileSync
           ? {
@@ -157,7 +325,7 @@ function benchmarkUuid(index) {
   return `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
 }
 
-function memoryState() {
+function memoryState(application) {
   const at = '2026-01-01T00:00:00.000Z';
   const state = {
     schemaVersion: 1,
@@ -180,20 +348,22 @@ function memoryState() {
       updatedAt: at,
     })),
   };
-  return validateProjectMemory(state);
+  return application.validateProjectMemory(state);
 }
 
-async function largeMemorySearch() {
+async function largeMemorySearch(application) {
   return temporary('latchkit-bench-memory-', async (project) => {
-    await writeProjectMemory(project, memoryState());
+    await application.writeProjectMemory(project, memoryState(application));
     return measure(async () => {
-      const result = await searchProjectMemory(project, 'needle synthetic', { limit: 20 });
+      const result = await application.searchProjectMemory(project, 'needle synthetic', {
+        limit: 20,
+      });
       return { matchedRecords: result.length };
     });
   });
 }
 
-async function diffFixture() {
+async function diffFixture(application) {
   return temporary('latchkit-bench-diff-', async (base) => {
     const project = path.join(base, 'project');
     await fs.mkdir(project);
@@ -207,8 +377,8 @@ async function diffFixture() {
     }
     await git(project, ['add', '.']);
     await git(project, ['commit', '-m', 'benchmark base']);
-    const task = await createTask(project, { title: 'Synthetic diff benchmark' });
-    const workspace = await createTaskWorkspace(project, { taskId: task.id });
+    const task = await application.createTask(project, { title: 'Synthetic diff benchmark' });
+    const workspace = await application.createTaskWorkspace(project, { taskId: task.id });
     if (!('path' in workspace) || typeof workspace.path !== 'string')
       throw new Error('The isolated workspace was not created.');
     for (let index = 0; index < diffFiles; index += 1)
@@ -217,14 +387,14 @@ async function diffFixture() {
         `changed ${index}\n`,
       );
     return measure(async () => {
-      const result = await inspectDiff(project, { taskId: task.id });
+      const result = await application.inspectDiff(project, { taskId: task.id });
       return { diffBytes: Buffer.byteLength(result.diff), truncated: result.truncated };
     });
   });
 }
 
-async function cliVersion() {
-  const cli = pathToFileURL(path.join(root, 'dist', 'src', 'cli.js')).href;
+async function cliVersion(context) {
+  const cli = pathToFileURL(path.join(context.dist, 'src', 'cli.js')).href;
   const source = [
     'const started = process.hrtime.bigint();',
     `process.argv = [process.execPath, 'latchkit', '--version'];`,
@@ -232,8 +402,8 @@ async function cliVersion() {
     'const usage = process.resourceUsage();',
     "console.log('__LATCHKIT_BENCHMARK__' + JSON.stringify({ durationMs: Number(process.hrtime.bigint() - started) / 1e6, rssAfterBytes: process.memoryUsage.rss(), resourceUsageMaxRssBytes: usage.maxRSS * 1024 }));",
   ].join('\n');
-  const { stdout } = await execFile(nodePath, ['--input-type=module', '--eval', source], {
-    cwd: root,
+  const { stdout } = await execFile(context.runtime, ['--input-type=module', '--eval', source], {
+    cwd: context.app,
     windowsHide: true,
     maxBuffer: 1024 * 1024,
   });
@@ -243,30 +413,59 @@ async function cliVersion() {
 }
 
 async function main() {
+  const options = parseBenchmarkOptions(process.argv.slice(2));
   if (process.platform !== 'win32')
     throw new Error('This evidence target is the native Windows baseline; run it on Windows.');
+  const standalone = options.app ? await validateStandaloneApp(options.app) : null;
+  const context = standalone
+    ? {
+        ...standalone,
+        label: 'verified standalone app directory; embedded manifest binding verified',
+        archive: 'not asserted; no archive digest was supplied to this benchmark',
+      }
+    : {
+        app: root,
+        dist: path.join(root, 'dist'),
+        runtime: nodePath,
+        label: 'development compiled tree; not a standalone release bundle',
+        archive: 'not applicable',
+      };
+  const application = await loadApplicationModules(context.dist);
   const startup = [];
-  for (let index = 0; index < startupRuns; index += 1) startup.push(await cliVersion());
+  for (let index = 0; index < startupRuns; index += 1) startup.push(await cliVersion(context));
   const packResults = await temporary('latchkit-bench-pack-source-', async (base) => {
     const pack = await createLargePack(base);
     const samples = [];
-    for (let index = 0; index < heavyRuns; index += 1) samples.push(await largePackSync(pack));
+    for (let index = 0; index < heavyRuns; index += 1)
+      samples.push(await largePackSync(pack, application, options.profileSync));
     return statistics(samples);
   });
   const memoryResults = [];
-  for (let index = 0; index < heavyRuns; index += 1) memoryResults.push(await largeMemorySearch());
+  for (let index = 0; index < heavyRuns; index += 1)
+    memoryResults.push(await largeMemorySearch(application));
   const diffResults = [];
-  for (let index = 0; index < heavyRuns; index += 1) diffResults.push(await diffFixture());
+  for (let index = 0; index < heavyRuns; index += 1)
+    diffResults.push(await diffFixture(application));
   const evidence = {
     schemaVersion: 1,
     recordedAt: now(),
-    target: 'development compiled tree; not a standalone release bundle',
+    target: context.label,
+    standalone: standalone
+      ? {
+          app: standalone.app,
+          version: standalone.manifest.version,
+          commit: standalone.manifest.commit,
+          target: standalone.manifest.target,
+          nodeVersion: standalone.manifest.nodeVersion,
+          archive: context.archive,
+        }
+      : null,
     environment: {
       platform: process.platform,
       release: os.release(),
       architecture: process.arch,
       node: process.version,
-      nodeExecutable: path.basename(nodePath),
+      nodeExecutable: path.basename(context.runtime),
     },
     datasets: {
       startupRuns,
@@ -298,9 +497,15 @@ async function main() {
       'No Go or Rust worker recommendation follows automatically from these measurements.',
     ],
   };
-  await fs.mkdir(path.dirname(output), { recursive: true });
-  await fs.writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`);
-  console.log(JSON.stringify({ output, measurements: evidence.measurements }, null, 2));
+  await fs.mkdir(path.dirname(options.output), { recursive: true });
+  await fs.writeFile(options.output, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(
+    JSON.stringify({ output: options.output, measurements: evidence.measurements }, null, 2),
+  );
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((error) => {
+    console.error(`Benchmark failed: ${error.message}`);
+    process.exitCode = 1;
+  });
