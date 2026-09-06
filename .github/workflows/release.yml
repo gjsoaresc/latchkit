@@ -22,7 +22,7 @@ jobs:
         include:
           - os: windows-latest
             target: win32-x64
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: linux-x64
           - os: macos-15-intel
             target: darwin-x64
@@ -59,10 +59,10 @@ jobs:
           path: release-artifacts/
           include-hidden-files: true
           if-no-files-found: error
-  ubuntu-24-smoke:
-    name: Exact Linux bundle / Ubuntu 24.04
+  ubuntu-22-smoke:
+    name: Exact Linux bundle / Ubuntu 22.04
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -77,7 +77,7 @@ jobs:
       - run: node scripts/bundle-smoke.js --directory release-artifacts
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
-          name: qualification-ubuntu24
+          name: qualification-ubuntu22
           path: release-artifacts/*.evidence.json
           if-no-files-found: error
   wsl-artifact-smoke:
@@ -110,7 +110,7 @@ jobs:
           if-no-files-found: error
   publish:
     name: Publish approved GitHub Release
-    needs: [prepare, ubuntu-24-smoke, wsl-artifact-smoke]
+    needs: [prepare, ubuntu-22-smoke, wsl-artifact-smoke]
     if: inputs.publish && inputs.tag != ''
     runs-on: ubuntu-24.04
     environment: github-release-production

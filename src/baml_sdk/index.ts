@@ -200,7 +200,3 @@ export const action_async = defineFunction("user.action", "async", ["kind", "pha
 export const next_step = defineFunction("user.next_step", "sync", ["snapshot", "outcome"]) as (snapshot: WorkflowSnapshot, outcome: WorkflowOutcome, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => WorkflowAction;
 
 export const next_step_async = defineFunction("user.next_step", "async", ["snapshot", "outcome"]) as (snapshot: WorkflowSnapshot, outcome: WorkflowOutcome, $opts?: { $ctx?: BamlCallContext | undefined } | undefined) => Promise<WorkflowAction>;
-
-export const fixture = defineFunction("user.fixture", "sync", ["phase"], ["approved", "repairs"]) as (phase: WorkflowPhase, $opts?: { approved?: boolean | undefined; repairs?: number | undefined; $ctx?: BamlCallContext | undefined } | undefined) => WorkflowSnapshot;
-
-export const fixture_async = defineFunction("user.fixture", "async", ["phase"], ["approved", "repairs"]) as (phase: WorkflowPhase, $opts?: { approved?: boolean | undefined; repairs?: number | undefined; $ctx?: BamlCallContext | undefined } | undefined) => Promise<WorkflowSnapshot>;

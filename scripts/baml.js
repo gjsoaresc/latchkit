@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,9 +19,9 @@ const local = path.join(
 );
 const executable = process.env.LATCHKIT_BAML_BIN || (existsSync(local) ? local : 'baml');
 const env = { ...process.env, BAML_VERSION: version };
-function run(args, capture = false) {
+function run(args, capture = false, cwd = root) {
   const result = spawnSync(executable, args, {
-    cwd: root,
+    cwd,
     env,
     windowsHide: true,
     timeout: 120_000,
@@ -60,7 +60,19 @@ function generatedDigest() {
   return hash.digest('hex');
 }
 const args = process.argv.slice(2);
-if (args.length === 1 && args[0] === 'check-generated') {
+if (args[0] === 'test') {
+  const stage = mkdtempSync(path.join(os.tmpdir(), 'latchkit-baml-tests-'));
+  try {
+    cpSync(path.join(root, 'baml.toml'), path.join(stage, 'baml.toml'));
+    cpSync(path.join(root, 'baml_src'), path.join(stage, 'baml_src'), { recursive: true });
+    cpSync(path.join(root, 'baml_tests'), path.join(stage, 'baml_src', 'tests'), {
+      recursive: true,
+    });
+    run(['test', '--directory', stage, ...args.slice(1)]);
+  } finally {
+    rmSync(stage, { force: true, recursive: true, maxRetries: 3, retryDelay: 100 });
+  }
+} else if (args.length === 1 && args[0] === 'check-generated') {
   const before = generatedDigest();
   run(['generate']);
   if (before === null || before !== generatedDigest()) {

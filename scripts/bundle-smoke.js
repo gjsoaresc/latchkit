@@ -85,9 +85,19 @@ async function stableHook(command, hookArgs = []) {
     child.once('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) reject(new Error(`Stable hook failed: ${stderr}`));
-      else if (!stdout.includes('"eventName":"Stop"'))
-        reject(new Error('Stable hook did not preserve handler arguments or stdin.'));
-      else resolve();
+      else {
+        try {
+          const event = JSON.parse(stdout);
+          assert.equal(event.kind, 'turn-completed');
+          assert.equal(event.payload.session_id, 'bundle-smoke');
+          assert.match(event.eventId, /^bundle-smoke:Stop:/);
+          resolve();
+        } catch (error) {
+          reject(
+            new Error('Stable hook did not preserve handler arguments or stdin.', { cause: error }),
+          );
+        }
+      }
     });
     child.stdin.end('{"session_id":"bundle-smoke","hook_event_name":"Stop"}\n');
   });
@@ -98,6 +108,16 @@ async function main() {
   const manifests = await verifyReleaseArtifacts(directory);
   const manifest = manifests.find((item) => item.target === `${process.platform}-${process.arch}`);
   if (!manifest) throw new Error('No archive for this native host.');
+  const previousDirectory = option('--previous-directory');
+  const previousManifest = previousDirectory
+    ? (await verifyReleaseArtifacts(path.resolve(previousDirectory))).find(
+        (item) => item.target === manifest.target,
+      )
+    : undefined;
+  if (previousDirectory && (!previousManifest || previousManifest.version === manifest.version))
+    throw new Error(
+      'Previous release directory must provide a distinct archive for this native target.',
+    );
   if (
     args.includes('--require-wsl') &&
     !(
@@ -122,16 +142,40 @@ async function main() {
     const tools = path.join(scratch, 'system tools');
     await mkdir(tools);
     if (process.platform !== 'win32')
-      for (const tool of ['dirname', 'cat', 'uname']) {
+      for (const tool of [
+        'awk',
+        'cat',
+        'cp',
+        'dirname',
+        'getconf',
+        'gzip',
+        'head',
+        'mkdir',
+        'mktemp',
+        'rm',
+        'sed',
+        'sha256sum',
+        'shasum',
+        'tar',
+        'tr',
+        'uname',
+      ]) {
         const location = (
-          await run('/bin/sh', ['-c', 'command -v "$1"', 'sh', tool])
-        ).stdout.trim();
-        await cp(location, path.join(tools, tool));
+          await run('/bin/sh', ['-c', 'command -v "$1" || true', 'sh', tool])
+        ).stdout
+          .trim()
+          .split(/\r?\n/)[0];
+        if (location && path.isAbsolute(location)) await cp(location, path.join(tools, tool));
       }
     process.env.PATH =
       process.platform === 'win32'
         ? `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0`
         : tools;
+    if (process.platform === 'win32')
+      process.env.PSModulePath = path.join(
+        process.env.SystemRoot,
+        'System32/WindowsPowerShell/v1.0/Modules',
+      );
     for (const name of [
       'NODE_PATH',
       'NODE_OPTIONS',
@@ -145,6 +189,13 @@ async function main() {
     process.env.HOME = path.join(scratch, 'isolated home');
     process.env.USERPROFILE = process.env.HOME;
     await mkdir(process.env.HOME);
+    if (process.platform === 'win32') {
+      process.env.APPDATA = path.join(process.env.HOME, 'AppData/Roaming');
+      process.env.LOCALAPPDATA = path.join(process.env.HOME, 'AppData/Local');
+      process.env.PSModuleAnalysisCachePath = path.join(process.env.HOME, 'module-cache');
+      await mkdir(process.env.APPDATA, { recursive: true });
+      await mkdir(process.env.LOCALAPPDATA, { recursive: true });
+    }
     for (const command of ['node', 'npm', 'baml'])
       await assert.rejects(run(command, ['--version'], { windowsHide: true, timeout: 5000 }));
     const nodeVersion = (
@@ -197,7 +248,45 @@ async function main() {
           )
         ).stdout,
       );
-    await manage({ command: 'install', bundle });
+    const bootstrap = async (releaseDirectory, releaseManifest, destination) => {
+      const archive = path.join(releaseDirectory, releaseManifest.archive);
+      const checksum = path.join(releaseDirectory, `${releaseManifest.archive}.sha256`);
+      if (process.platform === 'win32') {
+        await run(
+          path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-File',
+            path.join(releaseDirectory, 'install.ps1'),
+            '-Root',
+            destination,
+            '-Artifact',
+            archive,
+            '-Checksum',
+            checksum,
+          ],
+          { windowsHide: true, timeout: 120_000 },
+        );
+      } else {
+        await run(
+          '/bin/sh',
+          [
+            path.join(releaseDirectory, 'install.sh'),
+            '--root',
+            destination,
+            '--artifact',
+            archive,
+            '--checksum',
+            checksum,
+          ],
+          { timeout: 120_000 },
+        );
+      }
+    };
+    if (previousManifest)
+      await bootstrap(path.resolve(previousDirectory), previousManifest, installRoot);
+    await bootstrap(directory, manifest, installRoot);
     const active = await readFile(path.join(installRoot, 'current'), 'utf8');
     const hookLauncher =
       process.platform === 'win32'
@@ -244,13 +333,39 @@ async function main() {
     await writeFile(path.join(corrupt, 'app/dist/src/cli.js'), 'throw new Error("corrupt");\n');
     await assert.rejects(manage({ command: 'upgrade', bundle: corrupt }));
     assert.equal(await readFile(path.join(installRoot, 'current'), 'utf8'), active);
-    await manage({ command: 'rollback', version: manifest.version });
+    const rollbackVersion = previousManifest?.version ?? manifest.version;
+    await manage({ command: 'rollback', version: rollbackVersion });
+    const rollbackKey = `${rollbackVersion}-${manifest.target}`;
+    const rollbackHookArgs =
+      process.platform === 'win32'
+        ? [
+            '-NoProfile',
+            '-NonInteractive',
+            '-File',
+            hookLauncher,
+            '--version',
+            rollbackKey,
+            '--handler',
+            'claude',
+            '--event',
+            'Stop',
+          ]
+        : ['--version', rollbackKey, '--handler', 'claude', '--event', 'Stop'];
     await stableHook(
       process.platform === 'win32'
         ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
         : hookLauncher,
-      stableHookArgs,
+      rollbackHookArgs,
     );
+    if (previousManifest) {
+      await manage({ command: 'rollback', version: manifest.version });
+      await stableHook(
+        process.platform === 'win32'
+          ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
+          : hookLauncher,
+        stableHookArgs,
+      );
+    }
     await manage({ command: 'uninstall' });
     await stableHook(
       process.platform === 'win32'
@@ -262,30 +377,6 @@ async function main() {
       (await readdir(path.join(installRoot, 'versions'))).length > 0,
       'Compatibility versions must survive uninstall until references are detached.',
     );
-    if (process.platform === 'win32') {
-      const bootstrapRoot = path.join(scratch, 'bootstrap root é %');
-      const bootstrap = path.join(directory, 'install.ps1');
-      await run(
-        path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-File',
-          bootstrap,
-          '-Root',
-          bootstrapRoot,
-          '-Artifact',
-          path.join(directory, manifest.archive),
-          '-Checksum',
-          path.join(directory, `${manifest.archive}.sha256`),
-        ],
-        { windowsHide: true, timeout: 120_000 },
-      );
-      assert.equal(
-        (await readFile(path.join(bootstrapRoot, 'current'), 'utf8')).trim(),
-        `${manifest.version}-${manifest.target}`,
-      );
-    }
     const evidence = {
       schemaVersion: 1,
       status: 'passed',
@@ -295,6 +386,10 @@ async function main() {
       node: nodeVersion,
       qualificationOS,
       runtime: args.includes('--require-wsl') ? 'WSL' : 'native',
+      upgradeKind: previousManifest ? 'exact-prior-archive' : 'single-archive-fallback',
+      prior: previousManifest
+        ? { archive: previousManifest.archive, sha256: previousManifest.sha256 }
+        : null,
       systemToolchains: 'absent from PATH',
       checks: [
         'BAML async exit',
@@ -308,6 +403,9 @@ async function main() {
         'rollback selection',
         'uninstall retention',
         'local archive bootstrap',
+        previousManifest
+          ? 'exact prior archive upgrade and rollback'
+          : 'single-archive reinstall fallback (not an exact two-archive upgrade)',
       ],
     };
     await writeFile(
