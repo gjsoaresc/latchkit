@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -45,6 +45,33 @@ function safeArchivePath(value) {
 }
 
 const canonical = (value) => JSON.stringify(value);
+
+export async function stageWindowsBootstrap(directory, target) {
+  if (target !== 'win32-x64') return;
+  const source = path.join(repository, 'install.ps1');
+  const destination = path.join(directory, 'install.ps1');
+  const bytes = await readFile(source);
+  try {
+    if (!(await lstat(destination)).isFile())
+      throw new Error('Existing publication bootstrap must be a regular file, not a link.');
+    const existing = await readFile(destination);
+    if (!existing.equals(bytes))
+      throw new Error('Existing publication bootstrap differs from the reviewed install.ps1.');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    await mkdir(directory, { recursive: true });
+    await writeFile(destination, bytes, { flag: 'wx' });
+  }
+}
+
+export async function prepareReleaseArtifacts(
+  { output, version, target = `${process.platform}-${process.arch}` },
+  build = buildBundle,
+) {
+  // Refuse bootstrap conflicts before the builder can replace any archive or sidecar.
+  await stageWindowsBootstrap(output, target);
+  return build({ output, version, target });
+}
 
 function archiveTool(archive) {
   return path.extname(archive).toLowerCase() === '.zip' && process.platform === 'linux'
@@ -423,7 +450,7 @@ async function main() {
       ),
     );
   } else {
-    const result = await buildBundle({ output, version, target: value('--target') });
+    const result = await prepareReleaseArtifacts({ output, version, target: value('--target') });
     console.log(
       JSON.stringify(
         {

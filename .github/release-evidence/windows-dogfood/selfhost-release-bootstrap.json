@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "kind": "installed-selfhost-repair-observation",
+  "status": "completed-after-review-corrections",
+  "installedCandidate": {
+    "version": "1.0.0-dogfood.20260906.1",
+    "commit": "42889f7b54db2009483d9c54d63a16b77f5b8f5c",
+    "target": "win32-x64",
+    "privateNodeVersion": "v24.20.0",
+    "executionPath": "installed createTaskController through installed runProviderProcess"
+  },
+  "sourceBaseCommit": "d31b2f5",
+  "provider": {
+    "id": "codex",
+    "observedVersion": "0.153.2",
+    "requestedModel": "gpt-5.6-luna",
+    "requestedReasoningEffort": "low",
+    "modelReportedInUsage": null,
+    "sandbox": "workspace-write",
+    "approvalPolicy": "on-request"
+  },
+  "execution": {
+    "startedAt": "2026-09-06T15:24:15.177Z",
+    "endedAt": "2026-09-06T15:25:29.963Z",
+    "inferenceAttempts": 1,
+    "timeoutMs": 180000,
+    "outputLimitBytes": 262144,
+    "inferenceElapsedMs": 73964,
+    "inferenceOutputBytes": 92460,
+    "versionProbes": 1,
+    "versionProbeElapsedMs": 40,
+    "status": "exited",
+    "exitCode": 0,
+    "providerSessionObserved": true,
+    "taskStateAfterSession": "blocked"
+  },
+  "usage": {
+    "enabledBeforeExecution": true,
+    "records": 1,
+    "status": "partial",
+    "tokens": {
+      "input": 255816,
+      "output": 2313,
+      "cacheRead": 226304,
+      "cacheCreation": null,
+      "thinking": 581
+    },
+    "estimatedPublicApiListPriceUsd": null,
+    "billing": "unknown"
+  },
+  "review": {
+    "providerPatchAcceptedWithoutCorrections": false,
+    "providerEditedFiles": ["scripts/release-artifacts.js", "test/release.test.js"],
+    "observedDefect": "The provider patch failed with ENOENT when release preparation used a new output directory; its helper tests passed because they precreated that directory.",
+    "additionalGap": "An omitted target bypassed bootstrap staging even though bundle creation defaults to the native target.",
+    "localCorrections": [
+      "Create missing output directories before exclusive bootstrap creation.",
+      "Resolve the native target before staging and building.",
+      "Reject differing and non-regular bootstrap destinations before bundle creation can replace artifacts.",
+      "Add preparation-level regression tests for staging order and preservation."
+    ],
+    "additionalInferenceAttempts": 0
+  },
+  "validation": {
+    "platform": "win32-x64",
+    "developmentNodeVersion": "v26.8.1",
+    "npmCi": "passed; zero vulnerabilities",
+    "npmRunCheck": "passed",
+    "npmTest": { "tests": 339, "passed": 331, "failed": 0, "skipped": 8 },
+    "privateRuntimeReleaseTests": {
+      "command": "node --test test/release.test.js",
+      "nodeVersion": "v24.20.0",
+      "tests": 13,
+      "passed": 12,
+      "failed": 0,
+      "skipped": 1
+    },
+    "limitations": [
+      "The file-symlink regression was skipped because this Windows account could not create symbolic links.",
+      "No real release archive was built by this repair session; preparation order was verified using an injected bundle builder.",
+      "The task controller records session termination as blocked; this harness did not claim task-state verification.",
+      "Token observations do not establish actual provider charges or a provider-reported model identity."
+    ]
+  }
+}
