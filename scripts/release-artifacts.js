@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { resolveTar } from './archive-tool.js';
 import { buildBundle } from './bundle.js';
 
 const command = promisify(execFile);
@@ -73,15 +74,21 @@ export async function prepareReleaseArtifacts(
   return build({ output, version, target });
 }
 
-function archiveTool(archive) {
-  return path.extname(archive).toLowerCase() === '.zip' && process.platform === 'linux'
-    ? 'bsdtar'
-    : 'tar';
+async function archiveTool(archive) {
+  if (process.platform === 'win32') return resolveTar();
+  return {
+    tool:
+      path.extname(archive).toLowerCase() === '.zip' && process.platform === 'linux'
+        ? 'bsdtar'
+        : 'tar',
+    prefixArgs: [],
+  };
 }
 
 async function archiveCommand(archive, args, options) {
   try {
-    return await command(archiveTool(archive), args, options);
+    const { tool, prefixArgs } = await archiveTool(archive);
+    return await command(tool, [...prefixArgs, ...args], options);
   } catch (error) {
     if (
       path.extname(archive).toLowerCase() === '.zip' &&
