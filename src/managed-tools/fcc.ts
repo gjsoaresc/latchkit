@@ -717,7 +717,7 @@ export async function stopFcc(options: FccOptions) {
  */
 export async function runWithFccClaudeEnvironment<T>(
   options: FccOptions,
-  invoke: (environment: NodeJS.ProcessEnv) => Promise<T>,
+  invoke: (selection: { environment: NodeJS.ProcessEnv; environmentMode: 'replace' }) => Promise<T>,
 ): Promise<T> {
   const { root } = resolveOptions(options);
   await assertMutable(root);
@@ -765,11 +765,14 @@ export async function runWithFccClaudeEnvironment<T>(
     ),
   ].join(',');
   return invoke({
-    ...environment,
-    NO_PROXY: bypass,
-    no_proxy: bypass,
-    ANTHROPIC_BASE_URL: `http://127.0.0.1:${active.port}`,
-    ANTHROPIC_AUTH_TOKEN: token,
+    environmentMode: 'replace',
+    environment: {
+      ...environment,
+      NO_PROXY: bypass,
+      no_proxy: bypass,
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${active.port}`,
+      ANTHROPIC_AUTH_TOKEN: token,
+    },
   });
 }
 

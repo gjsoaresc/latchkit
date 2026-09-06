@@ -20,6 +20,8 @@ import {
   applyRegisteredTransaction,
   createResourceRegistry,
 } from '../dist/src/installer/transactions.js';
+import { runProviderProcess } from '../dist/src/runtime/process-runner.js';
+import { providerById } from '../dist/src/providers/registry.js';
 
 test(
   'optional pinned archive validates all source members',
@@ -62,13 +64,36 @@ test(
     try {
       const result = await runWithFccClaudeEnvironment(
         { root: process.env.FCC_TEST_ROOT },
-        async (environment) => {
+        async ({ environment, environmentMode }) => {
+          assert.equal(environmentMode, 'replace');
           assert.equal(environment.ANTHROPIC_BASE_URL, 'http://127.0.0.1:8082');
           assert.ok(environment.ANTHROPIC_AUTH_TOKEN.length >= 32);
           assert.equal(environment.ANTHROPIC_API_KEY, undefined);
           assert.equal(environment.FCC_TEST_PERMISSION_SENTINEL, 'preserved');
           assert.ok(environment.NO_PROXY.split(',').includes('127.0.0.1'));
           assert.equal(environment.NO_PROXY, environment.no_proxy);
+          const child = await runProviderProcess({
+            provider: providerById('claude'),
+            executionProfile: 'host-local-authorized',
+            environmentMode,
+            timeoutMs: 5000,
+            outputLimitBytes: 4096,
+            plan: {
+              executable: process.execPath,
+              args: [
+                '-e',
+                'console.log(JSON.stringify({ inherited: Boolean(process.env.ANTHROPIC_API_KEY), proxy: Boolean(process.env.ANTHROPIC_AUTH_TOKEN), preserved: process.env.FCC_TEST_PERMISSION_SENTINEL === "preserved" }))',
+              ],
+              environment,
+            },
+          });
+          assert.equal(child.status, 'exited');
+          assert.equal(child.exitCode, 0);
+          assert.deepEqual(JSON.parse(child.stdout), {
+            inherited: false,
+            proxy: true,
+            preserved: true,
+          });
           return 'invoked';
         },
       );

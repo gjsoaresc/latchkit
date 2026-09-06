@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   HOST_LOCAL_EXECUTION_PROFILE,
   redactLaunchMetadata,
@@ -38,6 +40,68 @@ const provider = (state = 'supported') => ({
 });
 const plan = (...args) => ({ executable: process.execPath, args: [fixture, ...args] });
 const authorized = { executionProfile: HOST_LOCAL_EXECUTION_PROFILE };
+
+test('replacement environment does not restore inherited provider credentials in the actual child', async () => {
+  const driver = fileURLToPath(
+    new URL('./fixtures/processes/environment-driver.js', import.meta.url),
+  );
+  const run = (mode) =>
+    promisify(execFile)(process.execPath, [driver, mode], {
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: 'fixture-inherited-key',
+        ANTHROPIC_CUSTOM_HEADERS: 'fixture-inherited-header',
+        LATCHKIT_ENV_FIXTURE: 'retained',
+      },
+      timeout: 10000,
+    });
+  const replaced = JSON.parse((await run('replace')).stdout);
+  assert.deepEqual(replaced, {
+    apiKey: null,
+    headers: null,
+    token: 'fixture-proxy-token',
+    url: 'http://127.0.0.1:9999',
+    fixture: 'retained',
+  });
+  const inherited = JSON.parse((await run('inherit')).stdout);
+  assert.equal(inherited.apiKey, 'fixture-inherited-key');
+  assert.equal(inherited.headers, 'fixture-inherited-header');
+});
+
+test('environment replacement requires an explicit validated environment before launch', async () => {
+  for (const environment of [
+    { KEY: { invalid: true } },
+    { 'BAD=NAME': 'value' },
+    { KEY: 'bad\0value' },
+  ])
+    await assert.rejects(
+      runProviderProcess({
+        ...authorized,
+        provider: provider(),
+        plan: { ...plan('exit', '0'), environment },
+        environmentMode: 'replace',
+      }),
+      /environment/,
+    );
+  await assert.rejects(
+    runProviderProcess({
+      ...authorized,
+      provider: provider(),
+      plan: plan('exit', '0'),
+      environmentMode: 'replace',
+    }),
+    /environment/,
+  );
+  await assert.rejects(
+    runProviderProcess({
+      ...authorized,
+      provider: provider(),
+      plan: { ...plan('exit', '0'), environment: {} },
+      environmentMode: 'unsupported',
+    }),
+    /environment/,
+  );
+});
 
 test('refuses unavailable profiles and unsupported invocation before process start', async () => {
   assert.equal(

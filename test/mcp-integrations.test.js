@@ -245,6 +245,19 @@ test('MCP multi-resource failures roll back exact bytes and recover without impo
   }
 });
 
+test('MCP preflight uses the replacement environment actually delivered to the provider child', async (t) => {
+  const root = await fixture(t);
+  await apply(root, [{ ...integration(), requiredEnvironment: ['ANTHROPIC_API_KEY'] }], {
+    environment: { ANTHROPIC_API_KEY: 'fixture-inherited-key' },
+  });
+  const result = await execute(
+    process.execPath,
+    [path.resolve('test/fixtures/processes/environment-driver.js'), 'replace', root],
+    { env: { ...process.env, ANTHROPIC_API_KEY: 'fixture-inherited-key' }, timeout: 10000 },
+  );
+  assert.deepEqual(JSON.parse(result.stdout), { status: 'refused', code: 'MCP_RUNTIME_DENIED' });
+});
+
 test('CLI preview/apply/inspect/health/remove exposes an explicit usable local configuration flow', async (t) => {
   const root = await fixture(t);
   const input = path.join(root, 'mcp-input.json');
