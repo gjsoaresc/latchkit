@@ -12,7 +12,7 @@ type Reservation = {
   id: string;
   reviewId: string;
   assignmentId: string;
-  parentTaskId: string;
+  parentRunId: string;
   controllerId: string;
   pid: number;
   hostname: string;
@@ -24,6 +24,15 @@ type AdmissionState = {
   reservations: Reservation[];
   parentRuns: ParentRunCount[];
 };
+
+export class ReviewAdmissionError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = 'ReviewAdmissionError';
+    this.code = code;
+  }
+}
 
 const deadOwner = (reservation: Reservation) => {
   if (reservation.hostname !== os.hostname() || !Number.isInteger(reservation.pid)) return false;
@@ -60,20 +69,22 @@ export async function reserveReviewInvocation({
   root,
   reviewId,
   assignmentId,
-  parentTaskId,
+  parentRunId,
   controllerId,
   limit = DEFAULT_REVIEW_CONCURRENCY,
   maxAssignments = MAX_REVIEW_ASSIGNMENTS,
+  queueTimeoutMs = 120000,
   signal,
   clock = () => new Date(),
 }: {
   root: string;
   reviewId: string;
   assignmentId: string;
-  parentTaskId: string;
+  parentRunId: string;
   controllerId: string;
   limit?: number;
   maxAssignments?: number;
+  queueTimeoutMs?: number;
   signal?: AbortSignal;
   clock?: () => Date;
 }): Promise<ReviewReservation> {
@@ -84,13 +95,22 @@ export async function reserveReviewInvocation({
     maxAssignments < 1
   )
     throw new Error('Review admission limit is invalid.');
+  if (!Number.isInteger(queueTimeoutMs) || queueTimeoutMs < 1)
+    throw new Error('Review admission queue timeout is invalid.');
   const id = `reservation_${randomUUID()}`;
+  const deadline = Date.now() + queueTimeoutMs;
   while (true) {
-    if (signal?.aborted) throw new Error('Review was cancelled before admission.');
+    if (signal?.aborted)
+      throw new ReviewAdmissionError('Review was cancelled before admission.', 'REVIEW_CANCELLED');
+    if (Date.now() >= deadline)
+      throw new ReviewAdmissionError(
+        'Review admission queue timeout was exceeded.',
+        'REVIEW_ADMISSION_TIMEOUT',
+      );
     const admitted = await withTaskStateLock(root, async () => {
       const state = await readState(root);
       const live = state.reservations.filter((item) => !deadOwner(item));
-      const parent = state.parentRuns.find((item) => item.parentRunId === parentTaskId);
+      const parent = state.parentRuns.find((item) => item.parentRunId === parentRunId);
       if ((parent?.admittedAssignments ?? 0) >= maxAssignments)
         throw new Error('Review parent run assignment limit was reached.');
       if (live.length >= limit) {
@@ -102,14 +122,14 @@ export async function reserveReviewInvocation({
         id,
         reviewId,
         assignmentId,
-        parentTaskId,
+        parentRunId,
         controllerId,
         pid: process.pid,
         hostname: os.hostname(),
         reservedAt: clock().toISOString(),
       });
       if (parent) parent.admittedAssignments += 1;
-      else state.parentRuns.push({ parentRunId: parentTaskId, admittedAssignments: 1 });
+      else state.parentRuns.push({ parentRunId, admittedAssignments: 1 });
       await save(root, { schemaVersion: 1, reservations: live, parentRuns: state.parentRuns });
       return true;
     });
@@ -129,15 +149,16 @@ export async function reserveReviewInvocation({
       };
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 25);
-      signal?.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, Math.min(25, Math.max(1, deadline - Date.now())));
+      signal?.addEventListener('abort', finish, { once: true });
     });
   }
 }

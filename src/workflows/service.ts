@@ -940,6 +940,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
     try {
       const result = await review.run({
         taskId: record.taskId,
+        parentRunId: record.workflowId,
         reviewers: [
           {
             providerId: record.reviewProviderId,

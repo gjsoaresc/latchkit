@@ -15,6 +15,7 @@ import type { ProviderContract } from '../providers/contracts.js';
 import type { SourceSnapshot } from '../task-state/contracts.js';
 import { errorCode, errorMessage, isRecord } from '../types.js';
 import { observeProviderInvocation } from '../usage/observe.js';
+import { readWorkflow } from '../workflows/store.js';
 import {
   DEFAULT_REVIEW_CONCURRENCY,
   MAX_REVIEW_ASSIGNMENTS,
@@ -465,10 +466,17 @@ export function createReviewOrchestrator({
   }: RunInput = {}) {
     await reconcileInterrupted();
     const task = text(taskId, 'taskId');
-    const parentRunId =
-      requestedParentRunId === undefined
-        ? `legacy-task:${task}`
-        : text(requestedParentRunId, 'parentRunId');
+    let parentRunId: string;
+    if (requestedParentRunId === undefined) parentRunId = `legacy-review:${randomUUID()}`;
+    else {
+      parentRunId = text(requestedParentRunId, 'parentRunId');
+      const workflow = await readWorkflow(projectRoot, task);
+      if (!workflow || workflow.workflowId !== parentRunId)
+        throw new ReviewOrchestrationError(
+          'parentRunId is not bound to the requested task workflow.',
+          'REVIEW_PARENT_INVALID',
+        );
+    }
     if (executionAuthorized !== true)
       throw new ReviewOrchestrationError(
         'Reviews require explicit host-local execution authorization.',
@@ -612,10 +620,11 @@ export function createReviewOrchestrator({
             root: projectRoot,
             reviewId: review.id,
             assignmentId: item.id,
-            parentTaskId: parentRunId,
+            parentRunId,
             controllerId,
             limit: budget.admissionConcurrency,
             maxAssignments: MAX_REVIEW_ASSIGNMENTS,
+            queueTimeoutMs: budget.timeoutMs,
             signal: abort.signal,
             clock,
           });
