@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "kind": "standalone-installation-check",
+  "issue": 103,
+  "observedAt": "2026-09-06T22:40:00.000Z",
+  "candidate": {
+    "version": "1.0.0",
+    "commit": "08dd962e25e34343e657b3ca9a36fc0efdd30e07",
+    "target": "win32-x64",
+    "archiveSha256": "a15711c188593b5b4df2e742a76debcb472f34c38e5c29ea8f3ae26f1b24f17b"
+  },
+  "purpose": "PR #131 fixed issue #103 (missing shared skill-reference files in exports) but explicitly left its standalone-installation check for #104. This record is that check, run against the packaged candidate ZIP rather than the source dist tree.",
+  "environment": {
+    "os": "Windows 11 Pro 10.0.26200",
+    "systemToolchains": "node/npm removed from PATH for the child process",
+    "installRoot": "isolated temp directory with a space and a non-ASCII character in its path",
+    "projectRoot": "isolated temp directory with a space and a non-ASCII character in its path"
+  },
+  "steps": [
+    "install.ps1 -Version 1.0.0 -Root <isolated root> -Artifact <candidate zip> -Checksum <candidate .sha256>",
+    "latchkit.ps1 --version",
+    "latchkit.ps1 self inspect --install-root <isolated root>",
+    "latchkit.ps1 init --project <project> --providers claude,codex --skills requirements,spec,build,review",
+    "latchkit.ps1 sync --project <project>"
+  ],
+  "status": "passed",
+  "checks": [
+    {
+      "check": "install and sync succeed with system node/npm absent from PATH",
+      "result": "passed"
+    },
+    {
+      "check": ".agents/skills/references/{efficiency,workflow-evidence,prd-template,technical-plan-template}.md exported",
+      "result": "passed"
+    },
+    {
+      "check": ".claude/skills/references/{efficiency,workflow-evidence,prd-template,technical-plan-template}.md exported",
+      "result": "passed"
+    },
+    {
+      "check": "relative links from latchkit-build/SKILL.md ('../references/efficiency.md', '../references/workflow-evidence.md') resolve to files that exist on disk",
+      "result": "passed"
+    }
+  ],
+  "limitations": [
+    "Covers the requirements/spec/build/review skill selection only, not every bundled skill.",
+    "This is a manual black-box CLI check, not an additional automated regression test; automated coverage for this defect lives in test/pack-index.test.js and related suites, which passed in this qualification's npm test run."
+  ]
+}

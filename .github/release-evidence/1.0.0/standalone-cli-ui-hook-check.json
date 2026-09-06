@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "standalone-cli-ui-hook-check",
+  "observedAt": "2026-09-06T22:45:00.000Z",
+  "candidate": {
+    "version": "1.0.0",
+    "commit": "08dd962e25e34343e657b3ca9a36fc0efdd30e07",
+    "target": "win32-x64",
+    "archiveSha256": "a15711c188593b5b4df2e742a76debcb472f34c38e5c29ea8f3ae26f1b24f17b"
+  },
+  "environment": {
+    "os": "Windows 11 Pro 10.0.26200",
+    "systemToolchains": "node/npm removed from PATH for the child process",
+    "installRoot": "isolated temp directory with a space and a non-ASCII character in its path"
+  },
+  "checks": [
+    {
+      "check": "CLI startup via installed launcher (latchkit.ps1 --version)",
+      "result": "passed",
+      "detail": "printed 1.0.0"
+    },
+    {
+      "check": "self inspect via installed launcher",
+      "result": "passed",
+      "detail": "reported active 1.0.0-win32-x64 and the three expected launchers"
+    },
+    {
+      "check": "packaged Claude Stop hook via bin/latchkit-hook.ps1",
+      "result": "passed",
+      "detail": "returned a well-formed turn-completed event JSON with matching session_id and an eventId matching '<session>:Stop:<timestamp>'"
+    },
+    {
+      "check": "UI startup and authenticated API via the installed launcher (latchkit.ps1 ui --project <project> --port 0)",
+      "result": "passed",
+      "detail": "printed the local URL and session token; GET / returned 200 and contained 'Latchkit'; GET /api/state with the printed bearer token returned 200"
+    }
+  ],
+  "status": "passed"
+}

@@ -17,12 +17,56 @@ matrix, PowerShell/shell installer usage, PATH and executable discovery, the
 onboarding hand-off, and the current (unpublished) Homebrew/WinGet
 packaging scaffolds.
 
+## Release scope and supported-capability matrix
+
+Windows 11 x64 is the sole qualified 1.0 release target. See the [full
+supported/deferred target table](installation.md#supported-vs-deferred-targets)
+and the [provider capability evidence matrix](compatibility.md#capability-evidence-matrix)
+for the underlying detail; this table summarizes them for release purposes.
+
+| Area                                                    | Status       | Notes                                                                                              |
+| --------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
+| Windows 11 x64 standalone archive (install/upgrade/rollback/uninstall) | **Supported**    | Qualified against the exact candidate archive; see [Candidate qualification](#candidate-qualification). |
+| Windows CLI/UI/hooks, project skill/resource export        | **Supported**    | Includes shared `references/*.md` export (issue #103).                                              |
+| Claude Code and Codex skill export, hooks, adapters         | **Supported**    | Documented, contract-tested; Codex additionally has the release-gating live delivery workflow.       |
+| Cursor IDE / Cursor CLI adapters                            | **Partial**      | Implemented and contract-tested; not part of this candidate's live-session release gate.             |
+| Antigravity CLI adapter                                     | **Partial**      | Invocation and exact-version resume only; hooks/compaction/live resume unimplemented or unverified.  |
+| Linux x64 / macOS x64 / macOS arm64 standalone archives      | **Experimental** | Scripted (`install.sh`), not built or qualified for this or any release; see #98.                    |
+| Windows arm64 / Linux arm64                                 | **Unsupported**  | Both installers reject these targets before making any change.                                       |
+| Homebrew / WinGet packaging                                  | **Experimental** | Scaffolded only; not published, not build-tested; see [installation.md](installation.md#homebrew-and-winget). |
+| FCC (optional local Free Claude Code) / NVIDIA NIM           | **Experimental** | Read-only inspect and opt-in lifecycle actions only; installation is pinned and inference is never invoked by ordinary Latchkit setup. |
+| Live delivery workflow qualification (Codex, full requirements→spec→build→review→handoff) | **Untested for this candidate** | Requires an authenticated provider session against the exact archive; reserved for the release manager, not run by this qualification. |
+| Publication (`gh release create` via the protected workflow) | **Not executed**  | Reserved for the repository owner's protected `github-release-production` environment approval.     |
+
+### v1 release-blocker triage
+
+As of this qualification, the only two issues labeled `release: v1-blocker`
+that are not closed are:
+
+- **#103** (missing shared skill-reference files in exports): the source fix
+  and regression coverage merged in PR #131. Its one outstanding item -- "a
+  fresh standalone installation check on Windows" -- was executed as part of
+  this qualification (see [the dated report](verification/windows-1.0-qualification-2026-09-06.md) and
+  `.github/release-evidence/1.0.0/standalone-shared-resource-export.json`).
+  With that check passing, #103 has no remaining unaddressed acceptance
+  criteria; closing it is a maintainer action.
+- **#104** (this qualification): partially complete. Candidate preparation,
+  Windows 11 native qualification, and non-publishing verification are done;
+  the live Codex delivery-workflow qualification and publication remain,
+  both requiring maintainer-authorized provider credentials and release
+  approval that this qualification pass is not authorized to use.
+
+No other backlog item discovered during this qualification rises to a v1
+release blocker; anything else noted below is tracked as follow-up scope
+(see [Roadmap](roadmap.md)), not a blocker for this candidate.
+
 ## Candidate qualification
 
-The current source prepares `1.0.0` for final maintainer approval after the
-TypeScript `1.0.0-rc.2` native candidate checks. No tag or release is published. Existing
-RC1 evidence is historical evidence for the earlier application and cannot
-qualify these bundles. CI workflow cells describe configured coverage; they do
+The current source prepares `1.0.0` for final maintainer approval. Prior
+`1.0.0-rc.1`/`1.0.0-rc.2` evidence and the `1.0.0-dogfood.*` candidates are
+historical evidence for earlier bundles and cannot qualify a later archive's
+different bytes; each exact archive must pass its own qualification. No tag or
+release is published. CI workflow cells describe configured coverage; they do
 not become release evidence until the exact archive produces passing evidence
 for that target and environment.
 
@@ -32,10 +76,15 @@ Before a maintainer considers a release candidate, run on Windows 11:
 npm ci --ignore-scripts
 npm run check
 npm test
+npx playwright test --project=chromium
 npm run release:artifacts
-Copy-Item install.ps1 -Destination release-artifacts
 node scripts/bundle-smoke.js --directory release-artifacts
 ```
+
+`npm run release:artifacts` stages the matching `install.ps1` into the output
+directory automatically (and refuses to proceed if a conflicting bootstrap
+file is already there) -- a separate `Copy-Item install.ps1` step is not
+required.
 
 The release workflow builds the Windows archive with Node.js 24.20.0. Bundle
 smoke removes `node`, `npm`, and `baml` from `PATH`, exercises the packaged
