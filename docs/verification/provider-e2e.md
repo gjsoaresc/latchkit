@@ -34,4 +34,12 @@ The candidate checkout must be clean and committed. The harness verifies the sup
 
 ## Cursor IDE manual workflow
 
-In a disposable project, record Cursor version, commit, OS, workspace trust and hook policy. Detect the installed editor, sync only Cursor, list the discovered skills, enable the opt-in hook export, and invoke one bounded skill manually. Observe session start, one tool event, stop, and session end; annotate unavailable events rather than inferring them. Then disable the integration and confirm an unrelated custom hook/file survives. A Cursor CLI run is not a substitute for this workflow.
+In a disposable project, record Cursor version, commit, OS, workspace trust and hook policy. Detect
+the installed editor, sync only Cursor, list the discovered skills, and enable the opt-in hook
+export with an explicit output such as
+`.latchkit/providers/cursor-ide/evidence/manual-run.json`. Invoke one bounded skill manually, then
+inspect the allowlisted file with `inspectCursorIdeHookEvidence`. Observe session start, one tool
+event, stop, and session end; annotate missing records rather than inferring them. The evidence file
+contains no transcripts, tool payloads, paths, provider IDs, accounts, or credentials. Disable the
+integration and confirm an unrelated custom hook/file survives; the evidence is retained until the
+operator explicitly removes it. A Cursor CLI run is not a substitute for this workflow.

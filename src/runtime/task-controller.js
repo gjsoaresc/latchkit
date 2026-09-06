@@ -180,7 +180,16 @@ export function createTaskController({
     return { ...state, sessions };
   }
 
-  async function run({ taskId, providerId, prompt, expectedRevision, mutationId, resumeSession }) {
+  async function run({
+    taskId,
+    providerId,
+    prompt,
+    expectedRevision,
+    mutationId,
+    resumeSession,
+    sandbox,
+    approvalPolicy,
+  }) {
     assertId(taskId, 'taskId');
     assertId(providerId, 'providerId');
     if (executionProfile !== HOST_LOCAL_EXECUTION_PROFILE)
@@ -199,8 +208,15 @@ export function createTaskController({
           sessionId: resumeSession.providerSessionId,
           prompt: prompt ?? before.task.title,
           cwd: root,
+          sandbox,
+          approvalPolicy,
         })
-      : adapter.operations.planInvocation({ prompt: prompt ?? before.task.title, cwd: root });
+      : adapter.operations.planInvocation({
+          prompt: prompt ?? before.task.title,
+          cwd: root,
+          sandbox,
+          approvalPolicy,
+        });
     if (planResult?.supported === false || planResult?.command === null)
       throw new TaskControllerError(planResult.reason, 'CAPABILITY_UNAVAILABLE');
     const plan = validateCommandPlan(planResult);

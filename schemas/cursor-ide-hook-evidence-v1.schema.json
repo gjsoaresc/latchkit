@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/cursor-ide-hook-evidence-v1.schema.json",
+  "title": "Latchkit Cursor IDE hook evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "records"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "records": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schemaVersion", "sequence", "event", "classification"],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "sequence": { "type": "integer", "minimum": 1, "maximum": 256 },
+          "event": {
+            "enum": [
+              "sessionStart",
+              "sessionEnd",
+              "preToolUse",
+              "postToolUse",
+              "postToolUseFailure",
+              "preCompact",
+              "stop"
+            ]
+          },
+          "classification": { "enum": ["success", "failure", "refusal"] }
+        }
+      }
+    }
+  }
+}

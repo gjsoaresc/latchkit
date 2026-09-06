@@ -49,7 +49,16 @@ test('Codex plans use argument vectors and never trust-bypass flags', () => {
   });
   assert.deepEqual(validateCommandPlan(invocation), {
     executable: 'codex',
-    args: ['exec', '--json', '--', 'hello --danger'],
+    args: [
+      '--ask-for-approval',
+      'on-request',
+      'exec',
+      '--sandbox',
+      'read-only',
+      '--json',
+      '--',
+      'hello --danger',
+    ],
     cwd: 'C:\\work dir',
   });
   assert.ok(!JSON.stringify(invocation).includes('trust'));
@@ -58,12 +67,33 @@ test('Codex plans use argument vectors and never trust-bypass flags', () => {
     sessionId: 'thread-123',
     prompt: 'write the handoff',
     cwd: 'C:\\work dir',
+    sandbox: 'workspace-write',
+    approvalPolicy: 'never',
   });
   assert.deepEqual(validateCommandPlan(resume), {
     executable: 'codex',
-    args: ['exec', 'resume', '--json', '--', 'thread-123', 'write the handoff'],
+    args: [
+      '--ask-for-approval',
+      'never',
+      'exec',
+      '--sandbox',
+      'workspace-write',
+      'resume',
+      '--json',
+      '--',
+      'thread-123',
+      'write the handoff',
+    ],
     cwd: 'C:\\work dir',
   });
+  assert.throws(
+    () => codexAdapter.operations.planInvocation({ sandbox: 'danger-full-access' }),
+    /read-only or workspace-write/,
+  );
+  assert.throws(
+    () => codexAdapter.operations.planInvocation({ approvalPolicy: 'untrusted' }),
+    /on-request or never/,
+  );
 });
 
 test('Codex lifecycle translation validates normalized envelope', () => {

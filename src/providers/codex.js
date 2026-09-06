@@ -207,6 +207,16 @@ export function translateCodexEvent(
 
 const noPlan = (reason) => ({ status: 'refused', reason });
 const plan = (args, cwd) => ({ executable: 'codex', args, ...(cwd ? { cwd } : {}) });
+const codexSandbox = (value = 'read-only') => {
+  if (!['read-only', 'workspace-write'].includes(value))
+    throw new Error('Codex sandbox must be read-only or workspace-write.');
+  return value;
+};
+const codexApprovalPolicy = (value = 'on-request') => {
+  if (!['on-request', 'never'].includes(value))
+    throw new Error('Codex approval policy must be on-request or never.');
+  return value;
+};
 
 export const codexAdapter = createProviderAdapter(CODEX_CONTRACT, {
   async inspect({ root, versionOutput } = {}) {
@@ -246,12 +256,38 @@ export const codexAdapter = createProviderAdapter(CODEX_CONTRACT, {
       action: 'owned-section',
     };
   },
-  planInvocation({ prompt, cwd } = {}) {
-    return plan(['exec', '--json', '--', String(prompt ?? '')], cwd);
+  planInvocation({ prompt, cwd, sandbox, approvalPolicy } = {}) {
+    return plan(
+      [
+        '--ask-for-approval',
+        codexApprovalPolicy(approvalPolicy),
+        'exec',
+        '--sandbox',
+        codexSandbox(sandbox),
+        '--json',
+        '--',
+        String(prompt ?? ''),
+      ],
+      cwd,
+    );
   },
-  planResume({ sessionId, prompt, cwd } = {}) {
+  planResume({ sessionId, prompt, cwd, sandbox, approvalPolicy } = {}) {
     return sessionId
-      ? plan(['exec', 'resume', '--json', '--', String(sessionId), String(prompt ?? '')], cwd)
+      ? plan(
+          [
+            '--ask-for-approval',
+            codexApprovalPolicy(approvalPolicy),
+            'exec',
+            '--sandbox',
+            codexSandbox(sandbox),
+            'resume',
+            '--json',
+            '--',
+            String(sessionId),
+            String(prompt ?? ''),
+          ],
+          cwd,
+        )
       : noPlan('A session ID is required for resume.');
   },
   translateLifecycleInput(input, options) {

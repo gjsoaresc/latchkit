@@ -15,7 +15,7 @@ const evidence = (state = 'supported') => ({
   evidenceUrl: '',
 });
 
-function adapter(id = 'fixture') {
+function adapter(id = 'fixture', observePlan = () => {}) {
   const contract = {
     schemaVersion: 1,
     id,
@@ -44,8 +44,14 @@ function adapter(id = 'fixture') {
     planInstall() {},
     planSkillExport() {},
     planRuleExport() {},
-    planInvocation: ({ cwd }) => ({ executable: process.execPath, args: ['--version'], cwd }),
-    planResume: ({ cwd }) => ({ executable: process.execPath, args: ['--version'], cwd }),
+    planInvocation: (options) => {
+      observePlan(options);
+      return { executable: process.execPath, args: ['--version'], cwd: options.cwd };
+    },
+    planResume: (options) => {
+      observePlan(options);
+      return { executable: process.execPath, args: ['--version'], cwd: options.cwd };
+    },
     translateLifecycleInput() {},
     translateLifecycleOutput() {},
     planUsage() {},
@@ -174,4 +180,24 @@ test('controller rejects host-local execution without direct authorization', asy
     controller.start({ taskId: task.id, providerId: 'fixture', executionAuthorized: false }),
     { code: 'EXECUTION_AUTHORIZATION_REQUIRED' },
   );
+});
+
+test('controller forwards a bounded provider sandbox only after direct authorization', async (t) => {
+  const { root, task } = await fixture(t);
+  let planned;
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['fixture', adapter('fixture', (options) => (planned = options))]]),
+    launch: async () => ({ status: 'exited', exitCode: 0, stderr: '' }),
+  });
+  await controller.start({
+    taskId: task.id,
+    providerId: 'fixture',
+    executionAuthorized: true,
+    sandbox: 'workspace-write',
+    approvalPolicy: 'never',
+  });
+  assert.equal(planned.sandbox, 'workspace-write');
+  assert.equal(planned.approvalPolicy, 'never');
+  assert.equal(planned.cwd, root);
 });
