@@ -2,7 +2,7 @@ import type { ApiError } from './types.js';
 
 export type Api = <T = Record<string, unknown>>(
   route: string,
-  options?: { method?: string; body?: unknown; revision?: string },
+  options?: { method?: string; body?: unknown; revision?: string; signal?: AbortSignal },
 ) => Promise<T>;
 
 // Keep the launch token in this module, never in React props, markup, or localStorage.
@@ -20,7 +20,12 @@ export const hasSession = () => Boolean(token);
 
 export const api: Api = async <T>(
   route: string,
-  { method = 'GET', body, revision }: { method?: string; body?: unknown; revision?: string } = {},
+  {
+    method = 'GET',
+    body,
+    revision,
+    signal,
+  }: { method?: string; body?: unknown; revision?: string; signal?: AbortSignal } = {},
 ): Promise<T> => {
   let response;
   try {
@@ -32,8 +37,10 @@ export const api: Api = async <T>(
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(signal ? { signal } : {}),
     });
   } catch {
+    if (signal?.aborted) throw Object.assign(new Error('Cancelled.'), { cancelled: true });
     throw new Error(
       'The local server is unavailable. Check the terminal running Latchkit and retry.',
     );
