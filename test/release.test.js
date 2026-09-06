@@ -12,6 +12,7 @@ import {
   verifyEmbeddedArchive,
   verifyReleaseArtifacts,
 } from '../scripts/release-artifacts.js';
+import { tar } from '../scripts/archive-tool.js';
 
 const run = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '..');
@@ -165,7 +166,7 @@ async function embeddedArchiveFixture(
       })),
     );
     await writeFile(archive, storedZip(entries));
-  } else await run('tar', ['-czf', archive, '-C', bundle, '.']);
+  } else await tar(['-czf', archive, '-C', bundle, '.']);
   return { archive, embedded, spdx, bundle, directory };
 }
 
@@ -498,13 +499,13 @@ test('embedded archive verification rejects mismatched metadata and untracked de
     /SBOM differs/,
   );
   await writeFile(path.join(fixture.bundle, 'extra.exe'), 'unexpected');
-  await run('tar', ['-czf', fixture.archive, '-C', fixture.bundle, '.']);
+  await tar(['-czf', fixture.archive, '-C', fixture.bundle, '.']);
   await assert.rejects(
     verifyEmbeddedArchive(fixture.archive, sidecar, fixture.spdx),
     /inventory differs/,
   );
   await rm(path.join(fixture.bundle, 'app', 'package.json'));
-  await run('tar', ['-czf', fixture.archive, '-C', fixture.bundle, '.']);
+  await tar(['-czf', fixture.archive, '-C', fixture.bundle, '.']);
   await assert.rejects(
     verifyEmbeddedArchive(fixture.archive, sidecar, fixture.spdx),
     /inventory differs/,
