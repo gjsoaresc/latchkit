@@ -77,7 +77,13 @@ function safeGitRepository(value: string): boolean {
   if (value.startsWith('file:///')) return true;
   try {
     const url = new URL(value);
-    return ['https:', 'ssh:', 'git:'].includes(url.protocol);
+    return (
+      ['https:', 'ssh:', 'git:'].includes(url.protocol) &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      (url.protocol === 'ssh:' || !url.username)
+    );
   } catch {
     return /^[^@\s/:]+@[^\s/:]+:[^\s]+$/.test(value);
   }

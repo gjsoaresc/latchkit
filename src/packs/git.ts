@@ -56,6 +56,8 @@ async function git(args: string[], cwd?: string): Promise<string> {
       ...(cwd ? { cwd } : {}),
       windowsHide: true,
       maxBuffer: 8 * 1024 * 1024,
+      timeout: 60_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
     });
     return result.stdout;
   } catch (error) {
@@ -80,6 +82,7 @@ async function gitBlob(directory: string, commit: string, filename: string): Pro
       windowsHide: true,
       encoding: 'buffer',
       maxBuffer: 8 * 1024 * 1024,
+      timeout: 10_000,
     });
     return result.stdout;
   } catch (error) {
@@ -94,8 +97,8 @@ async function fetchFromGit(selection: PackSelection): Promise<LoadedPack> {
   const source = gitSource(selection);
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'latchkit-pack-fetch-'));
   try {
-    await git(['clone', '--no-checkout', '--no-tags', source.repository, temporary]);
-    await git(['fetch', '--no-tags', 'origin', source.commit], temporary);
+    await git(['init', '--bare', temporary]);
+    await git(['fetch', '--depth=1', '--no-tags', source.repository, source.commit], temporary);
     const resolved = (await git(['rev-parse', 'FETCH_HEAD^{commit}'], temporary)).trim();
     if (resolved !== source.commit)
       throw new PackContractError(
@@ -217,6 +220,7 @@ export async function loadMaterializedGitPack(
       !file ||
       typeof file.path !== 'string' ||
       typeof file.sha256 !== 'string' ||
+      typeof file.bytes !== 'string' ||
       !SHA256.test(file.sha256)
     )
       throw new PackContractError(
@@ -229,6 +233,7 @@ export async function loadMaterializedGitPack(
         `Git pack cache integrity failed: ${file.path}`,
         'PACK_INTEGRITY_FAILED',
       );
+    expected.delete(file.path);
     return { path: file.path, bytes };
   });
   return { ...manifest, source, files };
