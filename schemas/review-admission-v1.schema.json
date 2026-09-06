@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/review-admission-v1.schema.json",
+  "title": "Latchkit review admission reservations v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "reservations", "parentRuns"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "reservations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "reviewId",
+          "assignmentId",
+          "parentTaskId",
+          "controllerId",
+          "pid",
+          "hostname",
+          "reservedAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "reviewId": { "type": "string", "minLength": 1 },
+          "assignmentId": { "type": "string", "minLength": 1 },
+          "parentTaskId": { "type": "string", "minLength": 1 },
+          "controllerId": { "type": "string", "minLength": 1 },
+          "pid": { "type": "integer", "minimum": 1 },
+          "hostname": { "type": "string", "minLength": 1 },
+          "reservedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "parentRuns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["parentRunId", "admittedAssignments"],
+        "properties": {
+          "parentRunId": { "type": "string", "minLength": 1 },
+          "admittedAssignments": { "type": "integer", "minimum": 0, "maximum": 4 }
+        }
+      }
+    }
+  }
+}

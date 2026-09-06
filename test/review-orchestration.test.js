@@ -8,6 +8,7 @@ import {
   createReviewOrchestrator,
   validateReviewResult,
 } from '../dist/src/reviews/orchestrator.js';
+import { inspectReviewAdmission } from '../dist/src/reviews/admission.js';
 
 const adapter = (providerId = 'codex') => ({
   contract: { id: providerId, capabilities: { invocation: { state: 'supported' } } },
@@ -127,6 +128,130 @@ test('review results are strict, independent, and deduplicated', async (t) => {
   await assert.rejects(readFile(path.join(root, '.latchkit/usage/state-v1.json')), {
     code: 'ENOENT',
   });
+});
+
+test('shared admission keeps simultaneous review submissions at the default concurrency', async (t) => {
+  const root = await fixture(t);
+  let active = 0;
+  let peak = 0;
+  const make = () =>
+    createReviewOrchestrator({
+      root,
+      reviewerAdapters: new Map([['codex', adapter()]]),
+      source: async () => ({ revision: 'abc', dirtyFingerprint: 'fixture' }),
+      workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+      launch: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        active -= 1;
+        return {
+          status: 'exited',
+          exitCode: 0,
+          stdout: JSON.stringify({ schemaVersion: 1, state: 'completed', findings: [] }),
+        };
+      },
+    });
+  const input = {
+    taskId: 'task_parent',
+    reviewers: [{ providerId: 'codex' }, { providerId: 'codex' }],
+    executionAuthorized: true,
+    sandbox: 'read-only',
+  };
+  const [first, second] = await Promise.all([make().run(input), make().run(input)]);
+  assert.equal(first.state, 'completed');
+  assert.equal(second.state, 'completed');
+  assert.ok(peak >= 1 && peak <= 2);
+  assert.deepEqual((await inspectReviewAdmission(root)).reservations, []);
+});
+
+test('shared admission caps assignments per stable parent run and resets for a new parent run', async (t) => {
+  const root = await fixture(t);
+  let launches = 0;
+  const make = () =>
+    createReviewOrchestrator({
+      root,
+      reviewerAdapters: new Map([['codex', adapter()]]),
+      source: async () => ({ revision: 'abc', dirtyFingerprint: 'fixture' }),
+      workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+      launch: async () => {
+        launches += 1;
+        return {
+          status: 'exited',
+          exitCode: 0,
+          stdout: JSON.stringify({ schemaVersion: 1, state: 'completed', findings: [] }),
+        };
+      },
+    });
+  const input = (parentRunId) => ({
+    taskId: 'task_parent',
+    parentRunId,
+    reviewers: [
+      { providerId: 'codex' },
+      { providerId: 'codex' },
+      { providerId: 'codex' },
+      { providerId: 'codex' },
+    ],
+    executionAuthorized: true,
+    sandbox: 'read-only',
+  });
+  const [first, second] = await Promise.all([
+    make().run(input('parent-run-1')),
+    make().run(input('parent-run-1')),
+  ]);
+  assert.equal(launches, 4);
+  assert.ok([first.state, second.state].includes('failed'));
+  assert.equal(
+    (await inspectReviewAdmission(root)).parentRuns.find(
+      (item) => item.parentRunId === 'parent-run-1',
+    ).admittedAssignments,
+    4,
+  );
+  const next = await make().run(input('parent-run-2'));
+  assert.equal(next.state, 'completed');
+  assert.equal(launches, 8);
+});
+
+test('worker admission releases reservations on cancellation and rejects hard spend guarantees', async (t) => {
+  const root = await fixture(t);
+  let launched;
+  const launchedPromise = new Promise((resolve) => {
+    launched = resolve;
+  });
+  const orchestrator = createReviewOrchestrator({
+    root,
+    workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+    reviewerAdapters: new Map([['codex', adapter()]]),
+    launch: ({ signal }) =>
+      new Promise((resolve) => {
+        launched();
+        signal.addEventListener('abort', () => resolve({ status: 'cancelled', stdout: '' }), {
+          once: true,
+        });
+      }),
+  });
+  await assert.rejects(
+    () =>
+      orchestrator.run({
+        taskId: 'task_parent',
+        reviewers: [{ providerId: 'codex' }],
+        executionAuthorized: true,
+        sandbox: 'read-only',
+        limits: { spendBudgetUsd: 1, hardSpendingGuarantee: true },
+      }),
+    { code: 'REVIEW_HARD_SPEND_UNSUPPORTED' },
+  );
+  const run = orchestrator.run({
+    taskId: 'task_parent',
+    reviewers: [{ providerId: 'codex' }],
+    executionAuthorized: true,
+    sandbox: 'read-only',
+  });
+  await launchedPromise;
+  const reviewId = (await orchestrator.inspect()).reviews[0].id;
+  await orchestrator.cancel({ reviewId });
+  assert.equal((await run).state, 'cancelled');
+  assert.deepEqual((await inspectReviewAdmission(root)).reservations, []);
 });
 
 test('real Codex JSONL and Claude JSON envelopes yield strict review results', async (t) => {

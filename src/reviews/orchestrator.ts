@@ -15,6 +15,12 @@ import type { ProviderContract } from '../providers/contracts.js';
 import type { SourceSnapshot } from '../task-state/contracts.js';
 import { errorCode, errorMessage, isRecord } from '../types.js';
 import { observeProviderInvocation } from '../usage/observe.js';
+import {
+  DEFAULT_REVIEW_CONCURRENCY,
+  MAX_REVIEW_ASSIGNMENTS,
+  inspectReviewAdmission,
+  reserveReviewInvocation,
+} from './admission.js';
 
 export const REVIEW_SCHEMA_VERSION = 1;
 export const REVIEW_STATE_PATH = '.latchkit/reviews/state-v1.json';
@@ -51,6 +57,7 @@ type Review = {
   id: string;
   schemaVersion: number;
   taskId: string;
+  parentRunId: string;
   state: 'running' | 'completed' | 'failed' | 'cancelled';
   independent: true;
   sourceSnapshot: SourceSnapshot;
@@ -67,8 +74,12 @@ type ReviewState = { schemaVersion: number; reviews: Review[] };
 type ReviewLimits = {
   maxReviewers: number;
   concurrency: number;
+  admissionConcurrency: number;
   timeoutMs: number;
   maxIterations: number;
+  tokenBudget?: number;
+  spendBudgetUsd?: number;
+  spendingGuarantee: 'advisory' | 'unsupported-hard-request';
 };
 type Adapter = {
   contract: Readonly<ProviderContract>;
@@ -86,6 +97,7 @@ type WorkspaceFactory = (root: string, input?: { taskId?: string }) => Promise<u
 type Source = (root: string) => Promise<SourceSnapshot>;
 type RunInput = {
   taskId?: unknown;
+  parentRunId?: unknown;
   reviewers?: unknown;
   executionAuthorized?: boolean;
   sandbox?: unknown;
@@ -337,13 +349,24 @@ function parseLimits(value: unknown, reviewerCount: number): ReviewLimits {
   const limits = isRecord(value) ? value : {};
   const maxReviewers = positiveLimit(limits.maxReviewers, 4);
   const concurrency = positiveLimit(limits.concurrency, Math.min(2, maxReviewers));
+  const admissionConcurrency = positiveLimit(
+    limits.admissionConcurrency,
+    DEFAULT_REVIEW_CONCURRENCY,
+  );
   const timeoutMs = positiveLimit(limits.timeoutMs, 120000);
   const maxIterations = positiveLimit(limits.maxIterations, 1);
+  const tokenBudget =
+    limits.tokenBudget === undefined ? undefined : positiveLimit(limits.tokenBudget, 0);
+  const spendBudgetUsd = limits.spendBudgetUsd === undefined ? undefined : limits.spendBudgetUsd;
+  const hardSpending = limits.hardSpendingGuarantee === true || limits.spendingGuarantee === 'hard';
   if (
-    ![maxReviewers, concurrency, timeoutMs, maxIterations].every(
+    ![maxReviewers, concurrency, admissionConcurrency, timeoutMs, maxIterations].every(
       (item) => typeof item === 'number' && Number.isInteger(item) && item > 0,
     ) ||
     maxIterations !== 1 ||
+    maxReviewers > MAX_REVIEW_ASSIGNMENTS ||
+    reviewerCount > MAX_REVIEW_ASSIGNMENTS ||
+    admissionConcurrency > MAX_REVIEW_ASSIGNMENTS ||
     reviewerCount > maxReviewers ||
     concurrency > maxReviewers
   )
@@ -351,7 +374,34 @@ function parseLimits(value: unknown, reviewerCount: number): ReviewLimits {
       'Review limits are invalid or exceeded.',
       'REVIEW_BUDGET_EXCEEDED',
     );
-  return { maxReviewers, concurrency, timeoutMs, maxIterations };
+  if (tokenBudget !== undefined && (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1))
+    throw new ReviewOrchestrationError(
+      'tokenBudget must be a positive integer.',
+      'REVIEW_BUDGET_INVALID',
+    );
+  if (
+    spendBudgetUsd !== undefined &&
+    (typeof spendBudgetUsd !== 'number' || !Number.isFinite(spendBudgetUsd) || spendBudgetUsd < 0)
+  )
+    throw new ReviewOrchestrationError(
+      'spendBudgetUsd must be a non-negative number.',
+      'REVIEW_BUDGET_INVALID',
+    );
+  if (hardSpending)
+    throw new ReviewOrchestrationError(
+      'A hard spending guarantee was requested, but provider billing limits are not enforceable by Latchkit.',
+      'REVIEW_HARD_SPEND_UNSUPPORTED',
+    );
+  return {
+    maxReviewers,
+    concurrency,
+    admissionConcurrency,
+    timeoutMs,
+    maxIterations,
+    ...(tokenBudget === undefined ? {} : { tokenBudget }),
+    ...(spendBudgetUsd === undefined ? {} : { spendBudgetUsd }),
+    spendingGuarantee: 'advisory',
+  };
 }
 
 export function createReviewOrchestrator({
@@ -404,6 +454,7 @@ export function createReviewOrchestrator({
     })());
   async function run({
     taskId,
+    parentRunId: requestedParentRunId,
     reviewers,
     executionAuthorized = false,
     sandbox,
@@ -414,6 +465,10 @@ export function createReviewOrchestrator({
   }: RunInput = {}) {
     await reconcileInterrupted();
     const task = text(taskId, 'taskId');
+    const parentRunId =
+      requestedParentRunId === undefined
+        ? `legacy-task:${task}`
+        : text(requestedParentRunId, 'parentRunId');
     if (executionAuthorized !== true)
       throw new ReviewOrchestrationError(
         'Reviews require explicit host-local execution authorization.',
@@ -448,6 +503,7 @@ export function createReviewOrchestrator({
       id: `review_${randomUUID()}`,
       schemaVersion: REVIEW_SCHEMA_VERSION,
       taskId: task,
+      parentRunId,
       state: 'running',
       independent: true,
       sourceSnapshot: snapshot,
@@ -552,21 +608,37 @@ export function createReviewOrchestrator({
               'Review was cancelled before launch.',
               'REVIEW_CANCELLED',
             );
-          const processResult = await observeProviderInvocation({
+          const reservation = await reserveReviewInvocation({
             root: projectRoot,
-            providerId: item.providerId,
-            taskId: task,
-            invocationId: item.id,
-            launch,
+            reviewId: review.id,
+            assignmentId: item.id,
+            parentTaskId: parentRunId,
+            controllerId,
+            limit: budget.admissionConcurrency,
+            maxAssignments: MAX_REVIEW_ASSIGNMENTS,
+            signal: abort.signal,
             clock,
-            input: {
-              provider: adapter.contract,
-              plan,
-              executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
-              timeoutMs: budget.timeoutMs,
-              signal: abort.signal,
-            },
           });
+          let processResult: ProcessRunResult;
+          try {
+            processResult = await observeProviderInvocation({
+              root: projectRoot,
+              providerId: item.providerId,
+              taskId: task,
+              invocationId: item.id,
+              launch,
+              clock,
+              input: {
+                provider: adapter.contract,
+                plan,
+                executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
+                timeoutMs: budget.timeoutMs,
+                signal: abort.signal,
+              },
+            });
+          } finally {
+            await reservation.release();
+          }
           item.process = redact(processResult);
           item.state =
             processResult.status === 'cancelled'
@@ -666,7 +738,11 @@ export function createReviewOrchestrator({
     shutdown,
     inspect: async () => {
       await reconcileInterrupted();
-      return readState(projectRoot);
+      const [state, admission] = await Promise.all([
+        readState(projectRoot),
+        inspectReviewAdmission(projectRoot),
+      ]);
+      return { ...state, admission };
     },
   });
 }
