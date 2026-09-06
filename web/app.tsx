@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { OverviewConsole } from './overview.js';
 import { ProjectsConsole } from './projects.js';
 import { SpecsConsole } from './specs.js';
+import { ReviewConsole } from './review.js';
 import { MemoryConsolePage } from './memory.js';
 import { UsageConsolePage } from './usage.js';
 import { SettingsConsole } from './settings.js';
@@ -27,6 +28,8 @@ if (location.hash === '#onboarding' && location.pathname !== '/settings') {
   const page =
     pathname === '/projects' ? (
       <ProjectsConsole />
+    ) : pathname === '/specs/review' ? (
+      <ReviewConsole />
     ) : pathname === '/specs' ? (
       <SpecsConsole />
     ) : pathname === '/memory' ? (

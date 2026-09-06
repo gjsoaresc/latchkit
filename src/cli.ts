@@ -75,6 +75,10 @@ import {
   listDiffAnnotations,
   updateDiffAnnotation,
 } from './reviews/diff-annotations.js';
+import {
+  formatDecisionComparisonText,
+  inspectDecisionComparison,
+} from './reviews/decision-comparison.js';
 import { createAcceptanceVerifier } from './acceptance/service.js';
 import {
   addProjectMemory,
@@ -207,6 +211,8 @@ Usage: latchkit <command> [options]
              preview, stage, or roll back a compatible release (never activates on
              stage; console/API/restart handoff and automation are later slices)
   review     Run bounded independent reviews
+  review     Run bounded independent reviews, or compare recorded decisions/consequences/
+             evidence/approval-coverage against a comparison baseline (read-only; see issue #113)
   diff       Inspect a revision-bound Git diff or record review feedback
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
   tool       Inspect or explicitly manage an optional local tool
@@ -331,6 +337,9 @@ Options:
                        for --entry from that same preview
   --expected-task-revision <n> spec-import register: required when updating an
                        already-registered entry (see spec-import reinspect)
+  --format <kind>     review compare: json (default) or text
+  --baseline-revision <n> review compare: an explicitly selected retained task revision to
+                      compare against, in place of the derived previously reviewed snapshot
   --help             Show this help
   --version          Show version
 
@@ -431,6 +440,8 @@ try {
       'manifest-digest': { type: 'string' },
       'source-sha256': { type: 'string' },
       'expected-task-revision': { type: 'string' },
+      format: { type: 'string' },
+      'baseline-revision': { type: 'string' },
     },
   });
   cliValues = values;
@@ -553,7 +564,15 @@ try {
         'to',
         'title',
       ],
-      review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
+      review: [
+        'project',
+        'task',
+        'provider',
+        'prompt',
+        'host-local-authorized',
+        'format',
+        'baseline-revision',
+      ],
       diff: [
         'project',
         'task',
@@ -1365,17 +1384,41 @@ try {
         }
       }
     } else if (command === 'review') {
-      if (extra.length !== 1 || !['run'].includes(extra[0] ?? ''))
-        throw new Error('Usage: latchkit review run [options].');
-      if (!values.task || !values.provider)
-        throw new Error('review run requires --task and --provider.');
-      print(
-        await createReviewOrchestrator({ root }).run({
+      if (extra.length !== 1 || !['run', 'compare'].includes(extra[0] ?? ''))
+        throw new Error('Usage: latchkit review <run|compare> [options].');
+      if (extra[0] === 'compare') {
+        // Issue #113: a read-only, non-mutating comparison of changed decisions and their
+        // consequences for one task. Never launches a provider, never refreshes evidence.
+        if (values.format !== undefined && !['json', 'text'].includes(values.format))
+          throw new Error('--format must be json or text.');
+        const baselineRevision =
+          values['baseline-revision'] === undefined
+            ? undefined
+            : Number(values['baseline-revision']);
+        if (
+          baselineRevision !== undefined &&
+          (!Number.isInteger(baselineRevision) || baselineRevision < 1)
+        )
+          throw new Error('--baseline-revision must be a positive integer task revision.');
+        const report = await inspectDecisionComparison(root, {
           taskId: requiredOption(values.task, 'task'),
-          reviewers: [{ id: values.provider, providerId: values.provider, prompt: values.prompt }],
-          executionAuthorized: values['host-local-authorized'] === true,
-        }),
-      );
+          baselineRevision,
+        });
+        if (values.format === 'text') console.log(formatDecisionComparisonText(report));
+        else print(report);
+      } else {
+        if (!values.task || !values.provider)
+          throw new Error('review run requires --task and --provider.');
+        print(
+          await createReviewOrchestrator({ root }).run({
+            taskId: requiredOption(values.task, 'task'),
+            reviewers: [
+              { id: values.provider, providerId: values.provider, prompt: values.prompt },
+            ],
+            executionAuthorized: values['host-local-authorized'] === true,
+          }),
+        );
+      }
     } else if (command === 'diff') {
       if (
         !['inspect', 'annotations', 'annotate', 'resolve', 'reopen'].includes(extra[0] ?? '') ||

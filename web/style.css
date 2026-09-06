@@ -630,7 +630,34 @@ input:disabled {
 .outcome-unsupported,
 .outcome-skipped,
 .outcome-missing,
-.outcome-stale {
+.outcome-stale,
+.outcome-historical,
+.outcome-unknown-outcome {
+  background: #eee9df;
+  color: #655c4b;
+}
+
+/* Issue #113: decision-comparison change badges reuse the exact verified pill colors above so
+   the review page's contrast matches already-shipped badges in both themes (neither is
+   theme-overridden — see the html.dark rules near evidence-outcome/state-badge). */
+.decision-badge {
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.decision-badge.added {
+  background: #dff4e7;
+  color: #176c3a;
+}
+.decision-badge.removed {
+  background: #fbe4df;
+  color: #96351f;
+}
+.decision-badge.changed,
+.decision-badge.unchanged {
   background: #eee9df;
   color: #655c4b;
 }

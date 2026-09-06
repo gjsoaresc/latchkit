@@ -39,6 +39,30 @@ const CODE_BY_ERROR = new Map([
     'MCP_HEALTH_REFUSED',
     'MCP_HEALTH_INVALID',
   ].map((code) => [code, code] as [string, string]),
+  // Issue #113 exposes #97's spec-decision and #101's result-decision services (previously
+  // CLI-only) over the authenticated local API for the first time, plus the new read-only
+  // decision-comparison view. A stale digest/revision must reach the caller as its real code
+  // (not the generic OPERATION_FAILED/OPERATION_CONFLICT fallback) so the review UI can tell a
+  // "refresh and retry" conflict apart from an actual input error.
+  ...[
+    'RESULT_DECISION_INVALID',
+    'RESULT_DECISION_STATE_INVALID',
+    'RESULT_DECISION_NOT_FOUND',
+    'RESULT_DECISION_REVISION_CONFLICT',
+    'RESULT_DECISION_SNAPSHOT_STALE',
+    'RESULT_DECISION_IDEMPOTENCY_CONFLICT',
+    'RESULT_DECISION_NEW_SCOPE_AUTHORIZATION_REQUIRED',
+    'SPEC_DECISION_INVALID',
+    'SPEC_DECISION_STATE_INVALID',
+    'SPEC_DECISION_NOT_FOUND',
+    'SPEC_DECISION_REVISION_CONFLICT',
+    'SPEC_DECISION_PLAN_STALE',
+    'SPEC_DECISION_NOT_APPROVED',
+    'SPEC_DECISION_IDEMPOTENCY_CONFLICT',
+    'DECISION_COMPARISON_INVALID',
+    'DECISION_COMPARISON_BASELINE_INVALID',
+    'DECISION_COMPARISON_BASELINE_UNAVAILABLE',
+  ].map((code) => [code, code] as [string, string]),
 ]);
 
 export function operationId(): string {
@@ -92,12 +116,14 @@ export function operationalError(
 
 export function statusForError(error: unknown): number {
   const details = errorRecord(error);
+  const code = typeof details.code === 'string' ? details.code : '';
   return (
     (typeof details.status === 'number' ? details.status : undefined) ??
-    (details.conflicts ||
-    /_REVISION_CONFLICT$/.test(typeof details.code === 'string' ? details.code : '') ||
-    (typeof details.code === 'string' && ['SYNC_PLAN_STALE'].includes(details.code))
-      ? 409
-      : 400)
+    // A `*_STALE`/`*_REVISION_CONFLICT` code always means "reload the current state and retry",
+    // never a malformed request — surfacing 409 (not 400) lets callers such as the issue #113
+    // review comparison UI distinguish "refresh and resubmit" from an actual input error. This
+    // also covers RESULT_DECISION_SNAPSHOT_STALE and SPEC_DECISION_PLAN_STALE, which had no HTTP
+    // route before issue #113 added one.
+    (details.conflicts || /_REVISION_CONFLICT$/.test(code) || /_STALE$/.test(code) ? 409 : 400)
   );
 }
