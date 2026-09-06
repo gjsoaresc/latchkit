@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import {
   AgentOutcome,
   WorkflowOutcome,
@@ -29,6 +30,7 @@ function harness() {
   let verificationCalls = 0;
   let implementationGate = null;
   let implementationStarted = null;
+  let onImplementation = null;
   let ignoreImplementationAbort = false;
   let malformedImplementation = false;
   let verificationStarted = null;
@@ -140,6 +142,7 @@ function harness() {
     calls.push({ type: 'launch', phase, plan });
     if (phase === 'implementation') {
       currentSource = source(`implementation-${calls.length}`);
+      await onImplementation?.();
       implementationStarted?.();
       if (implementationGate) {
         if (ignoreImplementationAbort) await implementationGate;
@@ -267,6 +270,9 @@ function harness() {
     ignoreImplementationCancellation() {
       ignoreImplementationAbort = true;
     },
+    onImplementation(callback) {
+      onImplementation = callback;
+    },
     holdVerification() {
       holdVerification = true;
       return new Promise((resolve) => {
@@ -393,6 +399,103 @@ test('disabled workflow usage adds no probes or usage state', async (t) => {
   await assert.rejects(readFile(path.join(root, '.latchkit/usage/state-v1.json')), {
     code: 'ENOENT',
   });
+});
+
+test('a local visual route uses its initial focused checks without planning, review, or evidence reuse', async (t) => {
+  const root = await rootFixture(t);
+  const fixture = harness();
+  let reviews = 0;
+  fixture.review.run = async () => {
+    reviews += 1;
+    throw new Error('local visual route must not review');
+  };
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['fixture', fixture.adapter]]),
+    tasks: fixture.tasks,
+    launch: fixture.launch,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    prompt: 'Change the settings button colour.',
+    providerId: 'fixture',
+    executionAuthorized: true,
+    route: 'visual-local',
+    checksDocument: fixture.checks,
+    verificationMode: 'standard',
+  });
+  const completed = await controller.wait(started.taskId);
+  assert.equal(completed.status, 'verified');
+  assert.equal(completed.route.id, 'visual-local');
+  assert.deepEqual(completed.route.phases, ['implementation', 'verification']);
+  assert.deepEqual(
+    fixture.calls.filter((item) => item.type === 'launch').map((item) => item.phase),
+    ['implementation'],
+  );
+  assert.equal(fixture.verificationCalls, 1);
+  assert.equal(reviews, 0);
+});
+
+test('an actual authorization-path diff escalates a lightweight route through replan, reviewer selection, and completion', async (t) => {
+  const root = await rootFixture(t);
+  execFileSync('git', ['init'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['config', 'user.email', 'fixture@example.invalid'], {
+    cwd: root,
+    windowsHide: true,
+  });
+  execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: root, windowsHide: true });
+  await mkdir(path.join(root, 'src'), { recursive: true });
+  await writeFile(path.join(root, 'src', 'auth.ts'), 'export const policy = 1;\n');
+  execFileSync('git', ['add', '.'], { cwd: root, windowsHide: true });
+  execFileSync('git', ['commit', '-m', 'baseline'], { cwd: root, windowsHide: true });
+  const fixture = harness();
+  fixture.onImplementation(async () => {
+    await writeFile(path.join(root, 'src', 'auth.ts'), 'export const policy = 2;\n');
+    assert.match(
+      execFileSync('git', ['diff', '--name-only', 'HEAD'], { cwd: root, encoding: 'utf8' }),
+      /src\/auth\.ts/,
+    );
+  });
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['fixture', fixture.adapter]]),
+    tasks: fixture.tasks,
+    launch: fixture.launch,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    prompt: 'Change the settings button colour.',
+    providerId: 'fixture',
+    route: 'visual-local',
+    executionAuthorized: true,
+    checksDocument: fixture.checks,
+  });
+  const escalated = await controller.wait(started.taskId);
+  assert.equal(escalated.status, 'blocked');
+  assert.equal(escalated.route.id, 'high-impact', JSON.stringify(escalated.lastOutcome));
+  assert.equal(fixture.verificationCalls, 0);
+  const replanning = await controller.resume({
+    taskId: started.taskId,
+    expectedRevision: escalated.revision,
+    executionAuthorized: true,
+    reviewProviderId: 'codex',
+  });
+  const awaitingApproval = await controller.wait(replanning.taskId);
+  assert.equal(awaitingApproval.status, 'awaiting-approval');
+  const approved = await controller.approve({
+    taskId: awaitingApproval.taskId,
+    expectedRevision: awaitingApproval.revision,
+    planDigest: awaitingApproval.plan.digest,
+    requirementsDigest: awaitingApproval.requirements.digest,
+    checksDigest: awaitingApproval.plan.checksDigest,
+    scope: 'authorization fixture',
+    reference: 'fixture approval',
+  });
+  assert.equal((await controller.wait(approved.taskId)).status, 'verified');
 });
 
 test('workflow usage survives malformed provider business output', async (t) => {

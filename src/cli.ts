@@ -499,6 +499,7 @@ try {
       revision: { type: 'string' },
       mode: { type: 'string' },
       'verification-mode': { type: 'string' },
+      route: { type: 'string' },
       'worktree-root': { type: 'string' },
       'workspace-choice': { type: 'string' },
       execution: { type: 'string' },
@@ -982,6 +983,21 @@ try {
                 !['fast', 'standard'].includes(values['verification-mode'])
               )
                 throw new Error('--verification-mode must be fast or standard.');
+              if (
+                values.route !== undefined &&
+                ![
+                  'answer-only',
+                  'documentation',
+                  'visual-local',
+                  'bug-fix',
+                  'feature',
+                  'refactor',
+                  'maintenance',
+                  'high-impact',
+                  'investigate',
+                ].includes(values.route)
+              )
+                throw new Error('--route must be a supported route ID.');
               result = await controller.run({
                 ...common,
                 taskId: values.task,
@@ -991,6 +1007,9 @@ try {
                 executionAuthorized: values['host-local-authorized'] === true,
                 ...(values['verification-mode']
                   ? { verificationMode: values['verification-mode'] as 'fast' | 'standard' }
+                  : {}),
+                ...(values.route
+                  ? { route: values.route as import('./workflows/routing.js').RouteId }
                   : {}),
                 ...(values.file
                   ? {
@@ -1026,6 +1045,7 @@ try {
                 expectedRevision: expectedRevision!,
                 taskId: requiredOption(values.task, 'task'),
                 prompt: values.prompt,
+                reviewProviderId: values['review-provider'],
                 executionAuthorized: values['host-local-authorized'] === true,
                 ...(decision
                   ? {

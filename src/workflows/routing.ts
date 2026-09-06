@@ -68,37 +68,37 @@ function selection(
   > = {
     'answer-only': { phases: [], requiresApproval: false, requiresIndependentReview: false },
     documentation: {
-      phases: ['implementation', 'verification', 'handoff'],
+      phases: ['implementation', 'verification'],
       requiresApproval: false,
       requiresIndependentReview: false,
     },
     'visual-local': {
-      phases: ['implementation', 'verification', 'handoff'],
+      phases: ['implementation', 'verification'],
       requiresApproval: false,
       requiresIndependentReview: false,
     },
     'bug-fix': {
-      phases: ['implementation', 'verification', 'handoff'],
+      phases: ['implementation', 'verification'],
       requiresApproval: false,
       requiresIndependentReview: false,
     },
     feature: {
-      phases: ['requirements', 'plan', 'implementation', 'verification', 'handoff'],
+      phases: ['requirements', 'plan', 'implementation', 'verification'],
       requiresApproval: true,
       requiresIndependentReview: false,
     },
     refactor: {
-      phases: ['plan', 'implementation', 'verification', 'handoff'],
+      phases: ['plan', 'implementation', 'verification'],
       requiresApproval: true,
       requiresIndependentReview: false,
     },
     maintenance: {
-      phases: ['plan', 'implementation', 'verification', 'handoff'],
+      phases: ['plan', 'implementation', 'verification'],
       requiresApproval: true,
       requiresIndependentReview: false,
     },
     'high-impact': {
-      phases: ['requirements', 'plan', 'implementation', 'verification', 'review', 'handoff'],
+      phases: ['requirements', 'plan', 'implementation', 'verification', 'review'],
       requiresApproval: true,
       requiresIndependentReview: true,
     },
@@ -111,7 +111,7 @@ function selection(
   const profile = base[id];
   const phases = [...profile.phases];
   if (mandatoryPlan && !phases.includes('plan')) phases.unshift('plan');
-  if (mandatoryReview && !phases.includes('review')) phases.splice(-1, 0, 'review');
+  if (mandatoryReview && !phases.includes('review')) phases.push('review');
   return {
     id,
     policyVersion: ROUTING_POLICY_VERSION,
@@ -126,7 +126,11 @@ function selection(
 /** Select a route from multiple signals.  It intentionally never uses size or
  * adjectives such as "tiny"/"quick" as a safety signal. */
 export function selectRoute(input: RouteSelectionInput): RouteSelection {
-  const context = [input.request, ...(input.criteria ?? [])].join('\n');
+  // Paths are a risk signal, not a file-extension classifier: an auth or
+  // migration path cannot be made lightweight by benign request wording.
+  const context = [input.request, ...(input.criteria ?? []), ...(input.changedPaths ?? [])].join(
+    '\n',
+  );
   const paths = input.changedPaths;
   const forced = input.requestedRoute;
   if (highImpact.test(context))
