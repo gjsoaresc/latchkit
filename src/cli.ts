@@ -127,6 +127,11 @@ import {
 import { listProjects, registerProject, removeProject } from './projects/service.js';
 import { defaultProjectsRegistryRoot } from './projects/store.js';
 import { discoverSpecImport, previewSpecImport } from './spec-imports/service.js';
+import {
+  detachSpecImportRegistration,
+  registerSpecImport,
+  reinspectSpecImportRegistrations,
+} from './spec-imports/registration-service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -215,7 +220,11 @@ Usage: latchkit <command> [options]
              for the browser console's onboarding page); prints state and exits, no prompts
   projects   List, add, or remove a project in the user-local multi-project overview registry
   spec-import Explicitly discover or preview foreign spec artifacts (Spec Kit, OpenSpec, and
-             TinySpec; see issue #114) under a selected local root; read-only, creates nothing
+             TinySpec; see issue #114) under a selected local root; discover/preview are
+             read-only and create nothing. register/reinspect/detach bind a selected,
+             previewed entry into existing task state (an ordinary task plus one imported
+             observation record), reinspect its registered snapshot, or remove only
+             Latchkit's association — never the source file
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -227,7 +236,8 @@ Options:
   --dry-run           migrate/recover/sync: preview without writing files
   --task <id>         task: stable task identifier
   --verification-mode <mode> task/workflow: fast or standard; verification/onboarding: project default
-  --expected-revision <n>  task resume/cancel/result-approve/-notes/-defer: optimistic revision
+  --expected-revision <n>  task resume/cancel/result-approve/-notes/-defer: optimistic revision;
+                       also spec-import detach: optimistic registration revision
   --mutation-id <id>  task mutation: retry-safe event identifier
   --branch <name>     workspace create: explicit new branch name
   --revision <ref>    workspace create: base commit (default: HEAD)
@@ -242,7 +252,9 @@ Options:
   --host-local-authorized  task start/resume: authorize host-local execution
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
-  --id <id>           memory: stable memory identifier; also projects remove: registered project ID
+  --id <id>           memory: stable memory identifier; also projects remove: registered
+                       project ID; also spec-import reinspect/detach: registration ID
+                       (reinspect: all when omitted)
   --text <text>       memory: concise memory text or search query; also spec decision-notes
                        and task result-approve/-notes: notes or acceptance text
   --kind <kind>       memory add: decision, discovery, constraint, resolved-defect;
@@ -310,8 +322,15 @@ Options:
   --tool-root <path>  tool fcc: recorded user-local FCC tool directory
   --python <path>     tool fcc install: explicit Python 3.14+ runtime
   --uv <path>         tool fcc install: explicit uv 0.11.16+ lock installer
-  --root <path>       spec-import: local root to scan (contains a "specs" directory)
+  --root <path>       spec-import: local root to scan (contains a "specs" directory); for
+                       register, must be the Latchkit project or a subdirectory of it
   --adapter <id>      spec-import: adapter ID ("spec-kit", "openspec", or "tinyspec")
+  --entry <id>        spec-import register: the entry ID selected from a prior preview
+  --manifest-digest <sha256> spec-import register: exact manifestDigest from that preview
+  --source-sha256 <sha256> spec-import register: exact wouldCreate[].importSource.sha256
+                       for --entry from that same preview
+  --expected-task-revision <n> spec-import register: required when updating an
+                       already-registered entry (see spec-import reinspect)
   --help             Show this help
   --version          Show version
 
@@ -408,6 +427,10 @@ try {
       root: { type: 'string' },
       adapter: { type: 'string' },
       'preview-digest': { type: 'string' },
+      entry: { type: 'string' },
+      'manifest-digest': { type: 'string' },
+      'source-sha256': { type: 'string' },
+      'expected-task-revision': { type: 'string' },
     },
   });
   cliValues = values;
@@ -603,7 +626,17 @@ try {
         'verification-mode',
       ],
       projects: ['project', 'id', 'title'],
-      'spec-import': ['project', 'root', 'adapter'],
+      'spec-import': [
+        'project',
+        'root',
+        'adapter',
+        'entry',
+        'manifest-digest',
+        'source-sha256',
+        'expected-task-revision',
+        'id',
+        'expected-revision',
+      ],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -1877,20 +1910,64 @@ try {
         );
       else print(await removeProject(registryRoot, requiredOption(values.id, 'id')));
     } else if (command === 'spec-import') {
+      const specImportActions = ['discover', 'preview', 'register', 'reinspect', 'detach'];
       const action = extra[0];
-      if (extra.length !== 1 || !action || !['discover', 'preview'].includes(action))
-        throw new Error(
-          'Usage: latchkit spec-import <discover|preview> --root <path> [--adapter <id>].',
+      if (extra.length !== 1 || !action || !specImportActions.includes(action))
+        throw new Error(`Usage: latchkit spec-import <${specImportActions.join('|')}> [options].`);
+      if (action === 'discover' || action === 'preview') {
+        const options = {
+          adapter: values.adapter,
+          root: path.resolve(requiredOption(values.root, 'root')),
+        };
+        print(
+          action === 'discover'
+            ? await discoverSpecImport(options.root, { adapter: options.adapter })
+            : await previewSpecImport(options.root, { adapter: options.adapter }),
         );
-      const options = {
-        adapter: values.adapter,
-        root: path.resolve(requiredOption(values.root, 'root')),
-      };
-      print(
-        action === 'discover'
-          ? await discoverSpecImport(options.root, { adapter: options.adapter })
-          : await previewSpecImport(options.root, { adapter: options.adapter }),
-      );
+      } else if (action === 'register') {
+        const expectedTaskRevision =
+          values['expected-task-revision'] === undefined
+            ? undefined
+            : Number(values['expected-task-revision']);
+        if (
+          expectedTaskRevision !== undefined &&
+          (!Number.isInteger(expectedTaskRevision) || expectedTaskRevision < 1)
+        )
+          throw new Error('--expected-task-revision must be a positive integer.');
+        print(
+          await registerSpecImport(root, {
+            sourceRoot: path.resolve(requiredOption(values.root, 'root')),
+            adapter: values.adapter,
+            entryId: requiredOption(values.entry, 'entry'),
+            manifestDigest: requiredOption(values['manifest-digest'], 'manifest-digest'),
+            sourceSha256: requiredOption(values['source-sha256'], 'source-sha256'),
+            ...(expectedTaskRevision !== undefined ? { expectedTaskRevision } : {}),
+          }),
+        );
+      } else if (action === 'reinspect') {
+        print(
+          await reinspectSpecImportRegistrations(root, {
+            ...(values.id ? { id: values.id } : {}),
+          }),
+        );
+      } else {
+        const expectedRevision =
+          values['expected-revision'] === undefined
+            ? undefined
+            : Number(values['expected-revision']);
+        if (
+          expectedRevision === undefined ||
+          !Number.isInteger(expectedRevision) ||
+          expectedRevision < 1
+        )
+          throw new Error('spec-import detach requires --expected-revision.');
+        print(
+          await detachSpecImportRegistration(root, {
+            id: requiredOption(values.id, 'id'),
+            expectedRevision,
+          }),
+        );
+      }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);
       if (!Number.isInteger(port) || port < 0 || port > 65535)

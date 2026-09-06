@@ -155,9 +155,16 @@ export async function discoverSpecImport(
   return summarize(manifest);
 }
 
-/** Computed over the manifest exactly as returned; stable for identical source bytes and limits. */
+/**
+ * Computed over the manifest exactly as returned, except `discoveredAt`: a wall-clock
+ * timestamp that would otherwise make this digest change on every call regardless of source
+ * bytes, defeating its documented purpose (and the registration increment's freshness check,
+ * which binds to this exact value — see docs/spec-imports.md). Stable for identical source
+ * bytes and limits; changes when either changes.
+ */
 export function computeManifestDigest(manifest: SpecImportManifest): string {
-  return createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
+  const stable = { ...manifest, discoveredAt: undefined };
+  return createHash('sha256').update(JSON.stringify(stable)).digest('hex');
 }
 
 function titleFromSlug(slug: string): string {

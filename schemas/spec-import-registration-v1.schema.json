@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/spec-import-registration-v1.schema.json",
+  "title": "Latchkit spec-import registration association store v1 (issue #114, registration increment)",
+  "description": "Persisted at .latchkit/spec-imports/registrations-v1.json. Tracks which discovered spec-import entry is bound to which Latchkit task/task-record; never contains a copy of the source artifact itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "registrations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "registrations": { "type": "array", "items": { "$ref": "#/$defs/registration" } }
+  },
+  "$defs": {
+    "relativePath": { "type": "string", "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$)).+" },
+    "projectRelativeRootPath": {
+      "type": "string",
+      "pattern": "^$|^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.?(?:/|$)).+"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "historyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "action",
+        "manifestDigest",
+        "entryDirectory",
+        "primaryArtifact",
+        "taskId",
+        "recordId",
+        "at"
+      ],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "action": { "enum": ["registered", "revised", "detached"] },
+        "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "entryDirectory": { "$ref": "#/$defs/relativePath" },
+        "primaryArtifact": { "$ref": "#/$defs/artifact" },
+        "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recordId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "status",
+        "adapter",
+        "sourceRoot",
+        "entryId",
+        "entryDirectory",
+        "manifestDigest",
+        "primaryArtifact",
+        "taskId",
+        "recordId",
+        "registeredAt",
+        "updatedAt",
+        "detachedAt",
+        "history"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": { "enum": ["registered", "detached"] },
+        "adapter": { "enum": ["spec-kit", "openspec", "tinyspec"] },
+        "sourceRoot": { "$ref": "#/$defs/projectRelativeRootPath" },
+        "entryId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "entryDirectory": { "$ref": "#/$defs/relativePath" },
+        "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "primaryArtifact": { "$ref": "#/$defs/artifact" },
+        "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recordId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "detachedAt": { "type": ["string", "null"], "format": "date-time" },
+        "history": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/historyEntry" },
+          "maxItems": 40
+        }
+      }
+    }
+  }
+}

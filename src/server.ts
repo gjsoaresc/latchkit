@@ -59,6 +59,11 @@ import {
 import { providerById } from './providers/registry.js';
 import { discoverSpecImport, previewSpecImport } from './spec-imports/service.js';
 import {
+  detachSpecImportRegistration,
+  registerSpecImport,
+  reinspectSpecImportRegistrations,
+} from './spec-imports/registration-service.js';
+import {
   configureUsage,
   deleteUsage,
   exportUsage,
@@ -774,6 +779,59 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
             pathname.endsWith('/discover')
               ? await discoverSpecImport(sourceRoot, { adapter })
               : await previewSpecImport(sourceRoot, { adapter }),
+          );
+          // Spec-import registration (#114, registration increment): binds a selected,
+          // previewed entry into this console's own project task state. Mutating, so it is
+          // serialized through the same pendingMutation queue as every other task-state write.
+        } else if (pathname === '/api/spec-imports/register' && req.method === 'POST') {
+          const body = await readJson<{
+            sourceRoot?: string;
+            adapter?: string;
+            entryId?: string;
+            manifestDigest?: string;
+            sourceSha256?: string;
+            expectedTaskRevision?: number;
+          }>(req);
+          if (!body.sourceRoot) throw fail(400, 'sourceRoot is required.');
+          if (!body.entryId) throw fail(400, 'entryId is required.');
+          if (!body.manifestDigest) throw fail(400, 'manifestDigest is required.');
+          if (!body.sourceSha256) throw fail(400, 'sourceSha256 is required.');
+          respond(
+            res,
+            200,
+            await serialize(() =>
+              registerSpecImport(root, {
+                sourceRoot: body.sourceRoot!,
+                adapter: body.adapter,
+                entryId: body.entryId!,
+                manifestDigest: body.manifestDigest!,
+                sourceSha256: body.sourceSha256!,
+                ...(body.expectedTaskRevision !== undefined
+                  ? { expectedTaskRevision: body.expectedTaskRevision }
+                  : {}),
+              }),
+            ),
+          );
+        } else if (pathname === '/api/spec-imports/reinspect' && req.method === 'GET') {
+          await pendingMutation;
+          const id = requestUrl.searchParams.get('id') ?? undefined;
+          respond(res, 200, {
+            registrations: await reinspectSpecImportRegistrations(root, { id }),
+          });
+        } else if (pathname === '/api/spec-imports/detach' && req.method === 'POST') {
+          const body = await readJson<{ id?: string; expectedRevision?: number }>(req);
+          if (!body.id) throw fail(400, 'id is required.');
+          if (!Number.isInteger(body.expectedRevision))
+            throw fail(400, 'expectedRevision is required.');
+          respond(
+            res,
+            200,
+            await serialize(() =>
+              detachSpecImportRegistration(root, {
+                id: body.id!,
+                expectedRevision: body.expectedRevision as number,
+              }),
+            ),
           );
         } else {
           throw fail(404, 'API route or method not found.');
