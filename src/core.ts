@@ -38,6 +38,7 @@ import {
 } from './rules/ownership.js';
 import { errorMessage, type JsonValue } from './types.js';
 import type { ProjectInstructionModel, RuleExportWarning } from './rules/types.js';
+import { CODEGRAPH_RESOURCE_DESCRIPTORS } from './integrations/codegraph/service.js';
 
 export {
   PROVIDERS,
@@ -155,6 +156,7 @@ async function registryFor(
     // A malformed configuration is reported by the caller; recovery still covers known resources.
   }
   return createResourceRegistry([
+    ...CODEGRAPH_RESOURCE_DESCRIPTORS,
     ...[
       ...new Set([
         ...Object.keys(manifest.files),

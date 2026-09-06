@@ -23,6 +23,9 @@
     "LICENSE",
     "README.md"
   ],
+  "optionalDependencies": {
+    "@colbymchenry/codegraph": "1.6.0"
+  },
   "scripts": {
     "start": "npm run build && node dist/src/cli.js ui",
     "tools:compile": "node node_modules/typescript/bin/tsc --project tsconfig.tools.json",
