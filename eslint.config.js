@@ -13,7 +13,9 @@ export default [
       'web/**/*.ts',
       'web/**/*.tsx',
       'scripts/**/*.js',
+      'scripts/**/*.ts',
       'test/**/*.js',
+      'test/**/*.ts',
     ],
     languageOptions: {
       ecmaVersion: 'latest',

@@ -9,7 +9,12 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '..');
+export function benchmarkRepositoryRoot(moduleDirectory = here): string {
+  return path.basename(path.dirname(moduleDirectory)) === 'dist'
+    ? path.resolve(moduleDirectory, '..', '..')
+    : path.resolve(moduleDirectory, '..');
+}
+const root = benchmarkRepositoryRoot();
 const nodePath = process.execPath;
 const packs = 1_000;
 const memories = 10_000;
@@ -17,21 +22,54 @@ const diffFiles = 300;
 const heavyRuns = 3;
 const startupRuns = 7;
 
-const sha256 = (value) => createHash('sha256').update(value).digest('hex');
-const git = (directory, args) => execFile('git', ['-C', directory, ...args], { windowsHide: true });
-const now = () => new Date().toISOString();
-const toMilliseconds = (start) => Number(process.hrtime.bigint() - start) / 1_000_000;
+type BenchmarkOptions = { app?: string; output: string; profileSync: boolean };
+type JsonRecord = Record<string, unknown>;
+type Receipt = { path: string; sha256: string };
+type BundleManifest = JsonRecord & {
+  schemaVersion: number;
+  package: string;
+  version: string;
+  target: string;
+  nodeVersion: string;
+  commit: string;
+  dirty: boolean;
+  files: unknown[];
+  packages: unknown[];
+};
+type Metric = {
+  durationMs: number;
+  rssAfterBytes: number;
+  resourceUsageMaxRssBytes: number;
+} & JsonRecord;
+type ApplicationApi = Pick<typeof import('../src/core.js'), 'initProject' | 'syncProject'> &
+  Pick<typeof import('../src/project-memory/contracts.js'), 'validateProjectMemory'> &
+  Pick<typeof import('../src/project-memory/service.js'), 'searchProjectMemory'> &
+  Pick<typeof import('../src/project-memory/store.js'), 'writeProjectMemory'> &
+  Pick<typeof import('../src/reviews/diff-annotations.js'), 'inspectDiff'> &
+  Pick<typeof import('../src/task-state/service.js'), 'createTask'> &
+  Pick<typeof import('../src/workspaces/git.js'), 'createTaskWorkspace'>;
+type BenchmarkContext = { app: string; dist: string; runtime: string };
 
-function isRecord(value) {
+const errorCode = (error: unknown) =>
+  isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+const git = (directory: string, args: string[]) =>
+  execFile('git', ['-C', directory, ...args], { windowsHide: true });
+const now = () => new Date().toISOString();
+const toMilliseconds = (start: bigint) => Number(process.hrtime.bigint() - start) / 1_000_000;
+
+function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function samePath(left, right) {
+function samePath(left: string, right: string) {
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
-export function parseBenchmarkOptions(args, repository = root) {
-  const options = {
+export function parseBenchmarkOptions(args: string[], repository = root): BenchmarkOptions {
+  const options: BenchmarkOptions = {
     app: undefined,
     output: path.join(repository, '.github', 'release-evidence', 'rc2', 'benchmarks-windows.json'),
     profileSync: false,
@@ -49,49 +87,55 @@ export function parseBenchmarkOptions(args, repository = root) {
     if (supplied.has(argument)) throw new Error(`${argument} can be supplied only once.`);
     const value = args[++index];
     if (!value || value.startsWith('--')) throw new Error(`${argument} needs a value.`);
-    options[argument.slice(2)] = path.resolve(value);
+    if (argument === '--app') options.app = path.resolve(value);
+    else options.output = path.resolve(value);
     supplied.add(argument);
   }
   return options;
 }
 
-async function requiredFile(filename, description) {
+async function requiredFile(filename: string, description: string) {
   let stat;
   try {
     stat = await fs.lstat(filename);
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error(`${description} is missing: ${filename}`);
+    if (errorCode(error) === 'ENOENT') throw new Error(`${description} is missing: ${filename}`);
     throw error;
   }
   if (!stat.isFile() || stat.isSymbolicLink())
     throw new Error(`${description} must be a regular file.`);
 }
 
-async function readJson(filename, description) {
+async function readJson(filename: string, description: string): Promise<JsonRecord> {
   try {
     const value = JSON.parse(await fs.readFile(filename, 'utf8'));
     if (!isRecord(value)) throw new Error('not an object');
     return value;
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error(`${description} is missing: ${filename}`);
-    if (error instanceof SyntaxError || error.message === 'not an object')
+    if (errorCode(error) === 'ENOENT') throw new Error(`${description} is missing: ${filename}`);
+    if (error instanceof SyntaxError || errorText(error) === 'not an object')
       throw new Error(`${description} is not a JSON object.`);
     throw error;
   }
 }
 
-function manifestFile(manifest, relative) {
-  const entry = manifest.files.find((item) => isRecord(item) && item.path === relative);
+function manifestFile(manifest: BundleManifest, relative: string): Receipt {
+  const entry = manifest.files.find(
+    (item): item is JsonRecord => isRecord(item) && item.path === relative,
+  );
   if (!entry || typeof entry.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(entry.sha256))
     throw new Error(`Bundle manifest has no valid receipt for ${relative}.`);
-  return entry;
+  return { path: relative, sha256: entry.sha256 };
 }
 
 /** Validates an extracted or installed standalone app directory without claiming archive provenance. */
-export async function validateStandaloneApp(app, { callerNode = process.execPath } = {}) {
+export async function validateStandaloneApp(
+  app: string,
+  { callerNode = process.execPath }: { callerNode?: string } = {},
+) {
   const application = path.resolve(app);
   const applicationStat = await fs.lstat(application).catch((error) => {
-    if (error.code === 'ENOENT')
+    if (errorCode(error) === 'ENOENT')
       throw new Error(`Standalone app directory is missing: ${application}`);
     throw error;
   });
@@ -99,7 +143,7 @@ export async function validateStandaloneApp(app, { callerNode = process.execPath
     throw new Error('--app must name a regular standalone app directory.');
   const bundle = path.dirname(application);
   const manifestPath = path.join(bundle, 'bundle-manifest.json');
-  const manifest = await readJson(manifestPath, 'Adjacent bundle manifest');
+  const manifest = (await readJson(manifestPath, 'Adjacent bundle manifest')) as BundleManifest;
   const target = `${process.platform}-${process.arch}`;
   if (
     manifest.schemaVersion !== 1 ||
@@ -133,7 +177,7 @@ export async function validateStandaloneApp(app, { callerNode = process.execPath
   }
   const executable = process.platform === 'win32' ? 'node.exe' : 'node';
   const runtime = path.join(bundle, 'runtime', executable);
-  const receipts = [
+  const receipts: Array<[string, string]> = [
     ['app/package.json', path.join(application, 'package.json')],
     ['app/dist/package.json', path.join(application, 'dist', 'package.json')],
     ['app/dist/src/cli.js', path.join(application, 'dist', 'src', 'cli.js')],
@@ -177,8 +221,19 @@ export async function validateStandaloneApp(app, { callerNode = process.execPath
   };
 }
 
-async function loadApplicationModules(dist) {
-  const load = (relative) => import(pathToFileURL(path.join(dist, ...relative.split('/'))).href);
+function exportedFunction(
+  module: JsonRecord,
+  name: keyof ApplicationApi,
+): ApplicationApi[keyof ApplicationApi] {
+  const value = module[name];
+  if (typeof value !== 'function')
+    throw new Error(`Emitted application module has no ${name} function.`);
+  return value as ApplicationApi[keyof ApplicationApi];
+}
+
+async function loadApplicationModules(dist: string): Promise<ApplicationApi> {
+  const load = (relative: string) =>
+    import(pathToFileURL(path.join(dist, ...relative.split('/'))).href);
   const [core, contracts, memory, memoryStore, reviews, tasks, workspaces] = await Promise.all([
     load('src/core.js'),
     load('src/project-memory/contracts.js'),
@@ -189,18 +244,18 @@ async function loadApplicationModules(dist) {
     load('src/workspaces/git.js'),
   ]);
   return {
-    initProject: core.initProject,
-    syncProject: core.syncProject,
-    validateProjectMemory: contracts.validateProjectMemory,
-    searchProjectMemory: memory.searchProjectMemory,
-    writeProjectMemory: memoryStore.writeProjectMemory,
-    inspectDiff: reviews.inspectDiff,
-    createTask: tasks.createTask,
-    createTaskWorkspace: workspaces.createTaskWorkspace,
-  };
+    initProject: exportedFunction(core as JsonRecord, 'initProject'),
+    syncProject: exportedFunction(core as JsonRecord, 'syncProject'),
+    validateProjectMemory: exportedFunction(contracts as JsonRecord, 'validateProjectMemory'),
+    searchProjectMemory: exportedFunction(memory as JsonRecord, 'searchProjectMemory'),
+    writeProjectMemory: exportedFunction(memoryStore as JsonRecord, 'writeProjectMemory'),
+    inspectDiff: exportedFunction(reviews as JsonRecord, 'inspectDiff'),
+    createTask: exportedFunction(tasks as JsonRecord, 'createTask'),
+    createTaskWorkspace: exportedFunction(workspaces as JsonRecord, 'createTaskWorkspace'),
+  } as ApplicationApi;
 }
 
-function statistics(samples) {
+function statistics(samples: Metric[]) {
   const durations = samples.map((sample) => sample.durationMs).sort((left, right) => left - right);
   const percentile = Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1);
   return {
@@ -225,13 +280,16 @@ function memorySnapshot() {
   };
 }
 
-async function measure(operation) {
+async function measure<T extends JsonRecord>(operation: () => Promise<T>): Promise<Metric & T> {
   const start = process.hrtime.bigint();
   const details = await operation();
   return { durationMs: toMilliseconds(start), ...memorySnapshot(), ...details };
 }
 
-async function temporary(prefix, operation) {
+async function temporary<T>(
+  prefix: string,
+  operation: (directory: string) => Promise<T>,
+): Promise<T> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
     return await operation(directory);
@@ -240,7 +298,7 @@ async function temporary(prefix, operation) {
   }
 }
 
-async function createLargePack(base) {
+async function createLargePack(base: string): Promise<string> {
   const packRoot = path.join(base, 'large-pack');
   const files = [];
   await fs.mkdir(packRoot, { recursive: true });
@@ -271,7 +329,7 @@ async function createLargePack(base) {
   return packRoot;
 }
 
-async function largePackSync(packRoot, application, profileSync) {
+async function largePackSync(packRoot: string, application: ApplicationApi, profileSync: boolean) {
   return temporary('latchkit-bench-pack-', async (base) => {
     const project = path.join(base, 'project');
     await fs.mkdir(project);
@@ -289,7 +347,13 @@ async function largePackSync(packRoot, application, profileSync) {
     });
     return measure(async () => {
       const started = process.hrtime.bigint();
-      const profile = {
+      const profile: {
+        journalMs: number | null;
+        firstResourceMs: number | null;
+        lastResourceMs: number | null;
+        manifestMs: number | null;
+        resourceCount: number;
+      } = {
         journalMs: null,
         firstResourceMs: null,
         lastResourceMs: null,
@@ -300,9 +364,11 @@ async function largePackSync(packRoot, application, profileSync) {
         project,
         profileSync
           ? {
-              faultBoundary: (boundary, journal) => {
+              faultBoundary: (boundary: string, journal: unknown) => {
                 const elapsed = toMilliseconds(started);
                 if (boundary === 'journal') {
+                  if (!isRecord(journal) || !Array.isArray(journal.resources))
+                    throw new Error('Benchmark sync journal has an invalid resource list.');
                   profile.journalMs = elapsed;
                   profile.resourceCount = journal.resources.length;
                 } else if (boundary === 'resource:0') profile.firstResourceMs = elapsed;
@@ -321,11 +387,11 @@ async function largePackSync(packRoot, application, profileSync) {
   });
 }
 
-function benchmarkUuid(index) {
+function benchmarkUuid(index: number) {
   return `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
 }
 
-function memoryState(application) {
+function memoryState(application: ApplicationApi) {
   const at = '2026-01-01T00:00:00.000Z';
   const state = {
     schemaVersion: 1,
@@ -351,7 +417,7 @@ function memoryState(application) {
   return application.validateProjectMemory(state);
 }
 
-async function largeMemorySearch(application) {
+async function largeMemorySearch(application: ApplicationApi) {
   return temporary('latchkit-bench-memory-', async (project) => {
     await application.writeProjectMemory(project, memoryState(application));
     return measure(async () => {
@@ -363,7 +429,7 @@ async function largeMemorySearch(application) {
   });
 }
 
-async function diffFixture(application) {
+async function diffFixture(application: ApplicationApi) {
   return temporary('latchkit-bench-diff-', async (base) => {
     const project = path.join(base, 'project');
     await fs.mkdir(project);
@@ -393,7 +459,7 @@ async function diffFixture(application) {
   });
 }
 
-async function cliVersion(context) {
+async function cliVersion(context: BenchmarkContext): Promise<Metric> {
   const cli = pathToFileURL(path.join(context.dist, 'src', 'cli.js')).href;
   const source = [
     'const started = process.hrtime.bigint();',
@@ -409,7 +475,15 @@ async function cliVersion(context) {
   });
   const marker = stdout.split(/\r?\n/).find((line) => line.startsWith('__LATCHKIT_BENCHMARK__'));
   if (!marker) throw new Error('CLI benchmark child emitted no metric marker.');
-  return JSON.parse(marker.slice('__LATCHKIT_BENCHMARK__'.length));
+  const value: unknown = JSON.parse(marker.slice('__LATCHKIT_BENCHMARK__'.length));
+  if (
+    !isRecord(value) ||
+    !['durationMs', 'rssAfterBytes', 'resourceUsageMaxRssBytes'].every(
+      (key) => typeof value[key] === 'number',
+    )
+  )
+    throw new Error('CLI benchmark child emitted invalid metrics.');
+  return value as Metric;
 }
 
 async function main() {
@@ -431,19 +505,19 @@ async function main() {
         archive: 'not applicable',
       };
   const application = await loadApplicationModules(context.dist);
-  const startup = [];
+  const startup: Metric[] = [];
   for (let index = 0; index < startupRuns; index += 1) startup.push(await cliVersion(context));
   const packResults = await temporary('latchkit-bench-pack-source-', async (base) => {
     const pack = await createLargePack(base);
-    const samples = [];
+    const samples: Metric[] = [];
     for (let index = 0; index < heavyRuns; index += 1)
       samples.push(await largePackSync(pack, application, options.profileSync));
     return statistics(samples);
   });
-  const memoryResults = [];
+  const memoryResults: Metric[] = [];
   for (let index = 0; index < heavyRuns; index += 1)
     memoryResults.push(await largeMemorySearch(application));
-  const diffResults = [];
+  const diffResults: Metric[] = [];
   for (let index = 0; index < heavyRuns; index += 1)
     diffResults.push(await diffFixture(application));
   const evidence = {
