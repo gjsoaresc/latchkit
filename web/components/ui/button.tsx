@@ -12,7 +12,12 @@ const buttonVariants = cva(
         outline:
           'button-secondary border border-input bg-background hover:bg-accent hover:text-accent-foreground',
         ghost: 'hover:bg-accent hover:text-accent-foreground',
-        destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90',
+        // A dedicated `button-destructive` class (mirroring button-primary/button-secondary)
+        // gets an explicit, theme-verified hover color in style.css instead of Tailwind's
+        // fractional-opacity hover utility: blending a translucent color over whatever surface
+        // sits behind the button is unpredictable across themes and previously dropped hover
+        // contrast below WCAG AA in dark mode (issue #90).
+        destructive: 'button-destructive bg-destructive text-destructive-foreground',
       },
       size: { default: 'min-h-10 px-4 py-2', icon: 'size-10' },
     },

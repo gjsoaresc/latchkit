@@ -19,6 +19,9 @@ test('the onboarding console drives project, agents, workspace, verification, us
   const { server, url } = await startServer(root);
   try {
     await page.goto(url);
+    // Onboarding (#100) now lives on the directly addressable Settings page (issue #90); the
+    // session token established at the root URL carries over via sessionStorage.
+    await page.goto(`${new URL(url).origin}/settings`);
     const onboarding = page.locator('#onboarding');
     // The full wizard renders only while the Onboarding page is selected; the
     // default page shows a compact card that links to it.
@@ -68,11 +71,14 @@ test('the onboarding console drives project, agents, workspace, verification, us
     await onboarding.getByRole('button', { name: 'Finish onboarding' }).click();
     await expect(onboarding.getByText('COMPLETED')).toBeVisible();
 
-    const report = await new AxeBuilder({ page })
-      .include('#onboarding')
-      .disableRules(['color-contrast'])
-      .analyze();
+    const report = await new AxeBuilder({ page }).include('#onboarding').analyze();
     expect(report.violations).toEqual([]);
+
+    await page.getByRole('button', { name: 'Theme: system' }).click();
+    await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    const darkReport = await new AxeBuilder({ page }).include('#onboarding').analyze();
+    expect(darkReport.violations).toEqual([]);
   } finally {
     await new Promise((resolve) => {
       server.close(resolve);

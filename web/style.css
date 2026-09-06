@@ -216,6 +216,46 @@ h1 > span {
   line-height: 1.8;
   margin: 23px 0 0;
 }
+/* Secondary pages (Settings, Specs & Tasks, Memory, Usage) use a smaller page-title hero than
+   the Overview page's large marketing-style intro, since they hold several content sections of
+   their own below it (issue #90: one visual system, sized to each page's role). */
+.intro-compact {
+  padding: 40px 0 30px;
+}
+.intro-compact h1 {
+  font-size: clamp(28px, 3.4vw, 40px);
+  letter-spacing: -1.2px;
+}
+.intro-compact .intro-copy {
+  max-width: 62ch;
+}
+.page-links-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+.page-link-card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.page-link-card:hover {
+  border-color: #a3b39c;
+}
+.page-link-card strong {
+  font-size: 14px;
+  letter-spacing: -0.2px;
+}
+.page-link-card .section-note {
+  margin: 0;
+}
 .workspace-card {
   width: 308px;
   min-width: 240px;
@@ -829,6 +869,9 @@ input:disabled {
 .button-secondary:hover:not(:disabled) {
   background: #fff;
 }
+.button-destructive:hover:not(:disabled) {
+  background: #8f3d2b;
+}
 .button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -1019,6 +1062,8 @@ footer {
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    row-gap: 6px;
     padding: 18px 24px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -1038,6 +1083,8 @@ footer {
   }
   nav {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 4px;
   }
   .nav-item {
@@ -1330,6 +1377,7 @@ html.dark .workspace-card,
 html.dark .summary-card,
 html.dark .provider-card,
 html.dark .skill-card,
+html.dark .page-link-card,
 html.dark .sync-toolbar,
 html.dark .plan-panel,
 html.dark .task-card,
@@ -1341,6 +1389,7 @@ html.dark .evidence-row {
 
 html.dark .provider-card:hover,
 html.dark .skill-card:hover,
+html.dark .page-link-card:hover,
 html.dark .nav-item:hover,
 html.dark .button-secondary:hover:not(:disabled),
 html.dark [data-slot='dropdown-menu-radio-item']:focus {
@@ -1362,6 +1411,12 @@ html.dark .button-primary {
 
 html.dark .button-primary:hover:not(:disabled) {
   background: #bfd5b7;
+}
+
+html.dark .button-destructive:hover:not(:disabled) {
+  /* Verified >= 4.5:1 against the dark --destructive-foreground text (contrast ~8.2:1),
+     unlike the previous fractional-opacity hover, which blended toward the dark card behind it. */
+  background: #e79c88;
 }
 
 html.dark .button-secondary,
@@ -1387,6 +1442,23 @@ html.dark .conflicts {
   background: #3a241f;
   color: #ffd6c9;
   border-color: #8b5142;
+}
+
+/* The sync/onboarding plan panel's file-change labels had no dark-theme colors at all, so they
+   fell back to their light-mode values against the dark panel background (issue #90). */
+html.dark .change-action {
+  color: var(--green);
+}
+html.dark .action-update {
+  color: #e0b374;
+}
+html.dark .action-remove {
+  color: var(--destructive);
+}
+html.dark .change-path,
+html.dark .empty-plan,
+html.dark .plan-footer > p {
+  color: var(--muted);
 }
 
 html.dark .section-note,
