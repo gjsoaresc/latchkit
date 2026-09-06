@@ -197,6 +197,50 @@ The expected result is a reproduction attempt before repair, a focused
 regression check where practical, and a note distinguishing verified cause from
 hypotheses. A non-reproducible defect remains unresolved.
 
+### Execution completion and the end-of-execution result decision
+
+Both `latchkit-build` and `latchkit-fix` close the same way: at the end of
+execution, do not just stop silently. Present a reviewable result — what
+changed, links to the relevant diff/artifacts, completed acceptance criteria,
+actual verification results, and remaining gaps — and offer exactly three
+choices: approve the result, add notes requesting changes, or review later.
+This is the closing counterpart to the [plan-only end-of-spec
+decision](#plan-only-request-and-the-end-of-spec-decision) above, for
+execution instead of specification, and prefers the same native
+question/plan-approval control when actually present in the running session
+(documented today only for Claude Code; see [the Claude Code
+adapter](providers/claude.md#interactive-decision-surface)) and otherwise the
+same concise text choice.
+
+The decision is recorded through `latchkit task result-present/-approve/-notes/-defer/-inspect`
+(see [task-state persistence](task-state.md#cli-boundary)), a small state
+machine additive to task state and to the `spec decision-*` machine: an
+approval is bound to the exact reviewed snapshot — a SHA-256 digest over the
+diff plus evidence summary just shown — so a later implementation change
+invalidates it rather than silently carrying it forward. Approval never
+rewrites the recorded verification results, completed criteria, or remaining
+gaps; a failed or incomplete check stays visible on the record even after the
+user accepts a known limitation. Approval accepts the task result only —
+merging, publication, deployment, and destructive worktree cleanup keep their
+own separate authorization boundaries and are never implied by it.
+
+Notes add feedback and move the decision to `changes-requested`, clearing any
+stale approval, without themselves changing the recorded result: the caller
+routes the notes into the existing bounded `latchkit-build`/`latchkit-fix`
+loop for the same task with that context, then calls `result-present` again
+with the corrected snapshot's new digest, which re-presents it for a fresh
+decision. Each note is classified `in-scope` (the default, reusing the task's
+existing authorization) or `new-scope`, which requires its own explicit
+authorization scope and reference rather than silently expanding the task or
+resetting any repair budget the delivery workflow or the invoking skill's own
+bounded loop already tracks — this state machine never touches those
+counters itself. Reviewing later needs no call at all — dismissing the
+prompt or an interrupted session already leaves the decision `pending` (or
+`changes-requested`) and `result-inspect` restores the current result and any
+outstanding notes on resume; a repeated completion event or resubmission with
+the same `--mutation-id event_<uuid>` is a no-op replay rather than a
+duplicate prompt, approval, or note.
+
 ### Review-only request
 
 Invoke `latchkit-review` with a diff or commit and “review only; do not change

@@ -36,6 +36,17 @@ latchkit task inspect --project "path/to/project" --task task_<uuid>
 latchkit task resume --project "path/to/project" --task task_<uuid> --expected-revision 3
 latchkit task cancel --project "path/to/project" --task task_<uuid> --expected-revision 4 --reason "user cancelled"
 latchkit task start --project "path/to/project" --task task_<uuid> --provider codex --host-local-authorized
+latchkit task result-present --project "path/to/project" --task task_<uuid> \
+  --result-ref <link-or-path> --result-digest <sha256> --summary "<one-line summary>" \
+  --verification-results "<actual verification results>" [--remaining-gaps "<known gaps>"] \
+  [--file result-links.json]
+latchkit task result-approve --project "path/to/project" --task task_<uuid> --expected-revision 1 \
+  --result-digest <sha256> [--text "<optional acceptance note>"]
+latchkit task result-notes --project "path/to/project" --task task_<uuid> --expected-revision 2 \
+  --text "<requested changes>" --result-digest <sha256> [--change-scope in-scope|new-scope] \
+  [--authorization-scope "src/** and test/**" --authorization-reference "maintainer approval"]
+latchkit task result-defer --project "path/to/project" --task task_<uuid> --expected-revision 2
+latchkit task result-inspect --project "path/to/project" --task task_<uuid>
 latchkit spec migrate --project "path/to/project" --dry-run
 latchkit spec migrate --project "path/to/project"
 latchkit spec register --project "path/to/project" --task task_<uuid> --expected-revision 3 --file enhanced.json
@@ -69,12 +80,31 @@ already-started build is returned unchanged rather than re-prompted or re-launch
 `--mutation-id` with different input is rejected (`SPEC_DECISION_IDEMPOTENCY_CONFLICT`) rather than
 silently applied.
 
-
 `spec plan-path` previews a collision-safe filename under `docs/plans/` for a new durable plan without
 creating anything; it never reuses or overwrites a name already on disk. `spec migrate-plan` explicitly
 copies one existing `.latchkit/notes/` plan to `docs/plans/`: it preserves the original file exactly,
 computes the destination itself unless `--to` names one, and refuses to run when a different file
 already occupies the destination. It is never invoked implicitly.
+
+The `task result-*` commands are the closing counterpart: a durable decision state machine behind
+the same-shaped end-of-execution offer from `latchkit-build` and `latchkit-fix` (approve the
+result, add notes requesting changes, or review later); see [workflow
+scenarios](workflows.md#execution-completion-and-the-end-of-execution-result-decision). One
+decision record exists per task, keyed to a caller-supplied result reference and a SHA-256 digest
+of the exact reviewed snapshot (diff plus evidence summary), in
+`.latchkit/workflows/result-decisions-v1.json`. `result-approve` binds acceptance to that exact
+digest the same way `spec decision-approve` binds to a plan digest; a result that changes
+afterward — a correction landing, or a later run producing a different snapshot — makes the
+approval stale (`RESULT_DECISION_SNAPSHOT_STALE`) rather than silently carrying it forward, and
+approval never rewrites the recorded `verificationResults`, `completedCriteria`, or
+`remainingGaps` fields, so a failed or incomplete check stays visible even after acceptance.
+`result-notes` moves the record to `changes-requested` and clears any stale approval without
+itself changing the reviewed content; each note is `in-scope` (default, reusing the task's
+existing authorization) or an explicit `new-scope` with its own `--authorization-scope`/
+`--authorization-reference`, so a correction can never silently expand the task or reset a repair
+budget owned elsewhere. `result-present` is idempotent for a repeated completion event: an
+unchanged result is returned unchanged rather than re-prompted, and reusing a `--mutation-id` with
+different input is rejected (`RESULT_DECISION_IDEMPOTENCY_CONFLICT`) rather than silently applied.
 
 Use `--mutation-id event_<uuid>` to retry resume or cancel safely. Creation, criteria, checkpoints, evidence, completion, and verification stay in the service boundary so the CLI cannot be mistaken for an automatic command runner or universal approval gate.
 

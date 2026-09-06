@@ -38,6 +38,13 @@ import {
   presentSpecDecision,
 } from './workflows/spec-decision-service.js';
 import { configureVerification, inspectVerificationSettings } from './verification/service.js';
+import {
+  addResultDecisionNotes,
+  approveResultDecision,
+  deferResultDecision,
+  inspectResultDecision,
+  presentResultDecision,
+} from './workflows/result-decision-service.js';
 import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
 import { appendEvent } from './diagnostics/logger.js';
 import { operationalError } from './diagnostics/errors.js';
@@ -110,7 +117,9 @@ Usage: latchkit <command> [options]
   pack fetch Materialize selected immutable Git pack sources locally
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
-  task       Start, inspect, import, resume, or cancel durable workflow state
+  task       Start, inspect, import, resume, or cancel durable workflow state,
+             or present/approve/note/defer/inspect the end-of-execution result
+             decision (approve the result, request changes, or review later)
   spec       Register/inspect/migrate/verify an enhanced spec, preview a plan-path or
              migrate-plan a durable plan, or present/approve/note/pause/build the
              end-of-spec decision (approve and build, add notes, or keep for later)
@@ -137,7 +146,7 @@ Options:
   --dry-run           migrate/recover/sync: preview without writing files
   --task <id>         task: stable task identifier
   --verification-mode <mode> task/workflow: fast or standard; verification: project default
-  --expected-revision <n>  task resume/cancel: optimistic revision
+  --expected-revision <n>  task resume/cancel/result-approve/-notes/-defer: optimistic revision
   --mutation-id <id>  task mutation: retry-safe event identifier
   --branch <name>     workspace create: explicit new branch name
   --revision <ref>    workspace create: base commit (default: HEAD)
@@ -153,9 +162,12 @@ Options:
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
   --id <id>           memory: stable memory identifier
-  --text <text>       memory: concise memory text or search query
+  --text <text>       memory: concise memory text or search query; also spec decision-notes
+                       and task result-approve/-notes: notes or acceptance text
   --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
-  --file <path>       memory import or acceptance verify: versioned JSON file
+  --file <path>       memory import or acceptance verify: versioned JSON file; also task
+                       result-present: optional {artifactRefs, completedCriteria} JSON
+  --summary <text>    spec decision-present and task result-present: concise summary
   --budget <n>        memory recover: maximum context characters
   --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
   --provider-version <version> usage import: documented provider version for the event
@@ -168,6 +180,11 @@ Options:
   --expected-revision <id>  diff annotate: revision returned by inspect
   --evidence-id <id>  diff resolve: current task evidence ID
   --review-provider <id> workflow: explicit independent reviewer (default: selected provider)
+  --result-ref <text>  task result-present: link/path to the reviewable diff or result
+  --result-digest <sha256> task result-present/-approve/-notes: exact reviewed-snapshot digest
+  --verification-results <text> task result-present: actual verification results shown to the user
+  --remaining-gaps <text> task result-present: known remaining gaps (omit for none)
+  --change-scope <kind> task result-notes: in-scope (default) or new-scope feedback
   --plan-digest <sha256> workflow approve: exact plan digest from inspect
   --requirements-digest <sha256> workflow approve: exact requirements digest
   --checks-digest <sha256> workflow approve: exact acceptance-check digest
@@ -251,6 +268,11 @@ try {
       'plan-digest': { type: 'string' },
       'plan-ref': { type: 'string' },
       summary: { type: 'string' },
+      'result-ref': { type: 'string' },
+      'result-digest': { type: 'string' },
+      'verification-results': { type: 'string' },
+      'remaining-gaps': { type: 'string' },
+      'change-scope': { type: 'string' },
       'requirements-digest': { type: 'string' },
       'checks-digest': { type: 'string' },
       resolution: { type: 'string' },
@@ -349,6 +371,14 @@ try {
         'verification-mode',
         'workspace-choice',
         'worktree-root',
+        'result-ref',
+        'result-digest',
+        'summary',
+        'file',
+        'verification-results',
+        'remaining-gaps',
+        'change-scope',
+        'text',
       ],
       spec: [
         'project',
@@ -642,13 +672,21 @@ try {
         await controller.shutdown();
       }
     } else if (command === 'task') {
-      if (
-        extra.length !== 1 ||
-        !['start', 'inspect', 'import', 'resume', 'cancel', 'mode'].includes(extra[0] ?? '')
-      ) {
-        throw new Error(
-          'Usage: latchkit task <start|inspect|import|resume|cancel|mode> [options].',
-        );
+      const taskActions = [
+        'start',
+        'inspect',
+        'import',
+        'resume',
+        'cancel',
+        'mode',
+        'result-present',
+        'result-approve',
+        'result-notes',
+        'result-defer',
+        'result-inspect',
+      ];
+      if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
+        throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
       }
       const action = extra[0];
       const expectedRevision =
@@ -730,7 +768,87 @@ try {
             })
           ).task,
         );
-      else {
+      else if (action === 'result-inspect')
+        print(await inspectResultDecision(root, requiredOption(values.task, 'task')));
+      else if (action === 'result-present') {
+        let artifactRefs: unknown;
+        let completedCriteria: unknown;
+        if (values.file) {
+          const bytes = await readFile(path.resolve(values.file));
+          if (bytes.byteLength > 64 * 1024)
+            throw new Error('Result decision input exceeds 64 KiB.');
+          let document: unknown;
+          try {
+            document = JSON.parse(bytes.toString('utf8'));
+          } catch {
+            throw new Error('Result decision input must be valid JSON.');
+          }
+          if (!document || typeof document !== 'object' || Array.isArray(document))
+            throw new Error('Result decision input must be an object.');
+          artifactRefs = (document as { artifactRefs?: unknown }).artifactRefs;
+          completedCriteria = (document as { completedCriteria?: unknown }).completedCriteria;
+        }
+        print(
+          await presentResultDecision(root, {
+            taskId: requiredOption(values.task, 'task'),
+            resultRef: requiredOption(values['result-ref'], 'result-ref'),
+            resultDigest: requiredOption(values['result-digest'], 'result-digest'),
+            summary: requiredOption(values.summary, 'summary'),
+            verificationResults: requiredOption(
+              values['verification-results'],
+              'verification-results',
+            ),
+            ...(values['remaining-gaps'] !== undefined
+              ? { remainingGaps: values['remaining-gaps'] }
+              : {}),
+            ...(artifactRefs !== undefined ? { artifactRefs: artifactRefs as string[] } : {}),
+            ...(completedCriteria !== undefined
+              ? { completedCriteria: completedCriteria as string[] }
+              : {}),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (['result-approve', 'result-notes', 'result-defer'].includes(action ?? '')) {
+        if (expectedRevision === undefined)
+          throw new Error('task result-approve/-notes/-defer requires --expected-revision.');
+        const common = {
+          taskId: requiredOption(values.task, 'task'),
+          expectedRevision,
+          ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+        };
+        if (action === 'result-approve')
+          print(
+            await approveResultDecision(root, {
+              ...common,
+              resultDigest: requiredOption(values['result-digest'], 'result-digest'),
+              ...(values.text !== undefined ? { note: values.text } : {}),
+            }),
+          );
+        else if (action === 'result-notes') {
+          const changeScope = values['change-scope'] ?? 'in-scope';
+          if (!['in-scope', 'new-scope'].includes(changeScope))
+            throw new Error('--change-scope must be in-scope or new-scope.');
+          print(
+            await addResultDecisionNotes(root, {
+              ...common,
+              notes: requiredOption(values.text, 'text'),
+              resultDigest: requiredOption(values['result-digest'], 'result-digest'),
+              changeScope: changeScope as 'in-scope' | 'new-scope',
+              ...(changeScope === 'new-scope'
+                ? {
+                    scopeAuthorization: {
+                      scope: requiredOption(values['authorization-scope'], 'authorization-scope'),
+                      reference: requiredOption(
+                        values['authorization-reference'],
+                        'authorization-reference',
+                      ),
+                    },
+                  }
+                : {}),
+            }),
+          );
+        } else print(await deferResultDecision(root, common));
+      } else {
         const hasAuthorization =
           values['authorization-scope'] !== undefined ||
           values['authorization-reference'] !== undefined;

@@ -26,6 +26,8 @@ Do not claim that a task is done because the handoff is written. If a process re
 
 Treat the note as historical context. Read the user's latest request and applicable project instructions first, then compare the note with the current branch, files, and environment. Recheck assumptions that may have changed, especially uncommitted changes and pending test results.
 
+If the handoff's task has a durable state-machine decision pending — `latchkit spec decision-inspect --task <task-id>` for a plan awaiting approval, or `latchkit task result-inspect --task <task-id>` for an execution result awaiting review — resume that decision itself rather than re-presenting it from scratch or re-implementing past it. An interrupted session, a dismissed prompt, or "review later" leaves the record exactly as last presented; inspect restores the current plan or result and any outstanding notes so the next session offers the same choices against current state instead of a duplicate.
+
 Continue the existing objective and honor explicit approval requirements. A note can record earlier authorization, but it cannot expand it or override the current user. Resolve routine implementation choices from available evidence; ask only for missing decisions that materially block safe progress.
 
 Avoid repeating completed checks without a reason. When a relevant file changed, a command failed, or the environment differs, rerun the affected validation and update the handoff with the new result. Link the next delivery to evidence rather than simply inheriting a prior completion label.
