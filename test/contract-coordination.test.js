@@ -181,7 +181,10 @@ test('prepared association journal replays after an interrupted state write and 
   );
   setContractAssociationFaultHooksForTest();
   await assert.rejects(
-    createContractAssociation(rootConflict, conflict.input('event_33333333-3333-4333-8333-333333333333')),
+    createContractAssociation(
+      rootConflict,
+      conflict.input('event_33333333-3333-4333-8333-333333333333'),
+    ),
     { code: 'TASK_CONTRACT_CONFLICT' },
   );
   assert.ok(
