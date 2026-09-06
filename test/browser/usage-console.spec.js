@@ -84,3 +84,138 @@ test('usage console renders trends, coverage, and an explicit-baseline savings c
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test('usage console distinguishes mixed providers and missing prices, and does not double count an out-of-order correction', async ({
+  page,
+}) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-usage-console-mixed-'));
+  await initProject(root, { providers: ['codex'], skills: ['spec'] });
+  await configureUsage(root, { enabled: true });
+  const price = {
+    inputUsdPerMillion: 1,
+    outputUsdPerMillion: 5,
+    cacheReadUsdPerMillion: 0.1,
+    cacheCreationUsdPerMillion: 1.25,
+    sourceUrl: 'https://example.test/pricing',
+    sourceVersion: '2026-09',
+    asOf: '2026-09-06T00:00:00.000Z',
+    assumptions: 'Published list prices for this model.',
+  };
+  // A fully priced, fully measured Claude record.
+  await recordProviderUsage(root, {
+    provider: 'claude',
+    providerVersion: '2.1.258',
+    taskId: 'task_a',
+    output: {
+      type: 'result',
+      model: 'claude-haiku-4-5-20251001',
+      timestamp: '2026-09-06T12:00:00.000Z',
+      usage: {
+        input_tokens: 500,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        output_tokens_details: { thinking_tokens: 0 },
+      },
+    },
+    price,
+  });
+  // A different provider (Codex) with no price attached: a mixed-provider,
+  // missing-price record. Cache/reasoning fields are also left unreported,
+  // so it lands as 'partial' rather than an invented complete count.
+  await recordProviderUsage(root, {
+    provider: 'codex',
+    providerVersion: '0.42.1',
+    taskId: 'task_b',
+    output: JSON.stringify({
+      type: 'turn.completed',
+      timestamp: '2026-09-06T12:05:00.000Z',
+      usage: { input_tokens: 30, output_tokens: 10 },
+    }),
+  });
+  // Out-of-order correction: the same invocation is observed three times.
+  // The corrected count (observed later) must win, and a stale replay of
+  // the original observation (observed earlier than the correction) must
+  // not resurrect the original count or add a second record.
+  const correctable = {
+    provider: 'claude',
+    providerVersion: '2.1.258',
+    taskId: 'task_c',
+    sessionId: 'session_c',
+    sourceEventId: 'invocation_c',
+    price,
+  };
+  const originalOutput = {
+    type: 'result',
+    model: 'claude-haiku-4-5-20251001',
+    timestamp: '2026-09-06T13:00:00.000Z',
+    usage: {
+      input_tokens: 111,
+      output_tokens: 1,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      output_tokens_details: { thinking_tokens: 0 },
+    },
+  };
+  await recordProviderUsage(root, {
+    ...correctable,
+    observedAt: '2026-09-06T13:00:00.000Z',
+    output: originalOutput,
+  });
+  await recordProviderUsage(root, {
+    ...correctable,
+    observedAt: '2026-09-06T14:00:00.000Z',
+    output: {
+      ...originalOutput,
+      usage: { ...originalOutput.usage, input_tokens: 222, output_tokens: 2 },
+    },
+  });
+  // Stale replay: same original observation, observed before the correction.
+  await recordProviderUsage(root, {
+    ...correctable,
+    observedAt: '2026-09-06T13:00:00.000Z',
+    output: originalOutput,
+  });
+
+  const { server, url } = await startServer(root);
+  try {
+    await page.goto(url);
+    const usage = page.locator('#usage');
+    await expect(usage.getByRole('heading', { name: 'Understand each session.' })).toBeVisible();
+    await expect(usage.getByRole('heading', { name: 'Totals and trends' })).toBeVisible();
+
+    // Three distinct records: task_a, task_b, and the corrected task_c. The
+    // stale replay must not have added a fourth record.
+    const sessionsCard = usage.locator('.summary-card').filter({ hasText: 'SESSIONS IN RANGE' });
+    await expect(sessionsCard.locator('strong')).toHaveText('3');
+
+    // Known totals sum the corrected (not the stale) task_c count: 500 + 30 +
+    // 222 input, 0 + 10 + 2 output. A double count would show 611/13 or more.
+    const inputCard = usage.locator('.summary-card').filter({ hasText: 'KNOWN INPUT TOKENS' });
+    await expect(inputCard.locator('strong')).toHaveText('752');
+    const outputCard = usage.locator('.summary-card').filter({ hasText: 'KNOWN OUTPUT TOKENS' });
+    await expect(outputCard.locator('strong')).toHaveText('12');
+
+    // The estimated-cost card exposes exactly one record missing a price
+    // (task_b, Codex) rather than silently omitting it or showing zero cost.
+    const costCard = usage.locator('.summary-card').filter({ hasText: 'ESTIMATED COST' });
+    await expect(costCard).toContainText('1 missing a price');
+
+    // Mixed providers are broken out distinctly, not merged into one bucket.
+    const byProvider = usage.locator('ul[aria-label="Usage by provider"]');
+    await expect(byProvider.getByText('claude · 2 sessions', { exact: false })).toBeVisible();
+    await expect(byProvider.getByText('codex · 1 session', { exact: false })).toBeVisible();
+
+    const report = await new AxeBuilder({ page })
+      .include('#usage')
+      .disableRules(['color-contrast'])
+      .analyze();
+    expect(report.violations).toEqual([]);
+  } finally {
+    await new Promise((resolve) => {
+      server.close(resolve);
+      server.closeAllConnections();
+    });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
