@@ -281,7 +281,7 @@ test('Cursor hook evidence is disabled by default and retains no payload fields'
   );
 });
 
-test('explicit Cursor hook evidence records only bounded normalized events under concurrency', async (t) => {
+test('explicit Cursor hook evidence accepts Windows BOM framing and records bounded events under concurrency', async (t) => {
   const root = await temporaryRoot(t);
   const evidencePath = '.latchkit/providers/cursor-ide/evidence/manual-run.json';
   await fs.mkdir(path.join(root, '.cursor'), { recursive: true });
@@ -307,7 +307,12 @@ test('explicit Cursor hook evidence records only bounded normalized events under
     tool_input: { command: 'print private material' },
     tool_output: 'private result',
   }));
-  const first = await runHook(root, inputs[0], ['--evidence', evidencePath]);
+  // Cursor's Windows hook runner uses a PowerShell temp-file pipeline that
+  // prepends a UTF-8 BOM and appends line terminators to the JSON payload.
+  const first = await runHook(root, `\uFEFF${JSON.stringify(inputs[0])}\n\r\n`, [
+    '--evidence',
+    evidencePath,
+  ]);
   assert.equal(first.exitCode, 0);
   const concurrent = await Promise.all(
     inputs.slice(1).map((input) => runHook(root, input, ['--evidence', evidencePath])),

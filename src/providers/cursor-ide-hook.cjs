@@ -51,7 +51,12 @@ async function boundedInput() {
   }
   let input;
   try {
-    input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const decoded = Buffer.concat(chunks).toString('utf8');
+    // Cursor's native Windows hook runner reads its UTF-8 temporary payload
+    // through PowerShell. That pipeline can prepend one UTF-8 BOM before
+    // forwarding the JSON to stdin. Accept that encoding marker only at the
+    // start; JSON.parse continues to reject every other malformed framing.
+    input = JSON.parse(decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded);
   } catch {
     throw new Error('Invalid Cursor hook JSON input.');
   }

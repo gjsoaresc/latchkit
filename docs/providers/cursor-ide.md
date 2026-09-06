@@ -56,6 +56,9 @@ native Windows command quoting. The handler accepts at most 64 KB of JSON on std
 advisory no-op. By default it is non-persistent: it does not read environment credentials, log raw
 payloads, start sessions, or override provider permissions. Workspace trust, a local disabled-hooks
 setting, or managed policy can prevent execution and is reported separately from configuration.
+Cursor's native Windows runner currently forwards its UTF-8 temporary payload through PowerShell,
+which can prepend one UTF-8 BOM. The handler accepts that single encoding marker at the start of
+stdin while continuing to reject every other malformed JSON framing.
 
 Release qualification may explicitly enable privacy-safe hook evidence through the export API:
 
