@@ -1,0 +1,13 @@
+# DRAFT — placeholder version. See packaging/winget/README.md: this manifest
+# set is a plan, not a functional or submitted WinGet package.
+PackageIdentifier: willahealm.Latchkit
+PackageVersion: 0.0.0
+PackageLocale: en-US
+Publisher: willahealm
+PackageName: Latchkit
+License: MIT
+LicenseUrl: https://github.com/willahealm/latchkit/blob/main/LICENSE
+ShortDescription: Your agents. One workflow. Open-source skills and local configuration for coding agents.
+PackageUrl: https://github.com/willahealm/latchkit
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

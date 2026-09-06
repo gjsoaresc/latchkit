@@ -11,7 +11,11 @@ The current release target is Windows x64 (`win32-x64`). Linux, WSL, macOS,
 musl, and other architectures remain deferred experimental work. Each archive
 has a SHA-256 sidecar and manifest. The manifest records the exact source
 commit, runtime pins, target, package inventory, and archive checksum; the
-SBOM covers the complete delivered application and Node runtime.
+SBOM covers the complete delivered application and Node runtime. See
+[installation](installation.md) for the full supported/deferred target
+matrix, PowerShell/shell installer usage, PATH and executable discovery, the
+onboarding hand-off, and the current (unpublished) Homebrew/WinGet
+packaging scaffolds.
 
 ## Candidate qualification
 
@@ -111,7 +115,10 @@ exact version, a custom user-local root, and local files or URLs:
 Use `-Artifact`/`-Checksum` when testing a local archive or a pinned mirror.
 The installer requires Windows 11 x64 and does not require elevation or
 symlinks. `install.sh` is retained for deferred experimental work and is not a
-qualified 1.0 installation path.
+qualified 1.0 installation path. See [installation](installation.md) for the
+exact-version/custom-destination options both scripts share, the
+checksum-verification and previous-install-preservation guarantees, and the
+onboarding hand-off printed on a successful interactive install.
 
 Inside an installed bundle, the stable launcher exposes:
 
