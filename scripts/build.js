@@ -21,5 +21,15 @@ if (typeScript.status !== 0) process.exit(typeScript.status ?? 1);
 
 await cp(path.join(root, 'web', 'index.html'), path.join(dist, 'web', 'index.html'));
 await cp(path.join(root, 'web', 'style.css'), path.join(dist, 'web', 'style.css'));
+const esbuild = await import('esbuild');
+await esbuild.build({
+  entryPoints: [path.join(root, 'web', 'app.tsx')],
+  bundle: true,
+  format: 'esm',
+  target: ['es2023'],
+  outfile: path.join(dist, 'web', 'app.js'),
+  sourcemap: false,
+  minify: false,
+});
 await cp(path.join(root, 'skills'), path.join(dist, 'skills'), { recursive: true });
 await cp(path.join(root, 'schemas'), path.join(dist, 'schemas'), { recursive: true });

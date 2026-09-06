@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -137,4 +138,20 @@ test('shows a useful message when the session token expires', async ({ page }) =
   );
   await page.goto(url);
   await expect(page.getByRole('alert')).toContainText('session key has expired');
+});
+
+test('persists an accessible dark theme choice', async ({ page }) => {
+  await open(page);
+  await page.getByRole('button', { name: 'Theme: system' }).click();
+  await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Theme: dark' })).toBeVisible();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+});
+
+test('has no automated accessibility violations in the configured console', async ({ page }) => {
+  await open(page);
+  const report = await new AxeBuilder({ page }).analyze();
+  expect(report.violations).toEqual([]);
 });

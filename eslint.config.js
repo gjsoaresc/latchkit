@@ -7,7 +7,14 @@ export default [
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts', 'src/**/*.cts', 'web/**/*.ts', 'scripts/**/*.js', 'test/**/*.js'],
+    files: [
+      'src/**/*.ts',
+      'src/**/*.cts',
+      'web/**/*.ts',
+      'web/**/*.tsx',
+      'scripts/**/*.js',
+      'test/**/*.js',
+    ],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
