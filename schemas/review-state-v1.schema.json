@@ -11,20 +11,72 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "schemaVersion", "taskId", "state", "independent", "sourceSnapshot", "limits", "usage", "reviewers", "createdAt", "updatedAt"],
+        "required": [
+          "id",
+          "schemaVersion",
+          "taskId",
+          "state",
+          "independent",
+          "sourceSnapshot",
+          "limits",
+          "usage",
+          "reviewers",
+          "createdAt",
+          "updatedAt"
+        ],
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "schemaVersion": { "const": 1 },
           "taskId": { "type": "string", "minLength": 1 },
+          "parentRunId": { "type": "string", "minLength": 1 },
           "state": { "enum": ["running", "completed", "failed", "cancelled"] },
           "independent": { "const": true },
-          "sourceSnapshot": { "type": "object", "required": ["revision", "dirtyFingerprint"], "properties": { "revision": { "type": "string" }, "dirtyFingerprint": { "type": "string" } }, "additionalProperties": true },
-          "limits": { "type": "object", "additionalProperties": false, "required": ["maxReviewers", "concurrency", "timeoutMs", "maxIterations"], "properties": { "maxReviewers": { "type": "integer", "minimum": 1 }, "concurrency": { "type": "integer", "minimum": 1 }, "timeoutMs": { "type": "integer", "minimum": 1 }, "maxIterations": { "const": 1 } } },
-          "usage": { "type": "object", "additionalProperties": false, "required": ["state", "reason"], "properties": { "state": { "const": "unknown" }, "reason": { "type": "string", "minLength": 1 } } },
+          "sourceSnapshot": {
+            "type": "object",
+            "required": ["revision", "dirtyFingerprint"],
+            "properties": {
+              "revision": { "type": "string" },
+              "dirtyFingerprint": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["maxReviewers", "concurrency", "timeoutMs", "maxIterations"],
+            "properties": {
+              "maxReviewers": { "type": "integer", "minimum": 1, "maximum": 4 },
+              "concurrency": { "type": "integer", "minimum": 1 },
+              "admissionConcurrency": { "type": "integer", "minimum": 1, "maximum": 4 },
+              "timeoutMs": { "type": "integer", "minimum": 1 },
+              "maxIterations": { "const": 1 },
+              "tokenBudget": { "type": "integer", "minimum": 1 },
+              "spendBudgetUsd": { "type": "number", "minimum": 0 },
+              "spendingGuarantee": { "enum": ["advisory", "unsupported-hard-request"] }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "reason"],
+            "properties": {
+              "state": { "const": "unknown" },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          },
           "reviewers": { "type": "array", "items": { "type": "object" } },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" },
-          "owner": { "type": "object", "additionalProperties": false, "required": ["controllerId", "pid", "hostname"], "properties": { "controllerId": { "type": "string", "minLength": 1 }, "pid": { "type": "integer", "minimum": 1 }, "hostname": { "type": "string", "minLength": 1 } } },
+          "owner": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["controllerId", "pid", "hostname"],
+            "properties": {
+              "controllerId": { "type": "string", "minLength": 1 },
+              "pid": { "type": "integer", "minimum": 1 },
+              "hostname": { "type": "string", "minLength": 1 }
+            }
+          },
           "cancelRequestedAt": { "type": "string", "format": "date-time" },
           "findings": { "type": "array" }
         }
