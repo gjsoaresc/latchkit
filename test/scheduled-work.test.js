@@ -74,6 +74,59 @@ async function until(check) {
   assert.fail('Condition did not settle within 5 seconds.');
 }
 
+function heldRunner() {
+  let release;
+  let started = false;
+  const completion = new Promise((resolve) => {
+    release = resolve;
+  });
+  return {
+    get started() {
+      return started;
+    },
+    release(result = { status: 'exited', exitCode: 0, outputBytes: 3 }) {
+      release(result);
+    },
+    async run({ signal }) {
+      started = true;
+      if (signal.aborted) return { status: 'cancelled' };
+      return new Promise((resolve) => {
+        const settle = (result) => {
+          signal.removeEventListener('abort', cancelled);
+          resolve(result);
+        };
+        const cancelled = () => settle({ status: 'cancelled' });
+        signal.addEventListener('abort', cancelled, { once: true });
+        void completion.then(settle);
+      });
+    },
+  };
+}
+
+test('held scheduler mocks settle cancellation before delayed startup and during a pending run', async () => {
+  for (const beforeStart of [true, false]) {
+    const held = heldRunner();
+    const abort = new AbortController();
+    if (beforeStart) abort.abort();
+    const pending = held.run({ signal: abort.signal });
+    if (!beforeStart) abort.abort();
+    let timeout;
+    try {
+      const result = await Promise.race([
+        pending,
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Cancelled mock did not drain.')), 100);
+        }),
+      ]);
+      assert.equal(result.status, 'cancelled');
+    } finally {
+      clearTimeout(timeout);
+      held.release();
+      await pending;
+    }
+  }
+});
+
 test('uses an injected UTC clock across DST and skips missed or rolled-back time', async (t) => {
   const { root, clock, setTime } = await fixture(t);
   const schedule = await add(root, clock);
@@ -118,31 +171,33 @@ test('duplicate foreground schedulers prevent overlap, cancellation owns only it
   const { root, clock, setTime } = await fixture(t);
   const schedule = await add(root, clock);
   setTime('2026-03-08T07:30:00.000Z');
-  let resolve;
-  const pending = new Promise((done) => {
-    resolve = done;
-  });
+  const held = heldRunner();
   let calls = 0;
-  const runner = async ({ signal }) => {
+  const runner = async (options) => {
     calls += 1;
-    await pending;
-    return { status: signal.aborted ? 'cancelled' : 'exited', exitCode: 0, outputBytes: 3 };
+    return held.run(options);
   };
   const first = createForegroundScheduler({ root, clock, runner });
   const second = createForegroundScheduler({ root, clock, runner });
-  assert.deepEqual(await first.tick(), { started: [schedule.id] });
-  assert.deepEqual(await second.tick(), { started: [] });
-  await until(() => calls === 1);
-  assert.equal(calls, 1);
-  assert.equal((await cancelScheduleRun(root, schedule.id, { clock })).cancelled, true);
-  resolve();
-  await until(
-    async () => (await inspectSchedule(root, schedule.id, { clock })).runs[0].state !== 'running',
-  );
-  assert.equal((await inspectSchedule(root, schedule.id, { clock })).runs[0].state, 'cancelled');
-  await first.stop();
-  const cancelled = (await inspectSchedule(root, schedule.id, { clock })).runs[0];
-  assert.equal((await inspectTask(root, cancelled.taskId)).task.state, 'cancelled');
+  try {
+    assert.deepEqual(await first.tick(), { started: [schedule.id] });
+    assert.deepEqual(await second.tick(), { started: [] });
+    await until(() => calls === 1);
+    assert.equal(calls, 1);
+    assert.equal((await cancelScheduleRun(root, schedule.id, { clock })).cancelled, true);
+    held.release();
+    await until(
+      async () => (await inspectSchedule(root, schedule.id, { clock })).runs[0].state !== 'running',
+    );
+    assert.equal((await inspectSchedule(root, schedule.id, { clock })).runs[0].state, 'cancelled');
+    await first.stop();
+    const cancelled = (await inspectSchedule(root, schedule.id, { clock })).runs[0];
+    assert.equal((await inspectTask(root, cancelled.taskId)).task.state, 'cancelled');
+  } finally {
+    held.release();
+    await first.stop();
+    await second.stop();
+  }
 });
 
 test('timeout, pause/edit/resume/remove, and bounded history remain inspectable', async (t) => {
@@ -237,18 +292,15 @@ test('resume and recovery cannot erase another live foreground run', async (t) =
   const { root, clock, setTime } = await fixture(t);
   const schedule = await add(root, clock);
   setTime('2026-03-08T07:30:00.000Z');
-  let release;
+  const held = heldRunner();
   const scheduler = createForegroundScheduler({
     root,
     clock,
-    runner: async () =>
-      new Promise((resolve) => {
-        release = resolve;
-      }),
+    runner: held.run,
   });
-  await scheduler.tick();
-  await until(() => typeof release === 'function');
   try {
+    await scheduler.tick();
+    await until(() => held.started);
     await assert.rejects(resumeSchedule(root, schedule.id, { clock }), {
       code: 'SCHEDULE_RUN_ACTIVE',
     });
@@ -256,8 +308,7 @@ test('resume and recovery cannot erase another live foreground run', async (t) =
       code: 'SCHEDULER_ALREADY_RUNNING',
     });
   } finally {
-    release({ status: 'cancelled' });
-    await wait();
+    held.release({ status: 'cancelled' });
     await scheduler.stop();
   }
 });
