@@ -1257,7 +1257,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       taskId: task.id,
       taskOwnerId: id('owner'),
       revision: 1,
-      status: 'running',
+      status: route?.id === 'answer-only' ? 'completed' : 'running',
       phase: route?.phases[0] ?? 'requirements',
       providerId: input.providerId,
       reviewProviderId,
@@ -1289,14 +1289,20 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       pendingAction: null,
       completedActions: [],
       mutations: [{ id: selectedMutationId, digest: digestJson(input), revision: 1 }],
-      lastOutcome: { status: 'none', summary: '' },
+      lastOutcome:
+        route?.id === 'answer-only'
+          ? {
+              status: 'passed',
+              summary: 'Read-only route recorded; no implementation or verification was run.',
+            }
+          : { status: 'none', summary: '' },
       source,
       lastDispatchedContext: null,
       createdAt: at,
       updatedAt: at,
     };
     const created = await createWorkflow(root, record);
-    schedule(task.id);
+    if (created.status === 'running') schedule(task.id);
     return created;
   }
 

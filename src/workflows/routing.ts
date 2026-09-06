@@ -126,7 +126,11 @@ function selection(
 /** Select a route from multiple signals.  It intentionally never uses size or
  * adjectives such as "tiny"/"quick" as a safety signal. */
 export function selectRoute(input: RouteSelectionInput): RouteSelection {
-  const context = [input.request, ...(input.criteria ?? [])].join('\n');
+  // Paths are a risk signal, not a file-extension classifier: an auth or
+  // migration path cannot be made lightweight by benign request wording.
+  const context = [input.request, ...(input.criteria ?? []), ...(input.changedPaths ?? [])].join(
+    '\n',
+  );
   const paths = input.changedPaths;
   const forced = input.requestedRoute;
   if (highImpact.test(context))

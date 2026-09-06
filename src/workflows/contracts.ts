@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { WorkflowPhase } from './policy.js';
 import type { Task } from '../task-state/contracts.js';
 import { computeIntentDigest } from '../task-state/records.js';
-import type { RouteSelection } from './routing.js';
+import { ROUTING_POLICY_VERSION, type RouteSelection } from './routing.js';
 
 export const WORKFLOW_SCHEMA_VERSION = 1;
 export const WORKFLOW_STATE_PATH = '.latchkit/workflows/state-v1.json';
@@ -365,6 +365,17 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
   const hasDispatchedContext = Object.hasOwn(value, 'lastDispatchedContext');
   const hasRoute = Object.hasOwn(value, 'route');
   const route = item.route;
+  const expectedRoutePhases: Record<string, readonly string[]> = {
+    'answer-only': [],
+    documentation: ['implementation', 'verification'],
+    'visual-local': ['implementation', 'verification'],
+    'bug-fix': ['implementation', 'verification'],
+    feature: ['requirements', 'plan', 'implementation', 'verification'],
+    refactor: ['plan', 'implementation', 'verification'],
+    maintenance: ['plan', 'implementation', 'verification'],
+    'high-impact': ['requirements', 'plan', 'implementation', 'verification', 'review'],
+    investigate: ['requirements'],
+  };
   const validRoute =
     route === undefined ||
     route === null ||
@@ -381,9 +392,15 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
         'high-impact',
         'investigate',
       ].includes((route as RouteSelection).id) &&
-      typeof (route as RouteSelection).policyVersion === 'string' &&
+      (route as RouteSelection).policyVersion === ROUTING_POLICY_VERSION &&
       Array.isArray((route as RouteSelection).phases) &&
       (route as RouteSelection).phases.every((phase) => phases.has(phase)) &&
+      JSON.stringify((route as RouteSelection).phases) ===
+        JSON.stringify(expectedRoutePhases[(route as RouteSelection).id]) &&
+      ((route as RouteSelection).id === 'high-impact'
+        ? (route as RouteSelection).requiresApproval &&
+          (route as RouteSelection).requiresIndependentReview
+        : true) &&
       typeof (route as RouteSelection).requiresApproval === 'boolean' &&
       typeof (route as RouteSelection).requiresIndependentReview === 'boolean' &&
       Array.isArray((route as RouteSelection).reasons) &&
