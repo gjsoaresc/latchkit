@@ -16,9 +16,9 @@ Open-source skills and a local configuration console for the coding tools you al
 
 </div>
 
-Latchkit gives your coding agents a shared set of development workflows, with a browser console to configure them. It runs locally, uses your existing provider accounts, and keeps its configuration in your project.
+Latchkit is an open-source toolkit for shared coding-agent workflows. This repository is its reference implementation: portable skills, a Node.js CLI, and a local browser console for project configuration. It runs locally, works with your existing coding tools, and keeps its configuration in your project.
 
-**This is an early working foundation, not full Pilot Shell feature parity.** Skill installation, durable task state, local project memory, capability-aware gates, and acceptance verification work today. Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
+**The current alpha supports skill installation, durable task state, local project memory, capability-aware gates, and acceptance verification.** Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
 
 ## Install and try it
 
@@ -108,7 +108,7 @@ Project memory is opt-in: `latchkit memory` stores concise decisions, discoverie
 
 The direction is an open engineering workflow layer: requirements → plan → implement → verify → review → handoff. Native Windows and transparent provider capabilities are first-class requirements. The bundled workflows remain instruction-led: task state and quality gates contribute evidence only when their capabilities are available and explicitly invoked.
 
-- [Roadmap and Pilot Shell capability baseline](docs/roadmap.md)
+- [Roadmap](docs/roadmap.md)
 - [Architecture and reliability boundaries](docs/architecture.md)
 - [Compatibility and primary documentation](docs/compatibility.md)
 - [Workflow scenarios](docs/workflows.md)
@@ -131,4 +131,4 @@ See [skill evaluations](docs/skill-evaluations.md) for the offline behavioral ha
 
 ## License and provenance
 
-[MIT](LICENSE). All implementation and bundled skill text in this repository are original. Latchkit is an independent project inspired by the general idea of structured coding-agent workflows. It is not a fork of or affiliated with Pilot Shell or any provider. Provider software and services retain their own terms.
+[MIT](LICENSE). Latchkit is an independent project. All implementation and bundled skill text in this repository are original. Provider software and services retain their own terms.
