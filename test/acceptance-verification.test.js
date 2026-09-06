@@ -375,3 +375,93 @@ test('CLI executes the same versioned document and a source change rejects an ap
   assert.equal(stale.results[0].status, 'source-changed');
   assert.equal(stale.results[0].outcome, 'failed');
 });
+
+test('fast mode reuses an unchanged passing check and standard mode always reruns', async (t) => {
+  const { root, task } = await setup(t, ['fast reuse']);
+  let launches = 0;
+  const launch = async () => {
+    launches += 1;
+    return { status: 'exited', exitCode: 0, stdout: '', stderr: '', outputBytes: 0 };
+  };
+  const verifier = createAcceptanceVerifier({ root, launch });
+  const check = {
+    id: 'cli',
+    criterionId: task.criteria[0].id,
+    label: 'CLI check',
+    type: 'cli',
+    plan: { executable: process.execPath, args: ['--version'] },
+    watchPaths: ['src'],
+  };
+
+  const first = await verifier.verify({
+    taskId: task.id,
+    executionAuthorized: true,
+    mode: 'fast',
+    document: document([check]),
+  });
+  assert.equal(launches, 1);
+  assert.equal(first.results[0].reused, false);
+  assert.equal(first.stats.mode, 'fast');
+  assert.equal(first.stats.executed, 1);
+  assert.equal(first.stats.reused, 0);
+
+  const second = await verifier.verify({
+    taskId: task.id,
+    executionAuthorized: true,
+    mode: 'fast',
+    document: document([check]),
+  });
+  assert.equal(launches, 1, 'an unchanged source reuses the prior passing evidence');
+  assert.equal(second.results[0].reused, true);
+  assert.equal(second.results[0].artifact, null);
+  assert.equal(second.stats.reused, 1);
+  assert.equal(second.stats.executed, 0);
+  assert.equal(second.status, 'passed');
+
+  const standard = await verifier.verify({
+    taskId: task.id,
+    executionAuthorized: true,
+    document: document([check]),
+  });
+  assert.equal(launches, 2, 'standard mode (the default) never reuses evidence');
+  assert.equal(standard.stats.mode, 'standard');
+  assert.ok(standard.stats.reused === 0 && standard.stats.selected === 1);
+});
+
+test('fast mode applies an explicit execution budget and reports a fallback with the next check', async (t) => {
+  const { root, task } = await setup(t, ['first check', 'second check']);
+  let launches = 0;
+  const launch = async () => {
+    launches += 1;
+    return { status: 'exited', exitCode: 0, stdout: '', stderr: '', outputBytes: 0 };
+  };
+  const verifier = createAcceptanceVerifier({ root, launch });
+  const checkFor = (index, id) => ({
+    id,
+    criterionId: task.criteria[index].id,
+    label: id,
+    type: 'cli',
+    plan: { executable: process.execPath, args: ['--version'] },
+  });
+  const result = await verifier.verify({
+    taskId: task.id,
+    executionAuthorized: true,
+    mode: 'fast',
+    maxExecutions: 1,
+    document: document([checkFor(0, 'first'), checkFor(1, 'second')]),
+  });
+  assert.equal(launches, 1, 'the budget bounds actual executions, never zero of them');
+  assert.equal(result.stats.executed, 1);
+  assert.equal(result.stats.skippedForBudget, 1);
+  assert.equal(result.stats.fallback, 'standard');
+  assert.match(result.stats.fallbackReason, /budget exceeded/);
+  assert.deepEqual(result.stats.nextChecks, ['second']);
+  const skipped = result.results.find((item) => item.checkId === 'second');
+  assert.equal(skipped.outcome, 'skipped');
+  assert.equal(skipped.status, 'fast-mode-budget-exceeded');
+  assert.equal(
+    result.task.evidence.find((item) => item.criterionId === task.criteria[1].id).outcome,
+    'skipped',
+  );
+  assert.equal(result.status, 'failed', 'a bounded gap is never silently reported as verified');
+});

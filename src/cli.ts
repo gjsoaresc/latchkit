@@ -24,6 +24,7 @@ import {
   registerEnhancedWorkflow,
   resolveCollisionSafePlanPath,
   resumeTask,
+  setVerificationMode,
   verifyTask,
 } from './task-state/service.js';
 import {
@@ -34,6 +35,7 @@ import {
   pauseSpecDecision,
   presentSpecDecision,
 } from './workflows/spec-decision-service.js';
+import { configureVerification, inspectVerificationSettings } from './verification/service.js';
 import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
 import { appendEvent } from './diagnostics/logger.js';
 import { operationalError } from './diagnostics/errors.js';
@@ -119,6 +121,7 @@ Usage: latchkit <command> [options]
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   usage      Enable, inspect, import, export, retain, or delete local usage records
+  verification Inspect or configure the project's default fast/standard verification mode
   schedule   Create and operate an explicit foreground local scheduler
   mcp        Preview, apply, remove, inspect, recover, or health-check optional MCP configuration
   ui         Start the local configuration console (Ctrl+C to stop)
@@ -131,6 +134,7 @@ Options:
   --to <version>      migrate: target schema version (default: current)
   --dry-run           migrate/recover/sync: preview without writing files
   --task <id>         task: stable task identifier
+  --verification-mode <mode> task/workflow: fast or standard; verification: project default
   --expected-revision <n>  task resume/cancel: optimistic revision
   --mutation-id <id>  task mutation: retry-safe event identifier
   --branch <name>     workspace create: explicit new branch name
@@ -209,6 +213,7 @@ try {
       branch: { type: 'string' },
       revision: { type: 'string' },
       mode: { type: 'string' },
+      'verification-mode': { type: 'string' },
       authorized: { type: 'boolean' },
       'authorization-scope': { type: 'string' },
       'authorization-reference': { type: 'string' },
@@ -275,6 +280,7 @@ try {
         'review',
         'memory',
         'usage',
+        'verification',
         'mcp',
         'acceptance',
         'diff',
@@ -315,6 +321,7 @@ try {
         'action-id',
         'evidence-id',
         'file',
+        'verification-mode',
       ],
       task: [
         'project',
@@ -331,6 +338,7 @@ try {
         'prompt',
         'session',
         'host-local-authorized',
+        'verification-mode',
       ],
       spec: [
         'project',
@@ -386,6 +394,7 @@ try {
         'session',
         'retention-days',
       ],
+      verification: ['project', 'verification-mode'],
       pack: ['project', 'id'],
       schedule: [
         'project',
@@ -534,6 +543,11 @@ try {
           const common = { expectedRevision, mutationId: values['mutation-id'] };
           let result;
           if (action === 'run') {
+            if (
+              values['verification-mode'] !== undefined &&
+              !['fast', 'standard'].includes(values['verification-mode'])
+            )
+              throw new Error('--verification-mode must be fast or standard.');
             result = await controller.run({
               ...common,
               taskId: values.task,
@@ -541,6 +555,9 @@ try {
               reviewProviderId: values['review-provider'],
               prompt: values.prompt,
               executionAuthorized: values['host-local-authorized'] === true,
+              ...(values['verification-mode']
+                ? { verificationMode: values['verification-mode'] as 'fast' | 'standard' }
+                : {}),
               ...(values.file
                 ? {
                     checksDocument: JSON.parse(
@@ -608,9 +625,11 @@ try {
     } else if (command === 'task') {
       if (
         extra.length !== 1 ||
-        !['start', 'inspect', 'import', 'resume', 'cancel'].includes(extra[0] ?? '')
+        !['start', 'inspect', 'import', 'resume', 'cancel', 'mode'].includes(extra[0] ?? '')
       ) {
-        throw new Error('Usage: latchkit task <start|inspect|import|resume|cancel> [options].');
+        throw new Error(
+          'Usage: latchkit task <start|inspect|import|resume|cancel|mode> [options].',
+        );
       }
       const action = extra[0];
       const expectedRevision =
@@ -621,7 +640,21 @@ try {
       ) {
         throw new Error('--expected-revision must be a positive integer.');
       }
-      if (action === 'inspect')
+      if (action === 'mode') {
+        const requestedMode = requiredOption(values['verification-mode'], 'verification-mode');
+        if (!['fast', 'standard'].includes(requestedMode))
+          throw new Error('--verification-mode must be fast or standard.');
+        if (expectedRevision === undefined)
+          throw new Error('task mode requires --expected-revision.');
+        print(
+          await setVerificationMode(root, {
+            taskId: requiredOption(values.task, 'task'),
+            expectedRevision,
+            verificationMode: requestedMode as 'fast' | 'standard',
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (action === 'inspect')
         print(values.task ? await inspectTask(root, values.task) : await listTasks(root));
       else if (action === 'start') {
         if (!values.provider) throw new Error('task start requires --provider.');
@@ -681,11 +714,19 @@ try {
             'Import authorization requires both --authorization-scope and --authorization-reference.',
           );
         }
+        if (
+          values['verification-mode'] !== undefined &&
+          !['fast', 'standard'].includes(values['verification-mode'])
+        )
+          throw new Error('--verification-mode must be fast or standard.');
         print(
           await importMarkdownTask(root, {
             notePath: values.note,
             title: requiredOption(values.title, 'title'),
             ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+            ...(values['verification-mode']
+              ? { verificationMode: values['verification-mode'] as 'fast' | 'standard' }
+              : {}),
             ...(hasAuthorization
               ? {
                   authorization: {
@@ -1040,6 +1081,19 @@ try {
             taskId: values.task,
             sessionId: values.session,
             output,
+          }),
+        );
+      }
+    } else if (command === 'verification') {
+      if (extra.length)
+        throw new Error('Usage: latchkit verification [--verification-mode <fast|standard>].');
+      if (values['verification-mode'] === undefined) print(await inspectVerificationSettings(root));
+      else {
+        if (!['fast', 'standard'].includes(values['verification-mode']))
+          throw new Error('--verification-mode must be fast or standard.');
+        print(
+          await configureVerification(root, {
+            defaultMode: values['verification-mode'] as 'fast' | 'standard',
           }),
         );
       }

@@ -19,6 +19,17 @@ import type {
   HttpAcceptanceCheck,
 } from './contracts.js';
 import type { Browser, BrowserContext, BrowserType } from 'playwright';
+import {
+  buildVerificationPlan,
+  DEFAULT_VERIFICATION_MODE,
+  defaultFastBudget,
+  isBudgetExceeded,
+} from '../verification/contracts.js';
+import type {
+  VerificationMode,
+  VerificationPlan,
+  VerificationStats,
+} from '../verification/contracts.js';
 
 const MAX_ARTIFACTS_PER_TASK = 25;
 const MAX_ARTIFACT_BYTES = 256 * 1024;
@@ -73,6 +84,18 @@ type VerifyInput = {
   document?: unknown;
   executionAuthorized?: boolean;
   signal?: AbortSignal;
+  /** Bounded, change-focused fast verification versus the full standard path.
+   * Defaults to standard, which runs every declared check exactly as before. */
+  mode?: VerificationMode;
+  /** Paths known to differ from the last verified baseline. Required for
+   * fast mode to reuse a check with declared watchPaths; omit when unknown. */
+  changedPaths?: string[];
+  /** Fast-mode-only ceiling on wall-clock time spent executing (not reusing)
+   * checks in one verify() call. Ignored in standard mode. */
+  timeBudgetMs?: number;
+  /** Fast-mode-only ceiling on the number of checks executed (not reused) in
+   * one verify() call. Ignored in standard mode. */
+  maxExecutions?: number;
 };
 
 function safeTargetSummary(value: string): unknown {
@@ -663,7 +686,16 @@ export function createAcceptanceVerifier({
 }: VerificationOptions = {}) {
   if (!root) throw new AcceptanceError('Project root is required.');
   const projectRoot = path.resolve(root);
-  async function verify({ taskId, document, executionAuthorized, signal }: VerifyInput = {}) {
+  async function verify({
+    taskId,
+    document,
+    executionAuthorized,
+    signal,
+    mode = DEFAULT_VERIFICATION_MODE,
+    changedPaths,
+    timeBudgetMs,
+    maxExecutions,
+  }: VerifyInput = {}) {
     if (executionAuthorized !== true)
       throw new AcceptanceError(
         'Acceptance execution requires explicit host-local authorization.',
@@ -697,16 +729,83 @@ export function createAcceptanceVerifier({
       criterionId: string;
       outcome: string;
       status: string;
-      artifact: StoredArtifact;
+      artifact: StoredArtifact | null;
+      reused: boolean;
     }[] = [];
+    const plan: VerificationPlan = buildVerificationPlan({
+      mode,
+      checks: declared.checks,
+      criteria: inspected.task.criteria,
+      evidence: inspected.task.evidence,
+      currentSource: inspected.reconciliation.currentSource,
+      changedPaths,
+    });
+    const budget = {
+      ...defaultFastBudget(),
+      ...(timeBudgetMs !== undefined ? { timeBudgetMs } : {}),
+      ...(maxExecutions !== undefined ? { maxExecutions } : {}),
+    };
+    const startedAtMs = Date.now();
+    let executed = 0;
+    let skippedForBudget = 0;
+    let fallback: 'standard' | null = null;
+    let fallbackReason: string | null = null;
+    const nextChecks: string[] = [];
     try {
       for (const check of declared.checks) {
         if (abort.signal.aborted) break;
         const task = inspected.task;
+        const entry = plan.entries.find((item) => item.checkId === check.id);
+        const criterion = task.criteria.find((item) => item.id === check.criterionId);
+        if (entry?.reused) {
+          results.push({
+            checkId: check.id,
+            criterionId: check.criterionId,
+            outcome: 'passed',
+            status: 'reused',
+            artifact: null,
+            reused: true,
+          });
+          continue;
+        }
+        if (isBudgetExceeded(mode, startedAtMs, executed, budget)) fallback = 'standard';
+        if (fallback) {
+          fallbackReason ??= `Fast-mode time/execution budget exceeded after ${executed} executed check(s).`;
+          if (!criterion || !task.owner)
+            throw new AcceptanceError(
+              'Task criterion or ownership changed during verification.',
+              'TASK_NOT_RUNNING',
+            );
+          const updated = await recordEvidence(projectRoot, {
+            taskId: task.id,
+            runId: task.owner.runId,
+            expectedRevision: task.revision,
+            criterionId: criterion.id,
+            criterionRevision: criterion.revision,
+            outcome: 'skipped',
+            command: check.label,
+            environmentDetails: 'fast-mode; time/execution budget exceeded before this check ran',
+          });
+          results.push({
+            checkId: check.id,
+            criterionId: criterion.id,
+            outcome: 'skipped',
+            status: 'fast-mode-budget-exceeded',
+            artifact: null,
+            reused: false,
+          });
+          skippedForBudget += 1;
+          nextChecks.push(check.id);
+          inspected = {
+            task: updated,
+            reconciliation: (await inspectTask(projectRoot, taskId)).reconciliation,
+          };
+          continue;
+        }
         // Capture the exact pre-execution source in the artifact and reject a pass
         // when the source moves before evidence is committed.
         const source = inspected.reconciliation.currentSource;
-        const executed = await executeOne({
+        const executedCheck = await executeOne({
           root: projectRoot,
           task,
           check,
@@ -714,7 +813,7 @@ export function createAcceptanceVerifier({
           launch,
           source,
         });
-        const criterion = task.criteria.find((item) => item.id === check.criterionId);
+        executed += 1;
         if (!criterion || !task.owner)
           throw new AcceptanceError(
             'Task criterion or ownership changed during verification.',
@@ -723,10 +822,10 @@ export function createAcceptanceVerifier({
         const artifact = JSON.stringify({
           schemaVersion: 1,
           type: check.type,
-          status: executed.result.status,
-          location: executed.stored.location,
-          sha256: executed.stored.sha256,
-          bytes: executed.stored.bytes,
+          status: executedCheck.result.status,
+          location: executedCheck.stored.location,
+          sha256: executedCheck.stored.sha256,
+          bytes: executedCheck.stored.bytes,
         });
         const updated = await recordEvidence(projectRoot, {
           taskId: task.id,
@@ -734,23 +833,36 @@ export function createAcceptanceVerifier({
           expectedRevision: task.revision,
           criterionId: criterion.id,
           criterionRevision: criterion.revision,
-          outcome: executed.result.outcome,
+          outcome: executedCheck.result.outcome,
           command: check.label,
-          environmentDetails: `acceptance-${check.type}; artifact=${executed.stored.location}`,
+          environmentDetails: `acceptance-${check.type}; artifact=${executedCheck.stored.location}`,
           artifact,
         });
         results.push({
           checkId: check.id,
           criterionId: criterion.id,
-          outcome: executed.result.outcome,
-          status: executed.result.status,
-          artifact: executed.stored,
+          outcome: executedCheck.result.outcome,
+          status: executedCheck.result.status,
+          artifact: executedCheck.stored,
+          reused: false,
         });
         inspected = {
           task: updated,
           reconciliation: (await inspectTask(projectRoot, taskId)).reconciliation,
         };
       }
+      const stats: VerificationStats = {
+        mode,
+        selected: plan.entries.filter((item) => item.selected).length,
+        reused: plan.entries.filter((item) => item.reused).length,
+        executed,
+        skippedForBudget,
+        elapsedMs: Date.now() - startedAtMs,
+        fallback,
+        fallbackReason,
+        nextChecks,
+        usage: null,
+      };
       return {
         schemaVersion: 1,
         status:
@@ -760,6 +872,8 @@ export function createAcceptanceVerifier({
             : 'failed',
         results,
         task: inspected.task,
+        plan,
+        stats,
       };
     } finally {
       ACTIVE.delete(key(projectRoot, taskId));

@@ -636,6 +636,45 @@ test('workflow persists exact approval and completes only after verification, re
   );
 });
 
+test('the task-owned verification mode reaches acceptance verification unchanged', async (t) => {
+  const root = await rootFixture(t);
+  const fixture = harness();
+  fixture.task.verificationMode = 'fast';
+  const receivedModes = [];
+  const originalVerify = fixture.acceptance.verify;
+  fixture.acceptance.verify = async (input) => {
+    receivedModes.push(input?.mode);
+    return originalVerify(input);
+  };
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['fixture', fixture.adapter]]),
+    launch: fixture.launch,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+    tasks: fixture.tasks,
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    providerId: 'fixture',
+    reviewProviderId: 'fixture-review',
+    executionAuthorized: true,
+  });
+  const planned = await controller.wait(started.taskId);
+  await controller.approve({
+    taskId: planned.taskId,
+    expectedRevision: planned.revision,
+    planDigest: planned.plan.digest,
+    requirementsDigest: planned.requirements.digest,
+    checksDigest: planned.plan.checksDigest,
+    scope: 'implement exact plan',
+    reference: 'test approval',
+  });
+  const completed = await controller.wait(planned.taskId);
+  assert.equal(completed.status, 'verified');
+  assert.deepEqual(receivedModes, ['fast']);
+});
+
 test('supplied checks stay authoritative when the planner leaves checks_json empty', async (t) => {
   const root = await rootFixture(t);
   const fixture = harness();

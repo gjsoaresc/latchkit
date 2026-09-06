@@ -1,4 +1,7 @@
 import { errorMessage } from '../types.js';
+import { isVerificationMode, type VerificationMode } from '../verification/contracts.js';
+
+export type { VerificationMode };
 
 export type SourceSnapshot = { revision: string | null; dirtyFingerprint: string | null };
 export type Authorization = {
@@ -102,6 +105,10 @@ export type Task = {
   events: TaskEvent[];
   import: TaskImport | null;
   enhancedWorkflow?: EnhancedWorkflow | null;
+  /** Present from task-state schema version 3. Bounded, change-focused fast
+   * verification versus the full standard path; persisted so resume never
+   * silently changes an existing task's verification behavior. */
+  verificationMode?: VerificationMode;
 };
 export type TaskState = {
   schemaVersion: number;
@@ -112,8 +119,8 @@ export type TaskState = {
   tasks: Task[];
 };
 
-export const TASK_STATE_SCHEMA_VERSION = 2;
-export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2]);
+export const TASK_STATE_SCHEMA_VERSION = 3;
+export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2, 3]);
 
 export const TASK_STATES = Object.freeze([
   'planned',
@@ -541,6 +548,7 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
     'import',
   ];
   if (schemaVersion >= 2) fields.push('enhancedWorkflow');
+  if (schemaVersion >= 3) fields.push('verificationMode');
   keys(value, fields, fields, path);
   id(value.id, `${path}.id`, 'task');
   string(value.title, `${path}.title`);
@@ -595,6 +603,12 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
   validateImport(value.import, `${path}.import`);
   if (schemaVersion >= 2)
     validateEnhancedWorkflow(value.enhancedWorkflow ?? null, value, `${path}.enhancedWorkflow`);
+  if (schemaVersion >= 3 && !isVerificationMode(value.verificationMode))
+    throw new TaskStateError(
+      'verificationMode must be fast or standard.',
+      'TASK_STATE_INVALID',
+      `${path}.verificationMode`,
+    );
   const runs = new Map(value.runs.map((item) => [item.id, item]));
   const criteria = new Map(value.criteria.map((item) => [item.id, item]));
   const authorizations = new Set(value.authorizations.map((item) => item.id));

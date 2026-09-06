@@ -21,6 +21,8 @@ For each criterion, make the smallest coherent change, run a focused check, and 
 
 Bound the loop: stop after the agreed iteration or time/usage limit, or sooner when the evidence shows a blocker. Record unresolved failures, unsupported gates, and untested environments as gaps. `advisory`, `unsupported`, `skipped`, and `failed` are not `passed`; an instruction-only fallback cannot claim runtime enforcement.
 
+When the task's verification mode is `fast`, focused iteration checks and the host's bounded, change-focused plan are expected; still run the required final checks once the change is stable, and fall back to `standard` mode when fast mode reports a gap it could not resolve within its bound.
+
 Use task-state checkpoints and acceptance evidence when available. If they are unavailable, write `.latchkit/notes/<unique-task-slug>-build.md` using [workflow evidence](../references/workflow-evidence.md). A checkpoint or note is durable context, not independent proof.
 
 ## Deliver

@@ -23,6 +23,8 @@ import {
   resumeTask,
   reviseCriteria,
   slugifyPlanTitle,
+  setVerificationMode,
+  TASK_STATE_SCHEMA_VERSION,
   verifyTask,
 } from '../dist/src/task-state/service.js';
 import { readTaskState, TASK_STATE_PATH } from '../dist/src/task-state/store.js';
@@ -518,7 +520,10 @@ test('task-state v1 reads without mutation and migrates explicitly with an exact
   const file = path.join(root, TASK_STATE_PATH);
   const current = JSON.parse(await fs.readFile(file, 'utf8'));
   current.schemaVersion = 1;
-  for (const task of current.tasks) delete task.enhancedWorkflow;
+  for (const task of current.tasks) {
+    delete task.enhancedWorkflow;
+    delete task.verificationMode;
+  }
   const legacy = `${JSON.stringify(current, null, 2)}\n`;
   await fs.writeFile(file, legacy);
   assert.equal((await readTaskState(root)).schemaVersion, 1);
@@ -530,6 +535,7 @@ test('task-state v1 reads without mutation and migrates explicitly with an exact
     criteria: [],
   });
   assert.equal(Object.hasOwn(added, 'enhancedWorkflow'), false);
+  assert.equal(Object.hasOwn(added, 'verificationMode'), false);
   assert.equal((await readTaskState(root)).schemaVersion, 1);
   const legacyAfterMutation = await fs.readFile(file, 'utf8');
 
@@ -549,10 +555,31 @@ test('task-state v1 reads without mutation and migrates explicitly with an exact
   assert.equal(await fs.readFile(path.join(root, preview.backup), 'utf8'), legacyAfterMutation);
   const migrated = await migrateTaskState(root);
   assert.equal(migrated.action, 'migrated');
-  assert.equal((await readTaskState(root)).schemaVersion, 2);
+  assert.equal(migrated.fromVersion, 1);
+  assert.equal(migrated.toVersion, TASK_STATE_SCHEMA_VERSION);
+  assert.equal((await readTaskState(root)).schemaVersion, TASK_STATE_SCHEMA_VERSION);
   assert.equal((await readTaskState(root)).tasks[0].enhancedWorkflow, null);
+  assert.equal((await readTaskState(root)).tasks[0].verificationMode, 'standard');
   assert.equal(await fs.readFile(path.join(root, migrated.backup), 'utf8'), legacyAfterMutation);
   assert.equal((await inspectTask(root, created.id)).task.enhancedWorkflow, null);
+  assert.equal((await inspectTask(root, created.id)).task.verificationMode, 'standard');
+
+  const repeated = await migrateTaskState(root);
+  assert.equal(repeated.action, 'current');
+  assert.equal(repeated.fromVersion, TASK_STATE_SCHEMA_VERSION);
+  assert.equal(repeated.toVersion, TASK_STATE_SCHEMA_VERSION);
+
+  const changed = await setVerificationMode(root, {
+    taskId: created.id,
+    expectedRevision: (await inspectTask(root, created.id)).task.revision,
+    verificationMode: 'fast',
+  });
+  assert.equal(changed.verificationMode, 'fast');
+  const resumed = await resumeTask(root, {
+    taskId: created.id,
+    expectedRevision: changed.revision,
+  });
+  assert.equal(resumed.verificationMode, 'fast', 'resume must preserve the task-owned mode');
 });
 
 test('CLI registers and inspects an enhanced specification document', async (t) => {

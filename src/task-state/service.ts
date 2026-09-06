@@ -7,11 +7,13 @@ import { promisify } from 'node:util';
 import {
   EVIDENCE_OUTCOMES,
   PLAN_ARTIFACT_PATH_PATTERN,
+  TASK_STATE_SCHEMA_VERSION,
   TaskStateError,
   validateStableId,
 } from './contracts.js';
 import { cleanupTaskStateTemps, readTaskState, writeTaskState } from './store.js';
 import { withTaskStateLock } from './lock.js';
+import { isVerificationMode } from '../verification/contracts.js';
 import type {
   Authorization,
   Criterion,
@@ -23,6 +25,7 @@ import type {
   TaskImport,
   TaskRun,
   TaskState,
+  VerificationMode,
 } from './contracts.js';
 import type { StateWriteOptions } from './store.js';
 import { errorCode } from '../types.js';
@@ -57,6 +60,9 @@ export type CreateTaskInput = {
   criteria?: CriterionInput[];
   authorizationRequired?: boolean;
   authorization?: AuthorizationInput;
+  /** Explicit fast/standard selection for this task's verification. Ignored
+   * on a store below schema version 3; defaults to standard. */
+  verificationMode?: VerificationMode;
 };
 export type EnhancedArtifactInput = { path: string; templateVersion: number };
 export type EnhancedCheckInput = {
@@ -358,12 +364,19 @@ export async function createTask(
   options: MutationOptions = {},
 ) {
   const importRecord = options[IMPORT_RECORD] ?? null;
+  if (input.verificationMode !== undefined && !isVerificationMode(input.verificationMode))
+    throw new TaskStateError(
+      'verificationMode must be fast or standard.',
+      'TASK_STATE_INVALID',
+      '$.verificationMode',
+    );
   const request = {
     mutationId: input.mutationId,
     title: input.title,
     criteria: input.criteria ?? [],
     authorizationRequired: input.authorizationRequired ?? true,
     authorization: input.authorization ?? null,
+    verificationMode: input.verificationMode ?? null,
     importRecord,
   };
   return mutate(
@@ -403,6 +416,7 @@ export async function createTask(
         import: importRecord,
       };
       if (state.schemaVersion >= 2) task.enhancedWorkflow = null;
+      if (state.schemaVersion >= 3) task.verificationMode = input.verificationMode ?? 'standard';
       state.tasks.push(task);
       commitEvent(state, task, {
         mutationId,
@@ -649,6 +663,52 @@ export async function reviseCriteria(
       task.criteria = reconcileCriteria(task.criteria, input.criteria, clock);
       if (task.state === 'completed') task.state = 'planned';
       commitEvent(state, task, { mutationId, type: 'criteria.revised', hash, clock });
+      return task;
+    },
+    options,
+  );
+}
+
+/** Explicitly change a task's persisted verification mode. Ordinary resume
+ * never calls this: a task keeps its existing mode until an explicit,
+ * authorized change like this one. Requires task-state schema version 3. */
+export async function setVerificationMode(
+  root: string,
+  input: TaskMutationInput & { verificationMode: VerificationMode },
+  options: MutationOptions = {},
+) {
+  const request = {
+    mutationId: input.mutationId,
+    taskId: input.taskId,
+    expectedRevision: input.expectedRevision,
+    verificationMode: input.verificationMode,
+  };
+  return mutate(
+    root,
+    request,
+    async ({ state, clock, mutationId, hash }) => {
+      if (state.schemaVersion < 3)
+        throw new TaskStateError(
+          'Changing verification mode requires an explicit task-state migration to version 3.',
+          'TASK_STATE_MIGRATION_REQUIRED',
+          '$.schemaVersion',
+        );
+      if (!isVerificationMode(input.verificationMode))
+        throw new TaskStateError(
+          'verificationMode must be fast or standard.',
+          'TASK_STATE_INVALID',
+          '$.verificationMode',
+        );
+      const task = findTask(state, input.taskId);
+      assertExpected(task, input.expectedRevision);
+      ensureMutable(task);
+      task.verificationMode = input.verificationMode;
+      commitEvent(state, task, {
+        mutationId,
+        type: `verification-mode.changed:${input.verificationMode}`,
+        hash,
+        clock,
+      });
       return task;
     },
     options,
@@ -1062,6 +1122,26 @@ function verificationFailures(task: Task, source: SourceSnapshot): VerificationF
   return failures;
 }
 
+function migrateTaskStep(state: TaskState, fromVersion: number): TaskState {
+  if (fromVersion === 1)
+    return {
+      ...state,
+      schemaVersion: 2,
+      tasks: state.tasks.map((task) => ({ ...task, enhancedWorkflow: null })),
+    };
+  if (fromVersion === 2)
+    return {
+      ...state,
+      schemaVersion: 3,
+      tasks: state.tasks.map((task) => ({ ...task, verificationMode: 'standard' as const })),
+    };
+  throw new TaskStateError(
+    `No migration is available from version ${fromVersion}.`,
+    'TASK_STATE_MIGRATION_UNSUPPORTED',
+    '$.schemaVersion',
+  );
+}
+
 export async function migrateTaskState(
   root: string,
   { dryRun = false, faultBoundary }: { dryRun?: boolean } & StateWriteOptions = {},
@@ -1072,19 +1152,36 @@ export async function migrateTaskState(
     const raw = await readOptional(root, TASK_STATE_PATH);
     if (raw === null) {
       const state = await readTaskState(root);
-      return { action: 'current' as const, fromVersion: 2, toVersion: 2, backup: null, state };
+      return {
+        action: 'current' as const,
+        fromVersion: TASK_STATE_SCHEMA_VERSION,
+        toVersion: TASK_STATE_SCHEMA_VERSION,
+        backup: null,
+        state,
+      };
     }
     const state = await readTaskState(root, { allowMissing: false });
-    if (state.schemaVersion === 2)
-      return { action: 'current' as const, fromVersion: 2, toVersion: 2, backup: null, state };
-    const backup = `.latchkit/backups/task-state.v1.${digest(raw)}.json`;
-    const migrated: TaskState = {
-      ...state,
-      schemaVersion: 2,
-      tasks: state.tasks.map((task) => ({ ...task, enhancedWorkflow: null })),
-    };
+    const fromVersion = state.schemaVersion;
+    if (fromVersion === TASK_STATE_SCHEMA_VERSION)
+      return {
+        action: 'current' as const,
+        fromVersion,
+        toVersion: TASK_STATE_SCHEMA_VERSION,
+        backup: null,
+        state,
+      };
+    let migrated: TaskState = state;
+    for (let version = fromVersion; version < TASK_STATE_SCHEMA_VERSION; version += 1)
+      migrated = migrateTaskStep(migrated, version);
+    const backup = `.latchkit/backups/task-state.v${fromVersion}.${digest(raw)}.json`;
     if (dryRun)
-      return { action: 'migrate' as const, fromVersion: 1, toVersion: 2, backup, state: migrated };
+      return {
+        action: 'migrate' as const,
+        fromVersion,
+        toVersion: TASK_STATE_SCHEMA_VERSION,
+        backup,
+        state: migrated,
+      };
     const existing = await readOptional(root, backup);
     if (existing !== null && existing !== raw)
       throw new TaskStateError(
@@ -1094,7 +1191,13 @@ export async function migrateTaskState(
       );
     if (existing === null) await writeAtomic(root, backup, raw, 0o600);
     await writeTaskState(root, migrated, { faultBoundary });
-    return { action: 'migrated' as const, fromVersion: 1, toVersion: 2, backup, state: migrated };
+    return {
+      action: 'migrated' as const,
+      fromVersion,
+      toVersion: TASK_STATE_SCHEMA_VERSION,
+      backup,
+      state: migrated,
+    };
   });
 }
 

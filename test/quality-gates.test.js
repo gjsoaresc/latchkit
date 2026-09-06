@@ -256,3 +256,105 @@ test('typed acceptance checks extend the quality-gate interface and share task e
   assert.equal(artifact.type, 'cli');
   assert.match(artifact.location, /acceptance-evidence/);
 });
+
+test('fast mode reuses an unchanged passing check and reruns it once its source actually changes', async (t) => {
+  const { root, task } = await taskFixture(t);
+  const declared = checks(task).slice(0, 1);
+  let launches = 0;
+  const run = async () => {
+    launches += 1;
+    return { status: 'exited', exitCode: 0 };
+  };
+
+  const first = await executeQualityGates({
+    root,
+    task,
+    event: event('advisory'),
+    provider: provider(),
+    checks: declared,
+    isExecutionAuthorized: () => true,
+    mode: 'fast',
+    run,
+  });
+  assert.equal(launches, 1, 'a check with no prior evidence must run');
+  assert.equal(first.results[0].outcome, 'passed');
+  assert.equal(first.stats.mode, 'fast');
+  assert.equal(first.stats.executed, 1);
+  assert.equal(first.stats.reused, 0);
+
+  const second = await executeQualityGates({
+    root,
+    task: first.task,
+    event: event('advisory'),
+    provider: provider(),
+    checks: declared,
+    isExecutionAuthorized: () => true,
+    mode: 'fast',
+    run,
+  });
+  assert.equal(launches, 1, 'an unchanged source must reuse the prior passing evidence');
+  assert.equal(second.results[0].outcome, 'passed');
+  assert.equal(second.results[0].reused, true);
+  assert.equal(second.stats.reused, 1);
+  assert.equal(second.stats.executed, 0);
+
+  await fs.writeFile(path.join(root, 'source.txt'), 'source changed\n');
+  const third = await executeQualityGates({
+    root,
+    task: second.task,
+    event: event('advisory'),
+    provider: provider(),
+    checks: declared,
+    isExecutionAuthorized: () => true,
+    mode: 'fast',
+    run,
+  });
+  assert.equal(launches, 2, 'a real source change invalidates the reused evidence');
+  assert.equal(third.results[0].reused, undefined);
+  assert.equal(third.stats.executed, 1);
+
+  const standard = await executeQualityGates({
+    root,
+    task: third.task,
+    event: event('advisory'),
+    provider: provider(),
+    checks: declared,
+    isExecutionAuthorized: () => true,
+    run,
+  });
+  assert.equal(launches, 3, 'standard mode (the default) never reuses evidence');
+  assert.equal(standard.stats.mode, 'standard');
+});
+
+test('fast mode applies an explicit execution budget and reports a fallback with the next check', async (t) => {
+  const { root, task } = await taskFixture(t);
+  const declared = checks(task);
+  let launches = 0;
+  const result = await executeQualityGates({
+    root,
+    task,
+    event: event('advisory'),
+    provider: provider(),
+    checks: declared,
+    isExecutionAuthorized: () => true,
+    mode: 'fast',
+    maxExecutions: 1,
+    run: async () => {
+      launches += 1;
+      return { status: 'exited', exitCode: 0 };
+    },
+  });
+  assert.equal(launches, 1, 'the budget bounds actual executions, never zero of them');
+  assert.equal(result.stats.executed, 1);
+  assert.equal(result.stats.skippedForBudget, 1);
+  assert.equal(result.stats.fallback, 'standard');
+  assert.match(result.stats.fallbackReason, /budget exceeded/);
+  assert.deepEqual(result.stats.nextChecks, ['docs']);
+  const skipped = result.results.find((item) => item.checkId === 'docs');
+  assert.equal(skipped.outcome, 'skipped');
+  assert.equal(
+    result.task.evidence.find((item) => item.criterionId === task.criteria[1].id).outcome,
+    'skipped',
+  );
+  assert.equal(result.status, 'failed', 'a bounded gap is never silently reported as verified');
+});

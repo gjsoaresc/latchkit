@@ -42,6 +42,8 @@ export interface ConsoleTask {
   evidence: Evidence[];
   checkpoints: { summary: string }[];
   reconciliation?: { currentSource: Source; recordedProcess: string };
+  /** Present from task-state schema version 3; absent on an older task means standard. */
+  verificationMode?: 'fast' | 'standard';
 }
 export interface MemoryPage {
   revision: number;
