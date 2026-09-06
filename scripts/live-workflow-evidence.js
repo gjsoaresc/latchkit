@@ -248,6 +248,9 @@ async function inner(values) {
     const launch = (options = {}) =>
       runProviderProcess({
         ...options,
+        ...(values.model && options.provider?.id === 'codex'
+          ? { plan: { ...options.plan, args: ['--model', values.model, ...options.plan.args] } }
+          : {}),
         timeoutMs: Math.min(options.timeoutMs ?? 120_000, 120_000),
         outputLimitBytes: Math.min(options.outputLimitBytes ?? 1024 * 1024, 1024 * 1024),
         onEvent: (event) => {
@@ -355,7 +358,7 @@ async function inner(values) {
       provider: {
         id: 'codex',
         version: (await command('codex', ['--version'])).stdout.trim(),
-        modelOverride: null,
+        modelOverride: values.model ?? null,
         settingsPreserved: true,
       },
       bounds: {
@@ -435,6 +438,7 @@ async function outer(values) {
         output,
         '--provider',
         'codex',
+        ...(values.model ? ['--model', values.model] : []),
       ],
       900_000,
     );
@@ -447,6 +451,7 @@ const { values } = parseArgs({
   options: {
     authorized: { type: 'boolean' },
     provider: { type: 'string', default: 'codex' },
+    model: { type: 'string' },
     output: { type: 'string' },
     artifact: { type: 'string' },
     'artifact-sha256': { type: 'string' },
@@ -455,5 +460,8 @@ const { values } = parseArgs({
     'archive-sha256': { type: 'string' },
   },
 });
+
+if (values.model !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,100}$/.test(values.model))
+  throw new Error('--model must be an explicit model identifier.');
 
 await (values.inner ? inner(values) : outer(values));

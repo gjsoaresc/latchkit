@@ -45,7 +45,10 @@ npm run verify:workflow -- --authorized --provider codex --artifact <standalone.
 
 Use `node scripts/live-provider-adapter-evidence.js` with the same authorization,
 archive, digest, provider, and output arguments for a bounded read-only Codex or
-Claude adapter probe. All three harnesses use the coding tool's configured model.
+Claude adapter probe. The harnesses use the coding tool's configured model by default.
+The workflow harness also accepts an explicit `--model <model-id>` for bounded
+qualification on a selected model. It records that override in evidence and passes
+it only to the child Codex invocation; saved provider settings remain unchanged.
 
 ## Current qualification scope
 
