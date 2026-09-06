@@ -6,6 +6,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { syncBuiltinESMExports } from 'node:module';
 import { createAcceptanceVerifier } from '../dist/src/acceptance/service.js';
 import { validateAcceptanceDocument } from '../dist/src/acceptance/contracts.js';
 import { runProviderProcess } from '../dist/src/runtime/process-runner.js';
@@ -100,6 +101,47 @@ test('real CLI and HTTP drivers record criterion-bound, sanitized, digest-addres
     assert.match(content, new RegExp(item.criterionId));
   }
 });
+
+test(
+  'acceptance evidence retries Windows sharing failures before reporting a result',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const { root, task } = await setup(t, ['Command succeeds']);
+    const rename = fs.rename;
+    let attempts = 0;
+    t.mock.method(fs, 'rename', async (from, to) => {
+      if (to.includes('acceptance-evidence')) {
+        attempts += 1;
+        if (attempts < 3) throw Object.assign(new Error('Sharing failure'), { code: 'EBUSY' });
+      }
+      return rename(from, to);
+    });
+    syncBuiltinESMExports();
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+    const result = await createAcceptanceVerifier({ root }).verify({
+      taskId: task.id,
+      executionAuthorized: true,
+      document: document([
+        {
+          id: 'cli',
+          criterionId: task.criteria[0].id,
+          label: 'CLI',
+          type: 'cli',
+          plan: { executable: process.execPath, args: ['-e', "console.log('passed')"] },
+        },
+      ]),
+    });
+    assert.equal(result.status, 'passed');
+    assert.ok(attempts >= 3 && attempts <= 9);
+    assert.match(
+      await fs.readFile(path.join(root, result.results[0].artifact.location), 'utf8'),
+      /passed/,
+    );
+  },
+);
 
 test('wrong API, redirect, and oversized response have distinct non-passing evidence', async (t) => {
   const { root, task } = await setup(t, ['wrong', 'redirect', 'large']);

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createServer as createNetServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { mkdir, open, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { redact } from '../diagnostics/redact.js';
 import { errorCode, errorMessage } from '../types.js';
 import { providerById } from '../providers/registry.js';
@@ -10,7 +10,7 @@ import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../runtime/pro
 import type { ProcessRunResult, RunProviderProcessOptions } from '../runtime/process-runner.js';
 import { inspectTask, recordEvidence } from '../task-state/service.js';
 import type { SourceSnapshot, Task } from '../task-state/contracts.js';
-import { safePath } from '../storage.js';
+import { safePath, writeAtomic } from '../storage.js';
 import { AcceptanceError, safeArtifactLocation, validateAcceptanceDocument } from './contracts.js';
 import type {
   AcceptanceCheck,
@@ -554,19 +554,7 @@ async function writeArtifact(
   const bytes = Buffer.from(`${JSON.stringify(redact(document, suppliedSecrets), null, 2)}\n`);
   if (bytes.length > MAX_ARTIFACT_BYTES)
     throw new AcceptanceError('Sanitized artifact exceeds 256 KB.', 'ARTIFACT_TOO_LARGE');
-  const temporary = `${destination}.${randomUUID()}.tmp`;
-  const handle = await open(temporary, 'wx', 0o600);
-  try {
-    await handle.writeFile(bytes);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
-    await rename(temporary, destination);
-  } finally {
-    await unlink(temporary).catch(() => {});
-  }
+  await writeAtomic(root, location, bytes);
   const taskDirectory = path.dirname(directory);
   const entries: { name: string; time: number }[] = [];
   for (const entry of await readdir(taskDirectory, { withFileTypes: true })) {

@@ -89,6 +89,14 @@ export async function writeAtomic(
   relative: string,
   content: string | Uint8Array,
   mode = 0o600,
+  {
+    faultBoundary,
+  }: {
+    faultBoundary?: (
+      boundary: string,
+      detail: { temporary?: string; target: string },
+    ) => Promise<void>;
+  } = {},
 ): Promise<void> {
   const target = await safePath(root, relative);
   const directory = path.dirname(target);
@@ -104,6 +112,7 @@ export async function writeAtomic(
     } finally {
       await handle.close();
     }
+    await faultBoundary?.('prepared', { temporary, target });
     const delays = [10, 20, 40, 80, 160, 320, 500, 500];
     for (let attempt = 0; ; attempt += 1) {
       // A short-lived Windows reader/scanner must not force delete-then-write.
@@ -126,6 +135,7 @@ export async function writeAtomic(
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+    await faultBoundary?.('committed', { target });
     await syncDirectory(directory);
   } catch (error) {
     failed = true;
