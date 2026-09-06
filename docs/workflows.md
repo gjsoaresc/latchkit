@@ -17,7 +17,13 @@ requirements → plan approval → implementation → verification
 The requirements and exact plan produce versioned acceptance checks. A user
 must approve the exact requirements, plan, checks, and authorization scope
 before implementation starts. The approval is digest-bound, so changed
-requirements, plans, checks, policy, or prompts invalidate it. The selected
+requirements, plans, checks, policy, or prompts invalidate it — and so does a
+change to the task's own accepted intent: approval also binds an `intentDigest`
+over every currently accepted decision and confirmed assumption, recomputed
+live on each policy evaluation, so reconciling one away (see
+[reconciling changed intent](task-state.md#reconciling-changed-intent))
+invalidates the approval immediately and routes an ordinary resume back to
+plan approval instead of continuing on the stale contract. The selected
 provider is the default reviewer when it exposes review capability; otherwise
 an explicit review provider is required.
 

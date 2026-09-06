@@ -524,6 +524,7 @@ test('task-state v1 reads without mutation and migrates explicitly with an exact
     delete task.enhancedWorkflow;
     delete task.verificationMode;
     delete task.records;
+    delete task.reconciliations;
   }
   const legacy = `${JSON.stringify(current, null, 2)}\n`;
   await fs.writeFile(file, legacy);
@@ -538,6 +539,7 @@ test('task-state v1 reads without mutation and migrates explicitly with an exact
   assert.equal(Object.hasOwn(added, 'enhancedWorkflow'), false);
   assert.equal(Object.hasOwn(added, 'verificationMode'), false);
   assert.equal(Object.hasOwn(added, 'records'), false);
+  assert.equal(Object.hasOwn(added, 'reconciliations'), false);
   assert.equal((await readTaskState(root)).schemaVersion, 1);
   const legacyAfterMutation = await fs.readFile(file, 'utf8');
 
@@ -563,10 +565,12 @@ test('task-state v1 reads without mutation and migrates explicitly with an exact
   assert.equal((await readTaskState(root)).tasks[0].enhancedWorkflow, null);
   assert.equal((await readTaskState(root)).tasks[0].verificationMode, 'standard');
   assert.deepEqual((await readTaskState(root)).tasks[0].records, []);
+  assert.deepEqual((await readTaskState(root)).tasks[0].reconciliations, []);
   assert.equal(await fs.readFile(path.join(root, migrated.backup), 'utf8'), legacyAfterMutation);
   assert.equal((await inspectTask(root, created.id)).task.enhancedWorkflow, null);
   assert.equal((await inspectTask(root, created.id)).task.verificationMode, 'standard');
   assert.deepEqual((await inspectTask(root, created.id)).task.records, []);
+  assert.deepEqual((await inspectTask(root, created.id)).task.reconciliations, []);
 
   const repeated = await migrateTaskState(root);
   assert.equal(repeated.action, 'current');

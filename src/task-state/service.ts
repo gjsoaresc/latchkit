@@ -33,11 +33,15 @@ import { readOptional, resolveProjectRoot, safePath, writeAtomic } from '../stor
 import { TASK_STATE_PATH } from './store.js';
 import {
   buildRecordDependencyEdges,
+  computeIntentDigest,
   DEFAULT_RECORD_LIST_LIMIT,
   detectRecordDependencyCycle,
   isRecordAuthoritativeStatus,
   isRecordStatusTerminal,
   isRecordTransitionValid,
+  MAX_RECONCILE_IMPACT_ENTRIES,
+  MAX_RECONCILE_PATCH_OPS,
+  MAX_RECONCILIATIONS_PER_TASK,
   MAX_RECORD_HISTORY,
   MAX_RECORD_LINKS,
   MAX_RECORD_LIST_LIMIT,
@@ -53,7 +57,26 @@ import {
   recordTransitionRequiresAuthority,
 } from './records.js';
 import type { RecordKind, RecordLink, RecordProvenanceKind, TaskRecord } from './records.js';
+import {
+  buildImpactGraph,
+  canonicalReconcileJson,
+  deterministicRecordId,
+  digestReconcileJson,
+  uncoveredRequiredCriteria,
+} from './reconcile.js';
+import type {
+  ImpactEntry,
+  ReconciliationOpSummary,
+  ReconciliationReport,
+  ReconciliationUncertainty,
+  TaskReconciliation,
+} from './reconcile.js';
 import { inspectProjectMemory } from '../project-memory/service.js';
+import {
+  acknowledgeTaskReconciliationUnlocked,
+  isWorkflowEffectActive,
+  readWorkflowUnlocked,
+} from '../workflows/reconcile.js';
 
 const execFileAsync = promisify(execFile);
 const TERMINAL_TASK_STATES = new Set(['cancelled', 'verified']);
@@ -75,6 +98,9 @@ export type MutationOptions = StateWriteOptions & {
   clock?: () => Date;
   processProbe?: (run: TaskRun) => boolean | Promise<boolean>;
   [IMPORT_RECORD]?: TaskImport;
+  /** Test-only fault-injection point for `applyTaskReconciliation`'s secondary workflow
+   * acknowledgment; see its call site. Ignored by every other mutation. */
+  workflowFaultBoundary?: () => Promise<void> | void;
 };
 export type TaskMutationInput = { taskId: string; expectedRevision: number; mutationId?: string };
 export type CreateTaskInput = {
@@ -122,6 +148,12 @@ type VerificationFailure = { criterionId: string; reason: string };
 const iso = (clock: () => Date) => clock().toISOString();
 const id = (prefix: string) => `${prefix}_${randomUUID()}`;
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
+const HASH_PATTERN = /^[a-f0-9]{64}$/;
+function requiredHash(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !HASH_PATTERN.test(value))
+    throw new TaskStateError('Expected a lowercase SHA-256 digest.', 'TASK_STATE_INVALID', path);
+  return value;
+}
 
 function canonical(value: unknown): string | undefined {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -441,6 +473,7 @@ export async function createTask(
       if (state.schemaVersion >= 2) task.enhancedWorkflow = null;
       if (state.schemaVersion >= 3) task.verificationMode = input.verificationMode ?? 'standard';
       if (state.schemaVersion >= 4) task.records = [];
+      if (state.schemaVersion >= 5) task.reconciliations = [];
       state.tasks.push(task);
       commitEvent(state, task, {
         mutationId,
@@ -1165,6 +1198,12 @@ function migrateTaskStep(state: TaskState, fromVersion: number): TaskState {
       schemaVersion: 4,
       tasks: state.tasks.map((task) => ({ ...task, records: [] })),
     };
+  if (fromVersion === 4)
+    return {
+      ...state,
+      schemaVersion: 5,
+      tasks: state.tasks.map((task) => ({ ...task, reconciliations: [] })),
+    };
   throw new TaskStateError(
     `No migration is available from version ${fromVersion}.`,
     'TASK_STATE_MIGRATION_UNSUPPORTED',
@@ -1594,6 +1633,137 @@ function resolveRecordAuthorization(
  * prior same-kind record in the same mutation; superseding a record that is currently in its
  * kind's authoritative status requires the same authority as an explicit transition would.
  */
+type RecordCreateOpInput = {
+  kind: RecordKind;
+  text: string;
+  provenance: { kind: RecordProvenanceKind; reference: string };
+  links?: RecordLinkInput[];
+  supersedes?: string;
+  authorizationId?: string;
+  authorization?: AuthorizationInput;
+  /** Overrides the generated new-record ID. Used only by `previewTaskReconciliation` (via
+   * `deterministicRecordId`) so a read-only preview stays byte-identical across repeated calls
+   * against unchanged state; every other caller omits this and gets a real random ID. */
+  newRecordId?: string;
+};
+
+/**
+ * Shared core of `recordTaskRecord`: create (and optionally supersede) one record against an
+ * already task-level-validated `task` (expected revision, mutability, and schema migration are
+ * the caller's responsibility). Factored out so `applyTaskReconciliation` can apply several record
+ * operations plus a criteria change as one atomic task mutation/event, exactly like every other
+ * batched operation in this module, instead of duplicating this logic.
+ */
+async function applyRecordCreateOp(
+  task: Task,
+  projectRoot: string,
+  clock: () => Date,
+  input: RecordCreateOpInput,
+): Promise<TaskRecord> {
+  if (!(RECORD_KINDS as readonly string[]).includes(input.kind))
+    throw new TaskStateError('Unknown record kind.', 'TASK_STATE_INVALID', '$.kind');
+  const records = task.records ?? (task.records = []);
+  if (records.length >= MAX_RECORDS_PER_TASK)
+    throw new TaskStateError(
+      'This task has reached its record limit.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      '$.records',
+    );
+  const text = normalizeRecordText(input.text, '$.text');
+  const provenance = normalizeRecordProvenance(input.provenance, '$.provenance');
+  const linkInputs = input.links ?? [];
+  if (linkInputs.length > MAX_RECORD_LINKS)
+    throw new TaskStateError('Too many declared links.', 'TASK_RECORD_LIMIT_EXCEEDED', '$.links');
+  const links: RecordLink[] = [];
+  for (const [index, linkInput] of linkInputs.entries())
+    links.push(
+      await normalizeRecordLink(projectRoot, linkInput, task, records, `$.links[${index}]`, clock),
+    );
+  let supersedesId: string | null = null;
+  let supersededTarget: TaskRecord | null = null;
+  if (input.supersedes) {
+    supersedesId = validateStableId(input.supersedes, 'record', '$.supersedes');
+    supersededTarget = records.find((item) => item.id === supersedesId) ?? null;
+    if (!supersededTarget)
+      throw new TaskStateError(
+        'Superseded record does not exist.',
+        'TASK_RECORD_NOT_FOUND',
+        '$.supersedes',
+      );
+    if (supersededTarget.kind !== input.kind)
+      throw new TaskStateError(
+        'A record can only supersede a record of the same kind.',
+        'TASK_STATE_INVALID',
+        '$.supersedes',
+      );
+    if (isRecordStatusTerminal(supersededTarget.status))
+      throw new TaskStateError(
+        'That record has already been resolved and cannot be superseded again.',
+        'TASK_RECORD_TRANSITION_INVALID',
+        '$.supersedes',
+      );
+  }
+  const at = iso(clock);
+  const newId = input.newRecordId ?? id('record');
+  const initialStatus = RECORD_INITIAL_STATUS[input.kind];
+  const newRecord: TaskRecord = {
+    id: newId,
+    kind: input.kind,
+    revision: 1,
+    status: initialStatus,
+    text,
+    provenance,
+    links,
+    supersedes: supersedesId,
+    supersededBy: null,
+    history: [
+      {
+        revision: 1,
+        status: initialStatus,
+        text,
+        action: 'created',
+        reason: null,
+        authorizationId: null,
+        createdAt: at,
+      },
+    ],
+    createdAt: at,
+    updatedAt: at,
+  };
+  // Validate the dependency graph including the not-yet-committed record before mutating
+  // anything else, so a cyclic `record`-type link is rejected before any side effect lands.
+  assertNoRecordCycle([...records, newRecord]);
+  if (supersededTarget) {
+    let authorizationId: string | null = null;
+    if (
+      recordTransitionRequiresAuthority(
+        supersededTarget.kind,
+        supersededTarget.status,
+        'superseded',
+      )
+    ) {
+      const resolved = resolveRecordAuthorization(task, clock, input, '$.authorizationId');
+      authorizationId = resolved.authorizationId;
+      if (resolved.authorization) task.authorizations.push(resolved.authorization);
+    }
+    supersededTarget.status = 'superseded';
+    supersededTarget.supersededBy = newId;
+    supersededTarget.revision += 1;
+    supersededTarget.updatedAt = at;
+    supersededTarget.history.push({
+      revision: supersededTarget.revision,
+      status: 'superseded',
+      text: supersededTarget.text,
+      action: 'transitioned',
+      reason: `Superseded by ${newId}.`,
+      authorizationId,
+      createdAt: at,
+    });
+  }
+  records.push(newRecord);
+  return newRecord;
+}
+
 export async function recordTaskRecord(
   root: string,
   input: RecordCreateInput,
@@ -1619,118 +1789,15 @@ export async function recordTaskRecord(
       assertExpected(task, input.expectedRevision);
       ensureMutable(task);
       assertRecordsMigrated(state);
-      if (!(RECORD_KINDS as readonly string[]).includes(input.kind))
-        throw new TaskStateError('Unknown record kind.', 'TASK_STATE_INVALID', '$.kind');
-      const records = task.records ?? (task.records = []);
-      if (records.length >= MAX_RECORDS_PER_TASK)
-        throw new TaskStateError(
-          'This task has reached its record limit.',
-          'TASK_RECORD_LIMIT_EXCEEDED',
-          '$.records',
-        );
-      const text = normalizeRecordText(input.text, '$.text');
-      const provenance = normalizeRecordProvenance(input.provenance, '$.provenance');
-      const linkInputs = input.links ?? [];
-      if (linkInputs.length > MAX_RECORD_LINKS)
-        throw new TaskStateError(
-          'Too many declared links.',
-          'TASK_RECORD_LIMIT_EXCEEDED',
-          '$.links',
-        );
-      const links: RecordLink[] = [];
-      for (const [index, linkInput] of linkInputs.entries())
-        links.push(
-          await normalizeRecordLink(
-            projectRoot,
-            linkInput,
-            task,
-            records,
-            `$.links[${index}]`,
-            clock,
-          ),
-        );
-      let supersedesId: string | null = null;
-      let supersededTarget: TaskRecord | null = null;
-      if (input.supersedes) {
-        supersedesId = validateStableId(input.supersedes, 'record', '$.supersedes');
-        supersededTarget = records.find((item) => item.id === supersedesId) ?? null;
-        if (!supersededTarget)
-          throw new TaskStateError(
-            'Superseded record does not exist.',
-            'TASK_RECORD_NOT_FOUND',
-            '$.supersedes',
-          );
-        if (supersededTarget.kind !== input.kind)
-          throw new TaskStateError(
-            'A record can only supersede a record of the same kind.',
-            'TASK_STATE_INVALID',
-            '$.supersedes',
-          );
-        if (isRecordStatusTerminal(supersededTarget.status))
-          throw new TaskStateError(
-            'That record has already been resolved and cannot be superseded again.',
-            'TASK_RECORD_TRANSITION_INVALID',
-            '$.supersedes',
-          );
-      }
-      const at = iso(clock);
-      const newId = id('record');
-      const initialStatus = RECORD_INITIAL_STATUS[input.kind];
-      const newRecord: TaskRecord = {
-        id: newId,
+      await applyRecordCreateOp(task, projectRoot, clock, {
         kind: input.kind,
-        revision: 1,
-        status: initialStatus,
-        text,
-        provenance,
-        links,
-        supersedes: supersedesId,
-        supersededBy: null,
-        history: [
-          {
-            revision: 1,
-            status: initialStatus,
-            text,
-            action: 'created',
-            reason: null,
-            authorizationId: null,
-            createdAt: at,
-          },
-        ],
-        createdAt: at,
-        updatedAt: at,
-      };
-      // Validate the dependency graph including the not-yet-committed record before mutating
-      // anything else, so a cyclic `record`-type link is rejected before any side effect lands.
-      assertNoRecordCycle([...records, newRecord]);
-      if (supersededTarget) {
-        let authorizationId: string | null = null;
-        if (
-          recordTransitionRequiresAuthority(
-            supersededTarget.kind,
-            supersededTarget.status,
-            'superseded',
-          )
-        ) {
-          const resolved = resolveRecordAuthorization(task, clock, input, '$.authorizationId');
-          authorizationId = resolved.authorizationId;
-          if (resolved.authorization) task.authorizations.push(resolved.authorization);
-        }
-        supersededTarget.status = 'superseded';
-        supersededTarget.supersededBy = newId;
-        supersededTarget.revision += 1;
-        supersededTarget.updatedAt = at;
-        supersededTarget.history.push({
-          revision: supersededTarget.revision,
-          status: 'superseded',
-          text: supersededTarget.text,
-          action: 'transitioned',
-          reason: `Superseded by ${newId}.`,
-          authorizationId,
-          createdAt: at,
-        });
-      }
-      records.push(newRecord);
+        text: input.text,
+        provenance: input.provenance,
+        links: input.links,
+        supersedes: input.supersedes,
+        authorizationId: input.authorizationId,
+        authorization: input.authorization,
+      });
       commitEvent(state, task, {
         mutationId,
         type: `record.created:${input.kind}`,
@@ -1749,6 +1816,78 @@ export async function recordTaskRecord(
  * superseded (`recordTaskRecord` with `supersedes`) so acceptance can never be silently edited
  * away from what was actually authorized.
  */
+type RecordReviseOpInput = {
+  recordId: string;
+  recordRevision: number;
+  text?: string;
+  links?: RecordLinkInput[];
+  reason?: string;
+};
+
+/** Shared core of `reviseTaskRecord`; see `applyRecordCreateOp` for why this is factored out. */
+async function applyRecordReviseOp(
+  task: Task,
+  projectRoot: string,
+  clock: () => Date,
+  input: RecordReviseOpInput,
+): Promise<TaskRecord> {
+  const target = findRecord(task, input.recordId);
+  assertRecordExpected(target, input.recordRevision);
+  if (isRecordStatusTerminal(target.status))
+    throw new TaskStateError(
+      'A resolved or superseded record cannot be revised.',
+      'TASK_RECORD_TRANSITION_INVALID',
+      '$.recordId',
+    );
+  if (isRecordAuthoritativeStatus(target.kind, target.status))
+    throw new TaskStateError(
+      'An authoritatively accepted record cannot be revised; supersede it instead.',
+      'TASK_RECORD_TRANSITION_INVALID',
+      '$.recordId',
+    );
+  if (input.text === undefined && input.links === undefined)
+    throw new TaskStateError('Revision requires new text or links.', 'TASK_STATE_INVALID', '$');
+  if (target.history.length >= MAX_RECORD_HISTORY)
+    throw new TaskStateError(
+      'Record history limit reached; supersede this record instead of revising it further.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      '$.history',
+    );
+  const records = task.records ?? [];
+  if (input.text !== undefined) target.text = normalizeRecordText(input.text, '$.text');
+  if (input.links !== undefined) {
+    if (input.links.length > MAX_RECORD_LINKS)
+      throw new TaskStateError('Too many declared links.', 'TASK_RECORD_LIMIT_EXCEEDED', '$.links');
+    const links: RecordLink[] = [];
+    for (const [index, linkInput] of input.links.entries())
+      links.push(
+        await normalizeRecordLink(
+          projectRoot,
+          linkInput,
+          task,
+          records,
+          `$.links[${index}]`,
+          clock,
+        ),
+      );
+    target.links = links;
+    assertNoRecordCycle(records);
+  }
+  const at = iso(clock);
+  target.revision += 1;
+  target.updatedAt = at;
+  target.history.push({
+    revision: target.revision,
+    status: target.status,
+    text: target.text,
+    action: 'revised',
+    reason: input.reason ?? null,
+    authorizationId: null,
+    createdAt: at,
+  });
+  return target;
+}
+
 export async function reviseTaskRecord(
   root: string,
   input: RecordReviseInput,
@@ -1772,63 +1911,12 @@ export async function reviseTaskRecord(
       assertExpected(task, input.expectedRevision);
       ensureMutable(task);
       assertRecordsMigrated(state);
-      const target = findRecord(task, input.recordId);
-      assertRecordExpected(target, input.recordRevision);
-      if (isRecordStatusTerminal(target.status))
-        throw new TaskStateError(
-          'A resolved or superseded record cannot be revised.',
-          'TASK_RECORD_TRANSITION_INVALID',
-          '$.recordId',
-        );
-      if (isRecordAuthoritativeStatus(target.kind, target.status))
-        throw new TaskStateError(
-          'An authoritatively accepted record cannot be revised; supersede it instead.',
-          'TASK_RECORD_TRANSITION_INVALID',
-          '$.recordId',
-        );
-      if (input.text === undefined && input.links === undefined)
-        throw new TaskStateError('Revision requires new text or links.', 'TASK_STATE_INVALID', '$');
-      if (target.history.length >= MAX_RECORD_HISTORY)
-        throw new TaskStateError(
-          'Record history limit reached; supersede this record instead of revising it further.',
-          'TASK_RECORD_LIMIT_EXCEEDED',
-          '$.history',
-        );
-      const records = task.records ?? [];
-      if (input.text !== undefined) target.text = normalizeRecordText(input.text, '$.text');
-      if (input.links !== undefined) {
-        if (input.links.length > MAX_RECORD_LINKS)
-          throw new TaskStateError(
-            'Too many declared links.',
-            'TASK_RECORD_LIMIT_EXCEEDED',
-            '$.links',
-          );
-        const links: RecordLink[] = [];
-        for (const [index, linkInput] of input.links.entries())
-          links.push(
-            await normalizeRecordLink(
-              projectRoot,
-              linkInput,
-              task,
-              records,
-              `$.links[${index}]`,
-              clock,
-            ),
-          );
-        target.links = links;
-        assertNoRecordCycle(records);
-      }
-      const at = iso(clock);
-      target.revision += 1;
-      target.updatedAt = at;
-      target.history.push({
-        revision: target.revision,
-        status: target.status,
-        text: target.text,
-        action: 'revised',
-        reason: input.reason ?? null,
-        authorizationId: null,
-        createdAt: at,
+      await applyRecordReviseOp(task, projectRoot, clock, {
+        recordId: input.recordId,
+        recordRevision: input.recordRevision,
+        text: input.text,
+        links: input.links,
+        reason: input.reason,
       });
       commitEvent(state, task, { mutationId, type: 'record.revised', hash, clock });
       return task;
@@ -1845,6 +1933,97 @@ export async function reviseTaskRecord(
  * to `verified` instead requires a linked, current, `passed` evidence record — a label or exit
  * status alone is never sufficient.
  */
+type RecordTransitionOpInput = {
+  recordId: string;
+  recordRevision: number;
+  status: string;
+  reason: string;
+  authorizationId?: string;
+  authorization?: AuthorizationInput;
+  evidenceId?: string;
+};
+
+/** Shared core of `transitionTaskRecord`; see `applyRecordCreateOp` for why this is factored out. */
+async function applyRecordTransitionOp(
+  task: Task,
+  projectRoot: string,
+  clock: () => Date,
+  input: RecordTransitionOpInput,
+): Promise<TaskRecord> {
+  const target = findRecord(task, input.recordId);
+  assertRecordExpected(target, input.recordRevision);
+  const reason = normalizeRecordReason(input.reason, '$.reason');
+  if (!RECORD_STATUSES[target.kind].includes(input.status))
+    throw new TaskStateError(
+      'Status is not valid for this record kind.',
+      'TASK_STATE_INVALID',
+      '$.status',
+    );
+  if (!isRecordTransitionValid(target.kind, target.status, input.status))
+    throw new TaskStateError(
+      `Cannot move a ${target.kind} record from ${target.status} to ${input.status}.`,
+      'TASK_RECORD_TRANSITION_INVALID',
+      '$.status',
+    );
+  if (target.history.length >= MAX_RECORD_HISTORY)
+    throw new TaskStateError(
+      'Record history limit reached; supersede this record instead of transitioning it further.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      '$.history',
+    );
+  let authorizationId: string | null = null;
+  if (recordTransitionRequiresAuthority(target.kind, target.status, input.status)) {
+    const resolved = resolveRecordAuthorization(task, clock, input, '$.authorizationId');
+    authorizationId = resolved.authorizationId;
+    if (resolved.authorization) task.authorizations.push(resolved.authorization);
+  }
+  if (target.kind === 'observation' && input.status === 'verified') {
+    if (!input.evidenceId)
+      throw new TaskStateError(
+        'Marking an observation verified requires linked passing evidence.',
+        'TASK_RECORD_EVIDENCE_REQUIRED',
+        '$.evidenceId',
+      );
+    const evidenceId = validateStableId(input.evidenceId, 'evidence', '$.evidenceId');
+    const evidence = task.evidence.find((item) => item.id === evidenceId);
+    if (!evidence)
+      throw new TaskStateError(
+        'Evidence does not exist.',
+        'TASK_RECORD_LINK_INVALID',
+        '$.evidenceId',
+      );
+    if (evidence.outcome !== 'passed')
+      throw new TaskStateError(
+        'Only passing evidence can verify an observation.',
+        'TASK_RECORD_EVIDENCE_REQUIRED',
+        '$.evidenceId',
+      );
+    const currentSource = await captureSource(projectRoot);
+    if (!sourceEqual(evidence.source, currentSource))
+      throw new TaskStateError(
+        'Evidence source is no longer current.',
+        'TASK_RECORD_EVIDENCE_REQUIRED',
+        '$.evidenceId',
+      );
+    if (!target.links.some((link) => link.type === 'evidence' && link.evidenceId === evidenceId))
+      target.links = [...target.links, { type: 'evidence', evidenceId }];
+  }
+  const at = iso(clock);
+  target.status = input.status;
+  target.revision += 1;
+  target.updatedAt = at;
+  target.history.push({
+    revision: target.revision,
+    status: target.status,
+    text: target.text,
+    action: 'transitioned',
+    reason,
+    authorizationId,
+    createdAt: at,
+  });
+  return target;
+}
+
 export async function transitionTaskRecord(
   root: string,
   input: RecordTransitionInput,
@@ -1870,78 +2049,14 @@ export async function transitionTaskRecord(
       assertExpected(task, input.expectedRevision);
       ensureMutable(task);
       assertRecordsMigrated(state);
-      const target = findRecord(task, input.recordId);
-      assertRecordExpected(target, input.recordRevision);
-      const reason = normalizeRecordReason(input.reason, '$.reason');
-      if (!RECORD_STATUSES[target.kind].includes(input.status))
-        throw new TaskStateError(
-          'Status is not valid for this record kind.',
-          'TASK_STATE_INVALID',
-          '$.status',
-        );
-      if (!isRecordTransitionValid(target.kind, target.status, input.status))
-        throw new TaskStateError(
-          `Cannot move a ${target.kind} record from ${target.status} to ${input.status}.`,
-          'TASK_RECORD_TRANSITION_INVALID',
-          '$.status',
-        );
-      if (target.history.length >= MAX_RECORD_HISTORY)
-        throw new TaskStateError(
-          'Record history limit reached; supersede this record instead of transitioning it further.',
-          'TASK_RECORD_LIMIT_EXCEEDED',
-          '$.history',
-        );
-      let authorizationId: string | null = null;
-      if (recordTransitionRequiresAuthority(target.kind, target.status, input.status)) {
-        const resolved = resolveRecordAuthorization(task, clock, input, '$.authorizationId');
-        authorizationId = resolved.authorizationId;
-        if (resolved.authorization) task.authorizations.push(resolved.authorization);
-      }
-      if (target.kind === 'observation' && input.status === 'verified') {
-        if (!input.evidenceId)
-          throw new TaskStateError(
-            'Marking an observation verified requires linked passing evidence.',
-            'TASK_RECORD_EVIDENCE_REQUIRED',
-            '$.evidenceId',
-          );
-        const evidenceId = validateStableId(input.evidenceId, 'evidence', '$.evidenceId');
-        const evidence = task.evidence.find((item) => item.id === evidenceId);
-        if (!evidence)
-          throw new TaskStateError(
-            'Evidence does not exist.',
-            'TASK_RECORD_LINK_INVALID',
-            '$.evidenceId',
-          );
-        if (evidence.outcome !== 'passed')
-          throw new TaskStateError(
-            'Only passing evidence can verify an observation.',
-            'TASK_RECORD_EVIDENCE_REQUIRED',
-            '$.evidenceId',
-          );
-        const currentSource = await captureSource(projectRoot);
-        if (!sourceEqual(evidence.source, currentSource))
-          throw new TaskStateError(
-            'Evidence source is no longer current.',
-            'TASK_RECORD_EVIDENCE_REQUIRED',
-            '$.evidenceId',
-          );
-        if (
-          !target.links.some((link) => link.type === 'evidence' && link.evidenceId === evidenceId)
-        )
-          target.links = [...target.links, { type: 'evidence', evidenceId }];
-      }
-      const at = iso(clock);
-      target.status = input.status;
-      target.revision += 1;
-      target.updatedAt = at;
-      target.history.push({
-        revision: target.revision,
-        status: target.status,
-        text: target.text,
-        action: 'transitioned',
-        reason,
-        authorizationId,
-        createdAt: at,
+      await applyRecordTransitionOp(task, projectRoot, clock, {
+        recordId: input.recordId,
+        recordRevision: input.recordRevision,
+        status: input.status,
+        reason: input.reason,
+        authorizationId: input.authorizationId,
+        authorization: input.authorization,
+        evidenceId: input.evidenceId,
       });
       commitEvent(state, task, {
         mutationId,
@@ -2050,6 +2165,719 @@ export async function inspectTaskRecord(root: string, input: RecordInspectInput)
   return { taskId: task.id, taskRevision: task.revision, record: structuredClone(target), links };
 }
 
+// ---------------------------------------------------------------------------
+// Task-intent reconciliation (issue #111): a deterministic, reviewable impact report for a
+// proposed change to accepted intent (records) and/or criteria, and an explicit apply operation
+// bound to that exact report by digest. See docs/task-state.md#reconciling-changed-intent.
+// ---------------------------------------------------------------------------
+
+export type ReconcileTransitionOpInput = {
+  op: 'transition';
+  recordId: string;
+  recordRevision: number;
+  status: string;
+  reason: string;
+  authorizationId?: string;
+  authorization?: AuthorizationInput;
+  evidenceId?: string;
+};
+export type ReconcileSupersedeOpInput = {
+  op: 'supersede';
+  /** The record being superseded. */
+  recordId: string;
+  recordRevision: number;
+  kind: RecordKind;
+  text: string;
+  provenance: { kind: RecordProvenanceKind; reference: string };
+  links?: RecordLinkInput[];
+  authorizationId?: string;
+  authorization?: AuthorizationInput;
+};
+export type ReconcileReviseOpInput = {
+  op: 'revise';
+  recordId: string;
+  recordRevision: number;
+  text?: string;
+  links?: RecordLinkInput[];
+  reason?: string;
+};
+export type ReconcileRecordOpInput =
+  ReconcileTransitionOpInput | ReconcileSupersedeOpInput | ReconcileReviseOpInput;
+
+export type ReconciliationPatchInput = {
+  recordOps?: ReconcileRecordOpInput[];
+  criteria?: CriterionInput[];
+};
+
+export type PreviewReconciliationInput = { taskId: string; patch: ReconciliationPatchInput };
+export type ApplyReconciliationInput = TaskMutationInput & {
+  patch: ReconciliationPatchInput;
+  /** The exact `digest` returned by a prior `previewTaskReconciliation` call. */
+  previewDigest: string;
+};
+
+function recordSnapshotOf(
+  record: Pick<TaskRecord, 'id' | 'kind' | 'revision' | 'status' | 'text'>,
+) {
+  return {
+    id: record.id,
+    kind: record.kind,
+    revision: record.revision,
+    status: record.status,
+    text: record.text,
+  };
+}
+function criterionSnapshotOf(criterion: Criterion) {
+  return {
+    id: criterion.id,
+    revision: criterion.revision,
+    description: criterion.description,
+    required: criterion.required,
+    approvalRequired: criterion.approvalRequired,
+  };
+}
+function criteriaDigestOf(criteria: readonly Criterion[]): string {
+  return digestReconcileJson(criteria.map(criterionSnapshotOf));
+}
+
+function normalizeReconciliationPatch(patch: ReconciliationPatchInput): {
+  recordOps: ReconcileRecordOpInput[];
+  criteria: CriterionInput[] | null;
+} {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch))
+    throw new TaskStateError(
+      'A reconciliation patch is required.',
+      'TASK_STATE_INVALID',
+      '$.patch',
+    );
+  const recordOps = patch.recordOps ?? [];
+  if (!Array.isArray(recordOps))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', '$.patch.recordOps');
+  if (recordOps.length > MAX_RECONCILE_PATCH_OPS)
+    throw new TaskStateError(
+      'Reconciliation patch has too many record operations.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      '$.patch.recordOps',
+    );
+  const criteria = patch.criteria === undefined ? null : patch.criteria;
+  if (criteria !== null && !Array.isArray(criteria))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', '$.patch.criteria');
+  if (!recordOps.length && criteria === null)
+    throw new TaskStateError(
+      'A reconciliation patch must include at least one record operation or a criteria change.',
+      'TASK_RECONCILE_PATCH_EMPTY',
+      '$.patch',
+    );
+  const targetIds = new Set<string>();
+  recordOps.forEach((op, index) => {
+    if (!op || typeof op !== 'object' || !['transition', 'supersede', 'revise'].includes(op.op))
+      throw new TaskStateError(
+        'Unknown reconciliation record operation.',
+        'TASK_STATE_INVALID',
+        `$.patch.recordOps[${index}].op`,
+      );
+    const recordId = validateStableId(
+      op.recordId,
+      'record',
+      `$.patch.recordOps[${index}].recordId`,
+    );
+    if (targetIds.has(recordId))
+      throw new TaskStateError(
+        'A reconciliation patch cannot target the same record more than once.',
+        'TASK_RECONCILE_PATCH_INVALID',
+        `$.patch.recordOps[${index}].recordId`,
+      );
+    targetIds.add(recordId);
+  });
+  return { recordOps, criteria };
+}
+
+/**
+ * Applies every record op plus an optional criteria replacement to `task` in place, reusing the
+ * exact same per-op helpers as the single-operation record mutations, and returns everything
+ * `buildReconciliationOutcome` needs to build the impact report. Throws the same errors those
+ * helpers throw (stale record revision, invalid transition, cyclic link, missing authorization,
+ * …) so an invalid patch is rejected identically whether encountered during preview or apply.
+ */
+async function applyReconciliationOps(
+  task: Task,
+  root: string,
+  clock: () => Date,
+  normalized: { recordOps: ReconcileRecordOpInput[]; criteria: CriterionInput[] | null },
+  beforeRecords: Map<string, ReturnType<typeof recordSnapshotOf>>,
+  beforeCriteria: Map<string, ReturnType<typeof criterionSnapshotOf>>,
+  /** True only for a read-only preview simulation: assigns a deterministic new-record ID (see
+   * `deterministicRecordId`) to a `supersede` op instead of a real random one, so repeated preview
+   * calls against unchanged state reproduce an identical report. `applyTaskReconciliation` always
+   * passes false and gets the real random ID that is actually persisted. */
+  deterministic: boolean,
+): Promise<{
+  ops: ReconciliationOpSummary[];
+  directRecordIds: Set<string>;
+  directCriterionIds: Set<string>;
+}> {
+  const ops: ReconciliationOpSummary[] = [];
+  const directRecordIds = new Set<string>();
+  for (const [opIndex, op] of normalized.recordOps.entries()) {
+    directRecordIds.add(op.recordId);
+    if (op.op === 'transition') {
+      const before = beforeRecords.get(op.recordId) ?? null;
+      const target = await applyRecordTransitionOp(task, root, clock, {
+        recordId: op.recordId,
+        recordRevision: op.recordRevision,
+        status: op.status,
+        reason: op.reason,
+        authorizationId: op.authorizationId,
+        authorization: op.authorization,
+        evidenceId: op.evidenceId,
+      });
+      ops.push({
+        op: 'transition',
+        targetId: op.recordId,
+        fromRevision: op.recordRevision,
+        toRevision: target.revision,
+        fromStatus: before?.status ?? null,
+        toStatus: target.status,
+      });
+    } else if (op.op === 'supersede') {
+      const before = beforeRecords.get(op.recordId) ?? null;
+      const created = await applyRecordCreateOp(task, root, clock, {
+        kind: op.kind,
+        text: op.text,
+        provenance: op.provenance,
+        links: op.links,
+        supersedes: op.recordId,
+        authorizationId: op.authorizationId,
+        authorization: op.authorization,
+        ...(deterministic
+          ? {
+              newRecordId: deterministicRecordId(
+                canonicalReconcileJson({ taskId: task.id, opIndex, op }),
+              ),
+            }
+          : {}),
+      });
+      directRecordIds.add(created.id);
+      const targetAfter = findRecord(task, op.recordId);
+      ops.push({
+        op: 'supersede',
+        targetId: op.recordId,
+        fromRevision: op.recordRevision,
+        toRevision: targetAfter.revision,
+        fromStatus: before?.status ?? null,
+        toStatus: targetAfter.status,
+      });
+    } else {
+      const before = beforeRecords.get(op.recordId) ?? null;
+      const target = await applyRecordReviseOp(task, root, clock, {
+        recordId: op.recordId,
+        recordRevision: op.recordRevision,
+        text: op.text,
+        links: op.links,
+        reason: op.reason,
+      });
+      ops.push({
+        op: 'revise',
+        targetId: op.recordId,
+        fromRevision: op.recordRevision,
+        toRevision: target.revision,
+        fromStatus: before?.status ?? null,
+        toStatus: target.status,
+      });
+    }
+  }
+  const directCriterionIds = new Set<string>();
+  if (normalized.criteria !== null) {
+    const nextCriteria = reconcileCriteria(task.criteria, normalized.criteria, clock);
+    task.criteria = nextCriteria;
+    if (task.state === 'completed') task.state = 'planned';
+    const afterMap = new Map(nextCriteria.map((item) => [item.id, criterionSnapshotOf(item)]));
+    const allIds = new Set([...beforeCriteria.keys(), ...afterMap.keys()]);
+    for (const criterionId of allIds) {
+      const before = beforeCriteria.get(criterionId) ?? null;
+      const after = afterMap.get(criterionId) ?? null;
+      if (!before && after) {
+        directCriterionIds.add(criterionId);
+        ops.push({
+          op: 'criterion',
+          targetId: criterionId,
+          fromRevision: after.revision,
+          toRevision: after.revision,
+          fromStatus: null,
+          toStatus: 'added',
+        });
+      } else if (before && !after) {
+        directCriterionIds.add(criterionId);
+        ops.push({
+          op: 'criterion',
+          targetId: criterionId,
+          fromRevision: before.revision,
+          toRevision: before.revision,
+          fromStatus: 'present',
+          toStatus: 'removed',
+        });
+      } else if (before && after && before.revision !== after.revision) {
+        directCriterionIds.add(criterionId);
+        ops.push({
+          op: 'criterion',
+          targetId: criterionId,
+          fromRevision: before.revision,
+          toRevision: after.revision,
+          fromStatus: 'present',
+          toStatus: 'present',
+        });
+      }
+    }
+  }
+  return { ops, directRecordIds, directCriterionIds };
+}
+
+async function currentFileDigest(root: string, relativePath: string): Promise<string | null> {
+  try {
+    return digest(await readFile(await safePath(root, relativePath)));
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/**
+ * Computes the full reconciliation outcome — impact report plus the actual `task` mutation — by
+ * applying `normalized` to `task` in place. Callers pass a `structuredClone` of the real task for
+ * a read-only preview, or the live locked task for a real apply (see `previewTaskReconciliation`
+ * and `applyTaskReconciliation`). Never touches the store or lock itself.
+ */
+async function buildReconciliationOutcome(
+  task: Task,
+  root: string,
+  clock: () => Date,
+  normalized: { recordOps: ReconcileRecordOpInput[]; criteria: CriterionInput[] | null },
+  ctx: {
+    taskRevision: number;
+    workflowExists: boolean;
+    workflowRevision: number | null;
+    workflowApproval: { criteriaDigest: string; intentDigest: string } | null;
+  },
+  /** See `applyReconciliationOps`. */
+  deterministic: boolean,
+): Promise<{
+  report: ReconciliationReport;
+  ops: ReconciliationOpSummary[];
+  authorizationIds: string[];
+}> {
+  const beforeRecords = new Map(
+    (task.records ?? []).map((item) => [item.id, recordSnapshotOf(item)]),
+  );
+  const beforeCriteria = new Map(task.criteria.map((item) => [item.id, criterionSnapshotOf(item)]));
+  const beforeAuthorizationIds = new Set(task.authorizations.map((item) => item.id));
+  const beforeCriteriaDigest = criteriaDigestOf(task.criteria);
+  const beforeIntentDigest = computeIntentDigest(task.records ?? []);
+
+  const { ops, directRecordIds, directCriterionIds } = await applyReconciliationOps(
+    task,
+    root,
+    clock,
+    normalized,
+    beforeRecords,
+    beforeCriteria,
+    deterministic,
+  );
+
+  const afterCriteriaDigest = criteriaDigestOf(task.criteria);
+  const afterIntentDigest = computeIntentDigest(task.records ?? []);
+  const authorizationIds = task.authorizations
+    .map((item) => item.id)
+    .filter((authId) => !beforeAuthorizationIds.has(authId))
+    .sort();
+
+  const checks = task.enhancedWorkflow?.checks ?? [];
+  const graph = buildImpactGraph(
+    { records: task.records ?? [], criteria: task.criteria, evidence: task.evidence, checks },
+    directRecordIds,
+    directCriterionIds,
+  );
+  const entries: ImpactEntry[] = [...graph.entries];
+
+  // Criteria removed by this patch are, by construction, absent from `task.criteria` and
+  // therefore never produced as a graph node above; surface the removal explicitly rather than
+  // silently dropping it.
+  const removedCriterionIds = [...directCriterionIds].filter(
+    (criterionId) => !task.criteria.some((item) => item.id === criterionId),
+  );
+  for (const criterionId of removedCriterionIds)
+    entries.push({
+      kind: 'criterion',
+      id: criterionId,
+      classification: 'directly-affected',
+      outcome: 'needs-replanning',
+      reasonCode: 'removed',
+      path: [`criterion:${criterionId}`],
+    });
+
+  const intentTouched =
+    ops.some((item) => item.toStatus === 'accepted' || item.toStatus === 'confirmed') ||
+    normalized.recordOps.some((op) => {
+      const before = beforeRecords.get(op.recordId);
+      return Boolean(
+        before &&
+        ((before.kind === 'decision' && before.status === 'accepted') ||
+          (before.kind === 'assumption' && before.status === 'confirmed')),
+      );
+    });
+  const uncertainties: ReconciliationUncertainty[] = [];
+  if (intentTouched) {
+    for (const criterionId of uncoveredRequiredCriteria(
+      { records: task.records ?? [], criteria: task.criteria, evidence: [], checks: [] },
+      task.criteria,
+    )) {
+      entries.push({
+        kind: 'criterion',
+        id: criterionId,
+        classification: 'potentially-affected',
+        outcome: 'needs-user-decision',
+        reasonCode: 'uncovered-dependency',
+        path: [`criterion:${criterionId}`],
+      });
+      uncertainties.push({
+        kind: 'criterion',
+        id: criterionId,
+        reasonCode: 'uncovered-dependency',
+        detail:
+          'No declared record link, task-wide, ever points at this required criterion. Latchkit ' +
+          'has no semantic dependency inference, so a real dependency on the changed intent ' +
+          'cannot be ruled out from declared links alone.',
+      });
+    }
+  }
+
+  const visitedRecords = [...graph.visitedRecordIds]
+    .map((recordId) => (task.records ?? []).find((item) => item.id === recordId))
+    .filter((item): item is TaskRecord => Boolean(item));
+  const sourceLinkPaths = new Set<string>();
+  for (const record of visitedRecords)
+    for (const link of record.links) if (link.type === 'source') sourceLinkPaths.add(link.path);
+  for (const record of visitedRecords) {
+    for (const link of record.links) {
+      if (link.type === 'source') {
+        const status = await reconcileSourceLinkStatus(root, link);
+        if (status !== 'current')
+          uncertainties.push({
+            kind: 'record',
+            id: record.id,
+            reasonCode:
+              status === 'unknown'
+                ? 'link-unknown'
+                : status === 'stale'
+                  ? 'link-stale'
+                  : 'link-missing',
+            detail: `Declared source link ${link.path} is ${status} relative to the working tree.`,
+          });
+      } else if (link.type === 'memory') {
+        try {
+          const memory = await inspectProjectMemory(root, link.memoryId);
+          if (memory.revision !== link.memoryRevision)
+            uncertainties.push({
+              kind: 'record',
+              id: record.id,
+              reasonCode: 'link-stale',
+              detail: `Declared memory link ${link.memoryId} moved to revision ${memory.revision}.`,
+            });
+        } catch (error) {
+          if (errorCode(error) !== 'PROJECT_MEMORY_NOT_FOUND') throw error;
+          uncertainties.push({
+            kind: 'record',
+            id: record.id,
+            reasonCode: 'link-missing',
+            detail: `Declared memory link ${link.memoryId} no longer exists.`,
+          });
+        }
+      }
+    }
+  }
+
+  entries.sort((left, right) =>
+    `${left.kind}:${left.id}`.localeCompare(`${right.kind}:${right.id}`),
+  );
+  const impactTruncated = graph.truncated || entries.length > MAX_RECONCILE_IMPACT_ENTRIES;
+  const boundedEntries = entries.slice(0, MAX_RECONCILE_IMPACT_ENTRIES);
+  const totalUniverse =
+    (task.records ?? []).length + task.criteria.length + checks.length + task.evidence.length;
+  const impactSummary = {
+    directlyAffected: boundedEntries.filter((item) => item.classification === 'directly-affected')
+      .length,
+    declaredDependent: boundedEntries.filter((item) => item.classification === 'declared-dependent')
+      .length,
+    potentiallyAffected: boundedEntries.filter(
+      (item) => item.classification === 'potentially-affected',
+    ).length,
+    unchanged: Math.max(0, totalUniverse - boundedEntries.length),
+  };
+
+  const source = await captureSource(root);
+  const artifactHashes: { path: string; digest: string | null }[] = [];
+  for (const relativePath of [...sourceLinkPaths].sort())
+    artifactHashes.push({
+      path: relativePath,
+      digest: await currentFileDigest(root, relativePath),
+    });
+
+  const patchDigest = digestReconcileJson(normalized);
+  const previewDigest = digestReconcileJson({
+    patchDigest,
+    taskId: task.id,
+    taskRevision: ctx.taskRevision,
+    workflowRevision: ctx.workflowRevision,
+    source,
+    artifactHashes,
+  });
+
+  const report: ReconciliationReport = {
+    taskId: task.id,
+    taskRevision: ctx.taskRevision,
+    workflowExists: ctx.workflowExists,
+    workflowRevision: ctx.workflowRevision,
+    ops,
+    patchDigest,
+    digest: previewDigest,
+    source,
+    before: {
+      records: [...directRecordIds]
+        .map((recordId) => beforeRecords.get(recordId))
+        .filter((item): item is ReturnType<typeof recordSnapshotOf> => Boolean(item)),
+      criteria: [...directCriterionIds]
+        .map((criterionId) => beforeCriteria.get(criterionId))
+        .filter((item): item is ReturnType<typeof criterionSnapshotOf> => Boolean(item)),
+    },
+    after: {
+      records: [...directRecordIds]
+        .map((recordId) => (task.records ?? []).find((item) => item.id === recordId))
+        .filter((item): item is TaskRecord => Boolean(item))
+        .map(recordSnapshotOf),
+      criteria: [...directCriterionIds]
+        .map((criterionId) => task.criteria.find((item) => item.id === criterionId))
+        .filter((item): item is Criterion => Boolean(item))
+        .map(criterionSnapshotOf),
+    },
+    impact: boundedEntries,
+    impactSummary,
+    impactTruncated,
+    uncertainties,
+    approval: {
+      currentlyValid: ctx.workflowApproval
+        ? ctx.workflowApproval.criteriaDigest === beforeCriteriaDigest &&
+          ctx.workflowApproval.intentDigest === beforeIntentDigest
+        : null,
+      remainsValidAfterPatch: ctx.workflowApproval
+        ? ctx.workflowApproval.criteriaDigest === afterCriteriaDigest &&
+          ctx.workflowApproval.intentDigest === afterIntentDigest
+        : null,
+    },
+    generatedAt: new Date(clock()).toISOString(),
+  };
+  return { report, ops, authorizationIds };
+}
+
+/**
+ * Read-only, deterministic impact preview for a proposed intent/criteria change. Never mutates
+ * persisted state or user files and launches no commands or providers beyond the same read-only
+ * Git status/fingerprint already used by every other source-snapshot call in this module.
+ * Identical input against identical state always reproduces an identical report, including its
+ * `digest` — the value `applyTaskReconciliation` requires back as `previewDigest`.
+ */
+export async function previewTaskReconciliation(
+  root: string,
+  input: PreviewReconciliationInput,
+  options: MutationOptions = {},
+): Promise<ReconciliationReport> {
+  root = await resolveProjectRoot(root);
+  const clock = options.clock ?? (() => new Date());
+  const state = await readTaskState(root, { allowMissing: false });
+  const task = findTask(state, input.taskId);
+  assertRecordsMigrated(state);
+  const normalized = normalizeReconciliationPatch(input.patch);
+  const workflow = await readWorkflowUnlocked(root, task.id);
+  const clone = structuredClone(task);
+  const { report } = await buildReconciliationOutcome(
+    clone,
+    root,
+    clock,
+    normalized,
+    {
+      taskRevision: task.revision,
+      workflowExists: Boolean(workflow),
+      workflowRevision: workflow?.revision ?? null,
+      workflowApproval: workflow?.approval
+        ? {
+            criteriaDigest: workflow.approval.criteriaDigest,
+            // A legacy approval (recorded before intent digests) reads as the empty-intent digest.
+            intentDigest: workflow.approval.intentDigest ?? computeIntentDigest([]),
+          }
+        : null,
+    },
+    true,
+  );
+  return report;
+}
+
+/**
+ * Applies exactly the patch reviewed in a prior `previewTaskReconciliation` call, identified by
+ * its `digest` (`previewDigest`). Recomputes the identical report against the live, locked task
+ * before mutating anything: a task/workflow revision change, a source drift, or a changed
+ * referenced artifact all change the recomputed digest, so a stale or racing preview is refused
+ * with `TASK_RECONCILE_PREVIEW_STALE` before any mutation, exactly like every other digest-bound
+ * approval in this codebase. A terminal task (`verified`/`cancelled`) is refused with
+ * `TASK_RECONCILE_TASK_TERMINAL` — reconcile a new follow-up task instead of reopening one that is
+ * already closed. An owned, live workflow effect (a pending action whose owner process is still
+ * running) is refused with `TASK_RECONCILE_ACTIVE_EFFECT` — settle or cancel it through the
+ * existing workflow pause/cancel path first; this call never silently cancels, restarts, forks, or
+ * takes ownership of it. The task-state commit is the sole authoritative boundary: once it lands,
+ * any workflow approval bound to the prior criteria/intent digest is immediately unusable on its
+ * own terms (see `criteriaDigest`/`intentDigest` in `src/workflows/service.ts`), whether or not the
+ * best-effort secondary workflow acknowledgment below (also applied under the very same lock)
+ * happens to succeed. The returned `reconciliation.workflowAcknowledged` reflects the outcome of
+ * that just-attempted secondary step; because it necessarily happens after the one durable task
+ * write, the copy persisted in `task.reconciliations` always reads `false` on a later inspection
+ * even when the acknowledgment succeeded moments after this call returned — a deliberate
+ * consequence of never writing task-state twice for one reconciliation. Safety never depends on
+ * this field either way.
+ */
+export async function applyTaskReconciliation(
+  root: string,
+  input: ApplyReconciliationInput,
+  options: MutationOptions = {},
+): Promise<{ task: Task; reconciliation: TaskReconciliation }> {
+  root = await resolveProjectRoot(root);
+  const clock = options.clock ?? (() => new Date());
+  const mutationId = normalizeMutationId(input.mutationId);
+  const normalized = normalizeReconciliationPatch(input.patch);
+  const previewDigest = requiredHash(input.previewDigest, '$.previewDigest');
+  const hashedRequest = {
+    taskId: input.taskId,
+    expectedRevision: input.expectedRevision,
+    patch: normalized,
+    previewDigest,
+    mutationId,
+  };
+  const hash = requestHash(hashedRequest);
+  return withTaskStateLock(root, async () => {
+    await cleanupTaskStateTemps(root);
+    const state = await readTaskState(root, { clock });
+    const prior = findPriorMutation(state, mutationId, hash);
+    if (prior) {
+      const reconciliation = (prior.reconciliations ?? []).find(
+        (item) => item.mutationId === mutationId,
+      );
+      if (!reconciliation)
+        throw new TaskStateError(
+          'Mutation ID was already committed without a reconciliation record.',
+          'TASK_STATE_INVALID',
+          '$.mutationId',
+        );
+      return { task: structuredClone(prior), reconciliation: structuredClone(reconciliation) };
+    }
+    const task = findTask(state, input.taskId);
+    assertExpected(task, input.expectedRevision);
+    if (TERMINAL_TASK_STATES.has(task.state))
+      throw new TaskStateError(
+        `Task state ${task.state} is terminal; reconcile a new follow-up task instead.`,
+        'TASK_RECONCILE_TASK_TERMINAL',
+        '$.state',
+      );
+    assertRecordsMigrated(state);
+    if (state.schemaVersion < 5)
+      throw new TaskStateError(
+        'Reconciliation requires an explicit task-state migration to version 5.',
+        'TASK_STATE_MIGRATION_REQUIRED',
+        '$.schemaVersion',
+      );
+    // Lock-free reads: this closure already holds the exclusive task-state lock, which is the
+    // same lock workflow-state mutations use, so no other process can be writing either file.
+    const workflow = await readWorkflowUnlocked(root, task.id);
+    if (workflow && isWorkflowEffectActive(workflow))
+      throw new TaskStateError(
+        'This task has an owned, in-flight workflow effect; settle or cancel it through the ' +
+          'existing workflow pause/cancel path before reconciling intent.',
+        'TASK_RECONCILE_ACTIVE_EFFECT',
+        '$.taskId',
+      );
+    const { report, ops, authorizationIds } = await buildReconciliationOutcome(
+      task,
+      root,
+      clock,
+      normalized,
+      {
+        taskRevision: input.expectedRevision,
+        workflowExists: Boolean(workflow),
+        workflowRevision: workflow?.revision ?? null,
+        workflowApproval: workflow?.approval
+          ? {
+              criteriaDigest: workflow.approval.criteriaDigest,
+              // A legacy approval (recorded before intent digests) reads as the empty-intent digest.
+              intentDigest: workflow.approval.intentDigest ?? computeIntentDigest([]),
+            }
+          : null,
+      },
+      false,
+    );
+    if (report.digest !== previewDigest)
+      throw new TaskStateError(
+        'The reviewed preview no longer matches the current task/workflow state, source snapshot, ' +
+          'or a referenced artifact; recompute the preview before applying.',
+        'TASK_RECONCILE_PREVIEW_STALE',
+        '$.previewDigest',
+      );
+    const reconciliationId = id('reconciliation');
+    const reconciliation: TaskReconciliation = {
+      id: reconciliationId,
+      mutationId,
+      patchDigest: report.patchDigest,
+      previewDigest,
+      ops,
+      impactSummary: report.impactSummary,
+      impact: report.impact,
+      impactTruncated: report.impactTruncated,
+      uncertainties: report.uncertainties,
+      authorizationIds,
+      workflowAcknowledged: false,
+      createdAt: iso(clock),
+    };
+    (task.reconciliations ??= []).push(reconciliation);
+    if (task.reconciliations.length > MAX_RECONCILIATIONS_PER_TASK)
+      throw new TaskStateError(
+        'This task has reached its reconciliation limit.',
+        'TASK_RECORD_LIMIT_EXCEEDED',
+        '$.reconciliations',
+      );
+    commitEvent(state, task, { mutationId, type: 'task.reconciled', hash, clock });
+    await writeTaskState(root, state, { faultBoundary: options.faultBoundary });
+    // Secondary, best-effort, idempotent bookkeeping on the workflow record — still under the
+    // same lock, but never load-bearing: the task-state commit above is already the sole
+    // authoritative boundary (workflow approval freshness is recomputed live from current task
+    // criteria/intent, not from this acknowledgment), so a failure here never lets a mismatched
+    // approval dispatch implementation or verification, and a retry of this same mutationId will
+    // observe the reconciliation already committed and simply reattempt the acknowledgment.
+    if (workflow) {
+      try {
+        // Test-only fault-injection point (see docs/task-state.md and the reconcile fixtures):
+        // proves a crash exactly here — after the one durable task write, before the secondary
+        // workflow acknowledgment — still leaves the prior approval unusable, because that check
+        // is recomputed live from committed task state rather than from this acknowledgment.
+        await options.workflowFaultBoundary?.();
+        await acknowledgeTaskReconciliationUnlocked(root, task.id, {
+          mutationId,
+          reconciliationId,
+          digest: report.digest,
+        });
+        reconciliation.workflowAcknowledged = true;
+      } catch {
+        // Best-effort: leave workflowAcknowledged false. The committed task state above already
+        // makes the prior approval unusable on its own terms.
+      }
+    }
+    return { task: structuredClone(task), reconciliation: structuredClone(reconciliation) };
+  });
+}
+
 export async function listTasks(root: string) {
   root = await resolveProjectRoot(root);
   const state = await readTaskState(root, { allowMissing: false });
@@ -2089,3 +2917,18 @@ export {
 } from './records.js';
 export type { RecordKind, RecordLink, RecordProvenanceKind, TaskRecord } from './records.js';
 export type { PlanMigrationResult } from './plans.js';
+export {
+  MAX_RECONCILE_IMPACT_ENTRIES,
+  MAX_RECONCILE_PATCH_OPS,
+  MAX_RECONCILE_TRAVERSAL_NODES,
+  MAX_RECONCILIATIONS_PER_TASK,
+} from './records.js';
+export type {
+  ImpactClassification,
+  ImpactEntry,
+  ImpactOutcome,
+  ImpactTargetKind,
+  ReconciliationReport,
+  ReconciliationUncertainty,
+  TaskReconciliation,
+} from './reconcile.js';

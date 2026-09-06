@@ -18,6 +18,7 @@ import {
 } from './core.js';
 import { DEFAULT_WORKSPACE_SETTINGS } from './config/contracts.js';
 import {
+  applyTaskReconciliation,
   importMarkdownTask,
   inspectTask,
   inspectTaskRecord,
@@ -25,6 +26,7 @@ import {
   listTasks,
   migrateLegacyPlan,
   migrateTaskState,
+  previewTaskReconciliation,
   recordTaskRecord,
   registerEnhancedWorkflow,
   resolveCollisionSafePlanPath,
@@ -34,7 +36,12 @@ import {
   transitionTaskRecord,
   verifyTask,
 } from './task-state/service.js';
-import type { RecordKind, RecordLinkInput, RecordProvenanceKind } from './task-state/service.js';
+import type {
+  ReconciliationPatchInput,
+  RecordKind,
+  RecordLinkInput,
+  RecordProvenanceKind,
+} from './task-state/service.js';
 import {
   addSpecDecisionNotes,
   approveSpecDecision,
@@ -144,6 +151,25 @@ async function readLinksFile(filePath: string | undefined): Promise<unknown> {
   return (document as { links?: unknown }).links;
 }
 
+/** Reads the required `--file` JSON reconciliation patch document shared by `task
+ * reconcile-preview` and `task reconcile-apply`; see schemas/reconciliation-patch-v1.schema.json. */
+async function readReconciliationPatchFile(
+  filePath: string | undefined,
+): Promise<ReconciliationPatchInput> {
+  if (!filePath) throw new Error('--file is required (a reconciliation patch document).');
+  const bytes = await readFile(path.resolve(filePath));
+  if (bytes.byteLength > 128 * 1024) throw new Error('Reconciliation patch file exceeds 128 KiB.');
+  let document: unknown;
+  try {
+    document = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new Error('Reconciliation patch file must be valid JSON.');
+  }
+  if (!document || typeof document !== 'object' || Array.isArray(document))
+    throw new Error('Reconciliation patch file must be an object.');
+  return document as ReconciliationPatchInput;
+}
+
 let cliValues: { project?: string } = {};
 
 const usage = `Latchkit — Your agents. One workflow.
@@ -163,7 +189,10 @@ Usage: latchkit <command> [options]
              or present/approve/note/defer/inspect the end-of-execution result
              decision (approve the result, request changes, or review later),
              or record/revise/transition/list/inspect a decision/assumption/
-             observation/question knowledge record with explicit provenance
+             observation/question knowledge record with explicit provenance,
+             or reconcile-preview/reconcile-apply a structured patch to accepted
+             intent records and/or criteria (deterministic impact report, then
+             an explicit digest-bound apply)
   spec       Register/inspect/migrate/verify an enhanced spec, preview a plan-path or
              migrate-plan a durable plan, or present/approve/note/pause/build the
              end-of-spec decision (approve and build, add notes, or keep for later)
@@ -217,7 +246,9 @@ Options:
                        also task record-add/-list: decision, assumption, observation, question
   --file <path>       memory import or acceptance verify: versioned JSON file; also task
                        result-present: optional {artifactRefs, completedCriteria} JSON; also
-                       task record-add/-revise: optional {links: [...]} JSON
+                       task record-add/-revise: optional {links: [...]} JSON; also task
+                       reconcile-preview/-apply: required reconciliation patch JSON (see
+                       schemas/reconciliation-patch-v1.schema.json)
   --record <id>       task record-revise/-transition/-inspect: stable record identifier
   --record-revision <n> task record-revise/-transition: optimistic record revision
   --provenance <kind> task record-add: direct-user, agent-inferred, imported, execution-observed
@@ -229,6 +260,7 @@ Options:
   --authorization-id <id> task record-add/-transition: existing task authorization to reference
   --limit <n>         task record-list: page size (default 50, max 200)
   --cursor <id>       task record-list: resume listing after this record ID
+  --preview-digest <sha256> task reconcile-apply: exact digest from a prior reconcile-preview
   --summary <text>    spec decision-present and task result-present: concise summary
   --budget <n>        memory recover: maximum context characters
   --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
@@ -372,6 +404,7 @@ try {
       cursor: { type: 'string' },
       root: { type: 'string' },
       adapter: { type: 'string' },
+      'preview-digest': { type: 'string' },
     },
   });
   cliValues = values;
@@ -473,6 +506,7 @@ try {
         'evidence-id',
         'limit',
         'cursor',
+        'preview-digest',
       ],
       spec: [
         'project',
@@ -802,6 +836,8 @@ try {
         'record-transition',
         'record-list',
         'record-inspect',
+        'reconcile-preview',
+        'reconcile-apply',
       ];
       if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
         throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
@@ -1077,6 +1113,27 @@ try {
           await inspectTaskRecord(root, {
             taskId: requiredOption(values.task, 'task'),
             recordId: requiredOption(values.record, 'record'),
+          }),
+        );
+      } else if (action === 'reconcile-preview') {
+        const patch = await readReconciliationPatchFile(values.file);
+        print(
+          await previewTaskReconciliation(root, {
+            taskId: requiredOption(values.task, 'task'),
+            patch,
+          }),
+        );
+      } else if (action === 'reconcile-apply') {
+        if (expectedRevision === undefined)
+          throw new Error('task reconcile-apply requires --expected-revision.');
+        const patch = await readReconciliationPatchFile(values.file);
+        print(
+          await applyTaskReconciliation(root, {
+            taskId: requiredOption(values.task, 'task'),
+            expectedRevision,
+            patch,
+            previewDigest: requiredOption(values['preview-digest'], 'preview-digest'),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
           }),
         );
       } else {

@@ -47,6 +47,22 @@ export async function readWorkflow(root: string, taskId: string): Promise<Workfl
   });
 }
 
+/**
+ * Lock-free read, for a caller that already holds `withTaskStateLock` (workflow-state and
+ * task-state share that one lock file — see `../task-state/lock.js`). Re-acquiring the lock from
+ * inside an already-locked section would self-deadlock (this process's own challenge server would
+ * answer its own liveness probe), so a caller in that position — task-intent reconciliation, see
+ * `../task-state/reconcile.js` — must use this instead of `readWorkflow`. Never call this without
+ * already holding the lock: nothing here re-acquires it.
+ */
+export async function readWorkflowUnlocked(
+  root: string,
+  taskId: string,
+): Promise<WorkflowRecord | null> {
+  const state = await readUnlocked(root);
+  return structuredClone(state.workflows.find((item) => item.taskId === taskId) ?? null);
+}
+
 export async function createWorkflow(
   root: string,
   record: WorkflowRecord,
@@ -95,6 +111,35 @@ export async function mutateWorkflow(
     await writeUnlocked(root, state);
     return structuredClone(record);
   });
+}
+
+/** Lock-free counterpart to `mutateWorkflow`; see `readWorkflowUnlocked` for when this applies. */
+export async function mutateWorkflowUnlocked(
+  root: string,
+  taskId: string,
+  expectedRevision: number | undefined,
+  operation: (record: WorkflowRecord) => boolean | void,
+): Promise<WorkflowRecord> {
+  const state = await readUnlocked(root);
+  const record = state.workflows.find((item) => item.taskId === taskId);
+  if (!record) throw new WorkflowError('Workflow was not found.', 'WORKFLOW_NOT_FOUND');
+  if (expectedRevision !== undefined && record.revision !== expectedRevision)
+    throw new WorkflowError('Workflow revision changed.', 'WORKFLOW_REVISION_CONFLICT', {
+      expectedRevision,
+      actualRevision: record.revision,
+    });
+  const result: unknown = operation(record);
+  if (result && typeof (result as { then?: unknown }).then === 'function')
+    throw new WorkflowError(
+      'Workflow state mutations must be synchronous.',
+      'WORKFLOW_MUTATION_INVALID',
+    );
+  if (result === false) return structuredClone(record);
+  record.revision += 1;
+  record.updatedAt = new Date().toISOString();
+  assertWorkflowRecord(record);
+  await writeUnlocked(root, state);
+  return structuredClone(record);
 }
 
 export async function journalWorkflowAction(

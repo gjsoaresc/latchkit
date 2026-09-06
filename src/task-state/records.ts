@@ -163,6 +163,18 @@ export const MAX_RECORDS_PER_TASK = 500;
 export const MAX_RECORD_LIST_LIMIT = 200;
 export const DEFAULT_RECORD_LIST_LIMIT = 50;
 
+/**
+ * Bounds for reconciliation (see reconcile.ts): a single patch may touch at most this many
+ * record operations, a task retains at most this many bounded reconciliation summaries, each
+ * summary retains at most this many impact-reason entries (further entries are counted but not
+ * listed, with `truncated: true`), and impact-graph traversal visits at most this many nodes
+ * before truncating rather than silently omitting the remainder.
+ */
+export const MAX_RECONCILE_PATCH_OPS = 32;
+export const MAX_RECONCILIATIONS_PER_TASK = 200;
+export const MAX_RECONCILE_IMPACT_ENTRIES = 100;
+export const MAX_RECONCILE_TRAVERSAL_NODES = 500;
+
 /** recordId -> set of recordIds it declares a dependency on (supersedes plus `record`-type links). */
 export function buildRecordDependencyEdges(
   records: readonly Pick<TaskRecord, 'id' | 'supersedes' | 'links'>[],
@@ -203,6 +215,46 @@ export function detectRecordDependencyCycle(edges: Map<string, Set<string>>): st
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * A deterministic digest of currently *adopted* intent: every `decision` in status `accepted`
+ * and every `assumption` in status `confirmed`, keyed by ID so the digest changes exactly when
+ * the set of authoritative decisions/assumptions or their revision/status/text changes. An
+ * accepted record can never have its text silently edited (`reviseTaskRecord` rejects revising an
+ * authoritatively accepted record), so revision+status alone would already be sufficient, but text
+ * is included for defense in depth. A task with no adopted records (including every task created
+ * before this schema addition) produces the same fixed digest, so extending workflow approval
+ * freshness with this digest (see docs/task-state.md and src/workflows/service.ts) never
+ * invalidates an approval that predates task records. This is pure and takes no lock; callers
+ * needing the live value read the current `records` array first.
+ */
+export function computeIntentDigest(
+  records: readonly Pick<TaskRecord, 'id' | 'kind' | 'revision' | 'status' | 'text'>[],
+): string {
+  const adopted = records
+    .filter(
+      (item) =>
+        (item.kind === 'decision' && item.status === 'accepted') ||
+        (item.kind === 'assumption' && item.status === 'confirmed'),
+    )
+    .map(({ id, kind, revision, status, text }) => ({ id, kind, revision, status, text }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return createHash('sha256').update(canonicalRecordsJson(adopted)).digest('hex');
+}
+
+function canonicalRecordsJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalRecordsJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalRecordsJson((value as Record<string, unknown>)[key])}`,
+      )
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export type RecordLinkStatus = 'current' | 'stale' | 'missing' | 'unknown';
