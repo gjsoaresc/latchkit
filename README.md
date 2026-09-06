@@ -18,7 +18,7 @@ Open-source skills and a local configuration console for the coding tools you al
 
 Latchkit is an open-source toolkit for shared coding-agent workflows. This repository is its reference implementation: portable skills, a Node.js CLI, and a local browser console for project configuration. It runs locally, works with your existing coding tools, and keeps its configuration in your project.
 
-**The current 1.0 candidate supports skill installation, durable task state, local project memory, capability-aware gates, acceptance verification, and the typed workflow foundation.** Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
+**The current 1.0 candidate supports skill installation, durable task state, local project memory, capability-aware gates, acceptance verification, and delivery workflows.** Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
 
 ## Install and try it
 
@@ -64,6 +64,7 @@ For development, no Bash installer, Homebrew, Python, symlinks, or WSL is requir
 | Safe removal             | Removes unchanged owned files/sections; keeps user text and config                                                                    |
 | Host diagnostics         | Detects native vs WSL and executables on PATH                                                                                         |
 | Resumable workflow state | Versioned local tasks, atomic checkpoints, evidence binding, and stale-writer protection                                              |
+| Delivery orchestration   | Requirements, exact plan approval, implementation with three repair attempts, verification, independent review, and handoff           |
 | Acceptance verification  | Bounded CLI, HTTP, and optional Playwright checks with revision-bound sanitized artifacts                                             |
 | Local project memory     | Explicit, inspectable decisions and discoveries with bounded, capability-aware recovery                                               |
 | Cross-platform checks    | Candidate checks for emitted application code and standalone artifact qualification; platform evidence is recorded per exact artifact |

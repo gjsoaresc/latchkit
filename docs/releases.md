@@ -15,7 +15,8 @@ checksum; the SBOM covers the complete delivered application and Node runtime.
 
 ## Candidate qualification
 
-The current version is `1.0.0-rc.2` and remains under qualification. Existing
+The current source prepares `1.0.0` for final maintainer approval after the
+TypeScript `1.0.0-rc.2` native candidate checks. No tag or release is published. Existing
 RC1 evidence is historical evidence for the earlier application and cannot
 qualify these bundles. CI workflow cells describe configured coverage; they do
 not become release evidence until the exact archive produces passing evidence
@@ -87,11 +88,11 @@ installation leaves the prior active version in place. Both scripts support an
 exact version, a custom user-local root, and local files or URLs:
 
 ```powershell
-./install.ps1 -Version 1.0.0-rc.2 -Root "$env:LOCALAPPDATA\Latchkit"
+./install.ps1 -Version 1.0.0 -Root "$env:LOCALAPPDATA\Latchkit"
 ```
 
 ```sh
-sh install.sh --version 1.0.0-rc.2 --root "$HOME/.local/share/latchkit"
+sh install.sh --version 1.0.0 --root "$HOME/.local/share/latchkit"
 ```
 
 Use `-Artifact`/`-Checksum` on PowerShell or `--artifact`/`--checksum` on

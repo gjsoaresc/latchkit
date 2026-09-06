@@ -15,10 +15,32 @@ The output follows `schemas/provider-e2e-evidence-v1.schema.json`; it binds the 
 For an explicitly authorized Codex release-candidate lifecycle, first build the exact archive and record its SHA-256, then run:
 
 ```sh
-npm run verify:lifecycle -- --authorized --provider codex --artifact <archive.tgz> --artifact-sha256 <sha256> --output .github/release-evidence/issue-36/lifecycle-codex-windows.json
+npm run verify:lifecycle -- --authorized --provider codex --artifact <standalone.zip-or-tar.gz> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/lifecycle-codex-windows.evidence.json
 ```
 
-The candidate checkout must be clean and committed. The harness verifies the supplied digest, installs that exact archive outside the checkout with lifecycle scripts disabled, and imports all Latchkit operations from the installed package. It then creates a disposable Git project, installs the candidate's bundled skills, records an expected failing check, terminates one owned provider process, recovers the interrupted task, performs one bounded implementation, resumes its provider thread for a handoff, and runs one isolated review. It also verifies that failed, unauthorized, and unsupported evidence cannot become task completion. The retained JSON contains statuses, hashes, versions, limits, and finding counts only; provider output, prompts, command arguments, credentials, usage guesses, and the disposable project are not retained. This is one native-host Codex cell, not evidence for another provider or operating system.
+The candidate archive must come from clean, committed source. The harness verifies
+the supplied digest, extracts the exact standalone archive outside the checkout,
+and relaunches under its private Node runtime. It binds evidence to the embedded
+manifest and imports all Latchkit operations from the extracted application.
+It then creates a disposable Git project, installs the candidate's bundled skills,
+records an expected failing check, terminates one owned provider process,
+recovers the interrupted task, performs one bounded implementation, resumes its
+provider thread for a handoff, and runs one isolated review. It also verifies that
+failed, unauthorized, and unsupported evidence cannot become task completion.
+The retained JSON contains statuses, hashes, versions, limits, and finding counts
+only; provider output, prompts, command arguments, credentials, usage guesses,
+and the disposable project are not retained. This is one native-host Codex cell,
+not evidence for another provider or operating system.
+
+The full delivery controller has its own exact-archive harness:
+
+```sh
+npm run verify:workflow -- --authorized --provider codex --artifact <standalone.zip-or-tar.gz> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/workflow-codex-windows.evidence.json
+```
+
+Use `node scripts/live-provider-adapter-evidence.js` with the same authorization,
+archive, digest, provider, and output arguments for a bounded read-only Codex or
+Claude adapter probe. All three harnesses use the coding tool's configured model.
 
 ## Release matrix
 
@@ -26,7 +48,7 @@ The candidate checkout must be clean and committed. The harness verifies the sup
 | --------------- | -------------- | ------- | ------- | ------- | --------------------------------------------------------------------------- |
 | Claude Code     | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
 | Codex           | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
-| Antigravity CLI | unsupported    | unknown | unknown | unknown | No authenticated run; upstream contract is limited to documented print mode |
+| Antigravity CLI | unknown        | unknown | unknown | unknown | No authenticated run; upstream contract is limited to documented print mode |
 | Cursor IDE      | unknown        | unknown | unknown | unknown | manual editor workflow                                                      |
 | Cursor CLI      | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
 

@@ -126,7 +126,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WSL is required for this qualification cell.' }
           $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
           if ($distros -notmatch 'Ubuntu') { wsl --install --distribution Ubuntu --no-launch }
-          $repo = (wsl -d Ubuntu -- wslpath -a '${{ github.workspace }}').Trim()
+          $workspace = '${{ github.workspace }}'.Replace('\', '/')
+          $repo = wsl -d Ubuntu -- wslpath -a -- $workspace
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($repo)) { throw 'Could not map the GitHub workspace into WSL.' }
+          $repo = $repo.Trim()
           wsl -d Ubuntu -- sh "$repo/scripts/wsl-bundle-smoke.sh" "$repo"
           if ($LASTEXITCODE -ne 0) { throw 'WSL exact bundle qualification failed.' }
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08

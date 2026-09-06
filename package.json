@@ -1,6 +1,6 @@
 {
   "name": "latchkit",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "description": "Your agents. One workflow. Open-source skills and local configuration for coding agents.",
   "type": "module",
   "license": "MIT",
