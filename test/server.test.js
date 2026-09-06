@@ -10,6 +10,7 @@ import { initProject, readConfig, syncProject } from '../dist/src/core.js';
 import { startServer } from '../dist/src/server.js';
 import { createTask, resumeTask } from '../dist/src/task-state/service.js';
 import { createTaskWorkspace } from '../dist/src/workspaces/git.js';
+import { createReviewOrchestrator } from '../dist/src/reviews/orchestrator.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -47,6 +48,126 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
+});
+
+test('review cancellation uses a separate request and is not queued behind a long review', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-review-api-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let launched;
+  const ready = new Promise((resolve) => {
+    launched = resolve;
+  });
+  const reviews = createReviewOrchestrator({
+    root,
+    source: async () => ({ revision: 'fixture', dirtyFingerprint: 'fixture' }),
+    workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+    reviewerAdapters: new Map([
+      [
+        'codex',
+        {
+          contract: { capabilities: { invocation: { state: 'supported' } } },
+          operations: {
+            planInvocation: () => ({
+              executable: process.execPath,
+              args: ['--version', '--sandbox', 'read-only'],
+            }),
+          },
+        },
+      ],
+    ]),
+    launch: ({ signal }) =>
+      new Promise((resolve) => {
+        launched();
+        signal.addEventListener('abort', () => resolve({ status: 'cancelled', stdout: '' }), {
+          once: true,
+        });
+      }),
+  });
+  const { server, url, token } = await startServer(root, { reviewOrchestrator: reviews });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const origin = new URL(url).origin;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: origin,
+    'Content-Type': 'application/json',
+  };
+  const run = fetch(`${origin}/api/reviews`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: 'task_parent',
+      reviewers: [{ providerId: 'codex' }],
+      executionAuthorized: true,
+      sandbox: 'read-only',
+    }),
+  });
+  await ready;
+  const listed = await (await fetch(`${origin}/api/reviews`, { headers })).json();
+  const cancelled = await fetch(`${origin}/api/reviews/cancel`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ reviewId: listed.reviews[0].id }),
+  });
+  assert.equal(cancelled.status, 200);
+  assert.equal((await cancelled.json()).state, 'cancelling');
+  assert.equal((await (await run).json()).state, 'cancelled');
+});
+
+test('server close cancels a long review before Node waits for its POST socket', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-review-close-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let launched;
+  const ready = new Promise((resolve) => {
+    launched = resolve;
+  });
+  const reviews = createReviewOrchestrator({
+    root,
+    source: async () => ({ revision: 'fixture', dirtyFingerprint: 'fixture' }),
+    workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+    reviewerAdapters: new Map([
+      [
+        'codex',
+        {
+          contract: { capabilities: { invocation: { state: 'supported' } } },
+          operations: {
+            planInvocation: () => ({
+              executable: process.execPath,
+              args: ['--version', '--sandbox', 'read-only'],
+            }),
+          },
+        },
+      ],
+    ]),
+    launch: ({ signal }) =>
+      new Promise((resolve) => {
+        launched();
+        signal.addEventListener('abort', () => resolve({ status: 'cancelled', stdout: '' }), {
+          once: true,
+        });
+      }),
+  });
+  const { server, url, token } = await startServer(root, { reviewOrchestrator: reviews });
+  const origin = new URL(url).origin;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: origin,
+    'Content-Type': 'application/json',
+  };
+  const run = fetch(`${origin}/api/reviews`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: 'task_parent',
+      reviewers: [{ providerId: 'codex' }],
+      executionAuthorized: true,
+      sandbox: 'read-only',
+    }),
+  });
+  await ready;
+  await new Promise((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  assert.equal((await (await run).json()).state, 'cancelled');
 });
 
 test('MCP API preview is inert, apply requires the exact reviewed preview, and unsupported providers stay refused', async (t) => {

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { readOptional, writeAtomic } from '../storage.js';
 import { redact } from '../diagnostics/redact.js';
@@ -58,6 +59,8 @@ type Review = {
   reviewers: ReviewItem[];
   createdAt: string;
   updatedAt: string;
+  owner?: { controllerId: string; pid: number; hostname: string };
+  cancelRequestedAt?: string;
   findings?: Finding[];
 };
 type ReviewState = { schemaVersion: number; reviews: Review[] };
@@ -104,7 +107,6 @@ const adapters = new Map<string, unknown>([
   ['claude', CLAUDE_ADAPTER],
   ['codex', codexAdapter],
 ]);
-const ACTIVE = new Map<string, AbortController>();
 const REVIEW_RESULT_INSTRUCTIONS = `Return exactly one JSON object with this shape and no prose or code fence: {"schemaVersion":1,"state":"completed","findings":[{"severity":"blocker|high|medium|low|info","title":"non-empty title","detail":"non-empty detail","path":"optional repository-relative path"}],"summary":"optional summary"}. Use an empty findings array when no issues exist. The state must be one of completed, failed, timed-out, cancelled, or unavailable.`;
 
 export class ReviewOrchestrationError extends Error {
@@ -244,10 +246,34 @@ async function saveState(root: string, review: Review): Promise<Review> {
     const state = await readState(root);
     const index = state.reviews.findIndex((item) => item.id === review.id);
     if (index < 0) state.reviews.push(review);
-    else state.reviews[index] = review;
+    else {
+      // A cancellation request may have been submitted from another CLI or
+      // server process while this owner was awaiting its provider. Never
+      // overwrite that durable request with this controller's stale object.
+      const previous = state.reviews[index];
+      if (previous?.cancelRequestedAt && !review.cancelRequestedAt)
+        review.cancelRequestedAt = previous.cancelRequestedAt;
+      // A request accepted while the owner was completing must win the
+      // terminal transition. A later request is refused because the persisted
+      // review is no longer running, so this only covers the admitted race.
+      if (previous?.state === 'running' && previous.cancelRequestedAt && review.state !== 'running')
+        review.state = 'cancelled';
+      state.reviews[index] = review;
+    }
     await writeAtomic(root, REVIEW_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, 0o600);
     return review;
   });
+}
+
+function ownerIsProvablyDead(owner: Review['owner']): boolean {
+  if (!owner || owner.hostname !== os.hostname() || !Number.isInteger(owner.pid) || owner.pid <= 0)
+    return false;
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error: unknown) {
+    return isRecord(error) && error.code === 'ESRCH';
+  }
 }
 
 function dedupe(findings: Finding[]): Finding[] {
@@ -339,6 +365,43 @@ export function createReviewOrchestrator({
   if (!root || typeof launch !== 'function' || typeof workspace !== 'function')
     throw new TypeError('Review root and execution functions are required.');
   const projectRoot = path.resolve(root);
+  const controllerId = randomUUID();
+  const active = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  let reconciled: Promise<void> | undefined;
+  const reconcileInterrupted = () =>
+    (reconciled ??= (async () => {
+      // Inspection of an unused controller must remain non-mutating. Avoid
+      // acquiring the task-state lock (which creates its parent directory)
+      // until a review state file actually exists.
+      if ((await readOptional(projectRoot, REVIEW_STATE_PATH)) === null) return;
+      await withTaskStateLock(projectRoot, async () => {
+        const state = await readState(projectRoot);
+        let changed = false;
+        for (const review of state.reviews) {
+          if (review.state !== 'running' || !ownerIsProvablyDead(review.owner)) continue;
+          changed = true;
+          review.state = 'failed';
+          review.updatedAt = clock().toISOString();
+          for (const item of review.reviewers) {
+            if (item.state !== 'running') continue;
+            item.state = 'failed';
+            item.result = { schemaVersion: REVIEW_SCHEMA_VERSION, state: 'failed', findings: [] };
+            item.error = {
+              code: 'REVIEW_INTERRUPTED',
+              message: 'Review was interrupted by process restart.',
+            };
+            item.finishedAt = review.updatedAt;
+          }
+        }
+        if (changed)
+          await writeAtomic(
+            projectRoot,
+            REVIEW_STATE_PATH,
+            `${JSON.stringify(state, null, 2)}\n`,
+            0o600,
+          );
+      });
+    })());
   async function run({
     taskId,
     reviewers,
@@ -349,6 +412,7 @@ export function createReviewOrchestrator({
     depth = 0,
     signal,
   }: RunInput = {}) {
+    await reconcileInterrupted();
     const task = text(taskId, 'taskId');
     if (executionAuthorized !== true)
       throw new ReviewOrchestrationError(
@@ -396,13 +460,26 @@ export function createReviewOrchestrator({
       reviewers: [],
       createdAt: clock().toISOString(),
       updatedAt: clock().toISOString(),
+      owner: { controllerId, pid: process.pid, hostname: os.hostname() },
     };
     await saveState(projectRoot, review);
     const abort = new AbortController();
     const externalAbort = () => abort.abort();
     if (signal?.aborted) abort.abort();
     else signal?.addEventListener('abort', externalAbort, { once: true });
-    ACTIVE.set(review.id, abort);
+    let finishActive!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finishActive = resolve;
+    });
+    active.set(review.id, { controller: abort, done });
+    const cancellationPoll = setInterval(() => {
+      void readState(projectRoot)
+        .then((state) => state.reviews.find((item) => item.id === review.id)?.cancelRequestedAt)
+        .then((requested) => {
+          if (requested) abort.abort();
+        })
+        .catch(() => {});
+    }, 100);
     let cursor = 0;
     const results: ReviewItem[] = [];
     const worker = async () => {
@@ -550,20 +627,46 @@ export function createReviewOrchestrator({
       await saveState(projectRoot, review);
       return review;
     } finally {
-      ACTIVE.delete(review.id);
+      active.delete(review.id);
+      finishActive();
+      clearInterval(cancellationPoll);
       signal?.removeEventListener('abort', externalAbort);
     }
   }
   async function cancel({ reviewId }: { reviewId?: unknown } = {}) {
+    await reconcileInterrupted();
     const id = text(reviewId, 'reviewId');
-    const controller = ACTIVE.get(id);
-    if (!controller)
-      throw new ReviewOrchestrationError(
-        'Review is not active in this process.',
-        'REVIEW_NOT_ACTIVE',
-      );
-    controller.abort();
+    const entry = active.get(id);
+    if (entry) entry.controller.abort();
+    else {
+      await withTaskStateLock(projectRoot, async () => {
+        const state = await readState(projectRoot);
+        const review = state.reviews.find((item) => item.id === id);
+        if (!review || review.state !== 'running')
+          throw new ReviewOrchestrationError('Review is not active.', 'REVIEW_NOT_ACTIVE');
+        review.cancelRequestedAt = clock().toISOString();
+        review.updatedAt = clock().toISOString();
+        await writeAtomic(
+          projectRoot,
+          REVIEW_STATE_PATH,
+          `${JSON.stringify(state, null, 2)}\n`,
+          0o600,
+        );
+      });
+    }
     return { reviewId: id, state: 'cancelling' };
   }
-  return Object.freeze({ run, cancel, inspect: () => readState(projectRoot) });
+  async function shutdown() {
+    for (const entry of active.values()) entry.controller.abort();
+    await Promise.all([...active.values()].map((entry) => entry.done));
+  }
+  return Object.freeze({
+    run,
+    cancel,
+    shutdown,
+    inspect: async () => {
+      await reconcileInterrupted();
+      return readState(projectRoot);
+    },
+  });
 }
