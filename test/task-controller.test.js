@@ -6,9 +6,38 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../dist/src/providers/contracts.js';
 import { ANTIGRAVITY_ADAPTER } from '../dist/src/providers/antigravity.js';
-import { createTask } from '../dist/src/task-state/service.js';
+import {
+  createTask,
+  recordTaskRecord,
+  transitionTaskRecord,
+} from '../dist/src/task-state/service.js';
+import {
+  createContractAssociation,
+  acknowledgeContractReceipt,
+} from '../dist/src/task-state/contract-coordination.js';
 import { createTaskController, readTaskSessions } from '../dist/src/runtime/task-controller.js';
 import { configureUsage, inspectUsage } from '../dist/src/usage/service.js';
+
+async function acceptedRecord(root, task, text) {
+  const added = await recordTaskRecord(root, {
+    taskId: task.id,
+    expectedRevision: task.revision,
+    kind: 'decision',
+    text,
+    provenance: { kind: 'direct-user', reference: 'controller fixture' },
+  });
+  const record = added.records.at(-1);
+  const updated = await transitionTaskRecord(root, {
+    taskId: task.id,
+    expectedRevision: added.revision,
+    recordId: record.id,
+    recordRevision: record.revision,
+    status: 'accepted',
+    reason: 'fixture accepted',
+    authorization: { source: 'user', scope: 'fixture', reference: 'fixture' },
+  });
+  return { task: updated, record: updated.records.at(-1) };
+}
 
 const evidence = (state = 'supported') => ({
   state,
@@ -124,6 +153,48 @@ test('controller starts one owned session, redacts results, and never treats exi
   assert.equal(result.session.providerSessionId, 'provider-session');
   assert.equal(result.session.result.stderr, '[redacted]');
   assert.equal((await readTaskSessions(root))[0].state, 'finished');
+});
+
+test('declared consumer contract blocks launch until its exact receipt is recorded', async (t) => {
+  const { root, task: producer } = await fixture(t);
+  const consumer = await createTask(root, { title: 'Consumer', authorizationRequired: false });
+  const p = await acceptedRecord(root, producer, 'producer response');
+  const c = await acceptedRecord(root, consumer, 'consumer response');
+  const association = await createContractAssociation(root, {
+    producerTaskId: p.task.id,
+    consumerTaskId: c.task.id,
+    producerRecordId: p.record.id,
+    consumerRecordId: c.record.id,
+    criterionIds: [p.task.criteria[0].id],
+    expectedProducerRevision: p.task.revision,
+    expectedConsumerRevision: c.task.revision,
+    provenance: 'fixture',
+    mutationId: 'event_55555555-5555-4555-8555-555555555555',
+  });
+  let launched = false;
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['fixture', adapter()]]),
+    launch: async ({ onEvent }) => {
+      launched = true;
+      onEvent({ type: 'process-start', pid: 1234 });
+      return { status: 'exited', exitCode: 0, stderr: '' };
+    },
+  });
+  await assert.rejects(
+    controller.start({ taskId: c.task.id, providerId: 'fixture', executionAuthorized: true }),
+    { code: 'CONTRACT_RECONCILIATION_PENDING' },
+  );
+  assert.equal(launched, false);
+  await acknowledgeContractReceipt(root, {
+    associationId: association.id,
+    expectedAssociationRevision: association.revision,
+    expectedConsumerRevision: c.task.revision,
+    contractDigest: association.versions.at(-1).digest,
+    mutationId: 'event_66666666-6666-4666-8666-666666666666',
+  });
+  await controller.start({ taskId: c.task.id, providerId: 'fixture', executionAuthorized: true });
+  assert.equal(launched, true);
 });
 
 test('controller extracts the resumable Codex thread identity from JSONL output', async (t) => {

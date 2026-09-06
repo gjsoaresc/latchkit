@@ -89,22 +89,37 @@ async function recover(root: string): Promise<void> {
   try {
     journal = JSON.parse(raw) as Journal;
   } catch {
-    throw new TaskStateError('Contract association journal is malformed.', 'TASK_STATE_INVALID', JOURNAL);
+    throw new TaskStateError(
+      'Contract association journal is malformed.',
+      'TASK_STATE_INVALID',
+      JOURNAL,
+    );
   }
   if (
-    journal.schemaVersion !== 1 || !['prepared', 'committed'].includes(journal.state) ||
+    journal.schemaVersion !== 1 ||
+    !['prepared', 'committed'].includes(journal.state) ||
     !['create', 'revise', 'acknowledge'].includes(journal.operation) ||
     typeof journal.associationId !== 'string' ||
     typeof journal.requestDigest !== 'string' ||
     typeof journal.baseDigest !== 'string' ||
-    !journal.target || journal.target.schemaVersion !== 1 || !Array.isArray(journal.target.associations)
+    !journal.target ||
+    journal.target.schemaVersion !== 1 ||
+    !Array.isArray(journal.target.associations)
   )
-    throw new TaskStateError('Contract association journal has an unsupported shape.', 'TASK_STATE_INVALID', JOURNAL);
+    throw new TaskStateError(
+      'Contract association journal has an unsupported shape.',
+      'TASK_STATE_INVALID',
+      JOURNAL,
+    );
   const current = await readDocument(root);
   const currentDigest = hash(current);
   if (journal.state === 'committed') return;
   if (currentDigest === hash(journal.target)) {
-    await writeAtomic(root, JOURNAL, `${JSON.stringify({ ...journal, state: 'committed' }, null, 2)}\n`);
+    await writeAtomic(
+      root,
+      JOURNAL,
+      `${JSON.stringify({ ...journal, state: 'committed' }, null, 2)}\n`,
+    );
     return;
   }
   if (currentDigest !== journal.baseDigest)
@@ -116,6 +131,11 @@ async function recover(root: string): Promise<void> {
   await write(root, journal.target);
 }
 async function read(root: string): Promise<Document> {
+  return readDocument(root);
+}
+/** Recovery writes; callers must already hold the shared task-state lock. Read-only reports
+ * intentionally observe a stable snapshot and never publish a recovery over another writer. */
+async function readRecoveredLocked(root: string): Promise<Document> {
   await recover(root);
   return readDocument(root);
 }
@@ -229,7 +249,7 @@ export async function createContractAssociation(
           'TASK_STATE_INVALID',
           '$.criterionIds',
         );
-    const document = await read(root);
+    const document = await readRecoveredLocked(root);
     const base = structuredClone(document);
     const digest = recordDigest(state, input.producerTaskId, input.producerRecordId);
     const existing = document.associations.find(
@@ -269,7 +289,17 @@ export async function createContractAssociation(
       mutations: input.mutationId ? [{ id: input.mutationId, requestDigest: hash(input) }] : [],
     };
     document.associations.push(association);
-    await commit(root, { schemaVersion: 1, operation: 'create', associationId: association.id, requestDigest: hash(input) }, base, document);
+    await commit(
+      root,
+      {
+        schemaVersion: 1,
+        operation: 'create',
+        associationId: association.id,
+        requestDigest: hash(input),
+      },
+      base,
+      document,
+    );
     return structuredClone(association);
   });
 }
@@ -287,7 +317,7 @@ export async function proposeContractRevision(
   root = await resolveProjectRoot(root);
   return withTaskStateLock(root, async () => {
     const state = await readTaskState(root, { allowMissing: false });
-    const document = await read(root);
+    const document = await readRecoveredLocked(root);
     const base = structuredClone(document);
     const a = document.associations.find((x) => x.id === input.associationId);
     if (!a)
@@ -328,7 +358,12 @@ export async function proposeContractRevision(
       a.reconciliation = 'pending';
       a.updatedAt = new Date().toISOString();
       if (input.mutationId) a.mutations.push({ id: input.mutationId, requestDigest });
-      await commit(root, { schemaVersion: 1, operation: 'revise', associationId: a.id, requestDigest }, base, document);
+      await commit(
+        root,
+        { schemaVersion: 1, operation: 'revise', associationId: a.id, requestDigest },
+        base,
+        document,
+      );
       return structuredClone(a);
     }
     if (current.digest === digest && input.accept !== false) return structuredClone(a);
@@ -348,7 +383,12 @@ export async function proposeContractRevision(
     a.consumerAcknowledgedRevision = null;
     a.updatedAt = now;
     if (input.mutationId) a.mutations.push({ id: input.mutationId, requestDigest });
-    await commit(root, { schemaVersion: 1, operation: 'revise', associationId: a.id, requestDigest }, base, document);
+    await commit(
+      root,
+      { schemaVersion: 1, operation: 'revise', associationId: a.id, requestDigest },
+      base,
+      document,
+    );
     return structuredClone(a);
   });
 }
@@ -367,7 +407,7 @@ export async function acknowledgeContractReceipt(
   root = await resolveProjectRoot(root);
   return withTaskStateLock(root, async () => {
     const state = await readTaskState(root, { allowMissing: false });
-    const document = await read(root);
+    const document = await readRecoveredLocked(root);
     const base = structuredClone(document);
     const association = document.associations.find((item) => item.id === input.associationId);
     if (!association)
@@ -412,7 +452,12 @@ export async function acknowledgeContractReceipt(
     association.reconciliation = version.status === 'accepted' ? 'current' : 'pending';
     association.updatedAt = new Date().toISOString();
     if (input.mutationId) association.mutations.push({ id: input.mutationId, requestDigest });
-    await commit(root, { schemaVersion: 1, operation: 'acknowledge', associationId: association.id, requestDigest }, base, document);
+    await commit(
+      root,
+      { schemaVersion: 1, operation: 'acknowledge', associationId: association.id, requestDigest },
+      base,
+      document,
+    );
     return structuredClone(association);
   });
 }
