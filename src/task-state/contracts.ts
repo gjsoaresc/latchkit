@@ -1,7 +1,52 @@
 import { errorMessage } from '../types.js';
 import { isVerificationMode, type VerificationMode } from '../verification/contracts.js';
+import {
+  buildRecordDependencyEdges,
+  detectRecordDependencyCycle,
+  MAX_RECORD_HISTORY,
+  MAX_RECORD_LINKS,
+  MAX_RECORD_REASON_BYTES,
+  MAX_RECORD_REFERENCE_BYTES,
+  MAX_RECORD_TEXT_BYTES,
+  MAX_RECORDS_PER_TASK,
+  RECORD_KINDS,
+  RECORD_PROVENANCE_KINDS,
+  RECORD_STATUSES,
+  type RecordLink,
+  type TaskRecord,
+} from './records.js';
 
 export type { VerificationMode };
+export type {
+  RecordKind,
+  RecordLink,
+  RecordProvenanceKind,
+  TaskRecord,
+  TaskRecordHistoryEntry,
+  TaskRecordProvenance,
+} from './records.js';
+export {
+  allowedRecordTransitions,
+  DEFAULT_RECORD_LIST_LIMIT,
+  isRecordAuthoritativeStatus,
+  isRecordStatusTerminal,
+  isRecordTransitionValid,
+  MAX_RECORD_HISTORY,
+  MAX_RECORD_LINKS,
+  MAX_RECORD_LIST_LIMIT,
+  MAX_RECORD_REASON_BYTES,
+  MAX_RECORD_REFERENCE_BYTES,
+  MAX_RECORD_TEXT_BYTES,
+  MAX_RECORDS_PER_TASK,
+  RECORD_INITIAL_STATUS,
+  RECORD_KINDS,
+  RECORD_PROVENANCE_KINDS,
+  RECORD_STATUSES,
+  RECORD_TERMINAL_STATUSES,
+  recordTransitionRequiresAuthority,
+  reconcileSourceLinkStatus,
+} from './records.js';
+export type { RecordLinkStatus } from './records.js';
 
 export type SourceSnapshot = { revision: string | null; dirtyFingerprint: string | null };
 export type Authorization = {
@@ -109,6 +154,9 @@ export type Task = {
    * verification versus the full standard path; persisted so resume never
    * silently changes an existing task's verification behavior. */
   verificationMode?: VerificationMode;
+  /** Present from task-state schema version 4. Discriminated decision/assumption/observation/
+   * question knowledge records with explicit provenance. See docs/task-state.md. */
+  records?: TaskRecord[];
 };
 export type TaskState = {
   schemaVersion: number;
@@ -119,8 +167,8 @@ export type TaskState = {
   tasks: Task[];
 };
 
-export const TASK_STATE_SCHEMA_VERSION = 3;
-export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2, 3]);
+export const TASK_STATE_SCHEMA_VERSION = 4;
+export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4]);
 
 export const TASK_STATES = Object.freeze([
   'planned',
@@ -144,7 +192,9 @@ export const EVIDENCE_OUTCOMES = Object.freeze([
 ]);
 
 const ID_PATTERN =
-  /^(project|task|run|criterion|checkpoint|evidence|authorization|owner|event)_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^(project|task|run|criterion|checkpoint|evidence|authorization|owner|event|record)_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MEMORY_ID_PATTERN =
+  /^memory_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
 /**
@@ -529,6 +579,291 @@ function validateEnhancedWorkflow(value: EnhancedWorkflow | null, task: Task, pa
   }
 }
 
+function boundedText(value: unknown, path: string, maxBytes: number): string {
+  const text = string(value, path);
+  if (Buffer.byteLength(text, 'utf8') > maxBytes)
+    throw new TaskStateError('Text exceeds the maximum size.', 'TASK_RECORD_TEXT_TOO_LARGE', path);
+  return text;
+}
+
+function validateRecordLink(value: RecordLink, path: string, task: Task, records: TaskRecord[]) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new TaskStateError('Expected a link object.', 'TASK_STATE_INVALID', path);
+  if (value.type === 'record') {
+    keys(
+      value,
+      ['type', 'recordId', 'recordRevision'],
+      ['type', 'recordId', 'recordRevision'],
+      path,
+    );
+    id(value.recordId, `${path}.recordId`, 'record');
+    integer(value.recordRevision, `${path}.recordRevision`, 1);
+    const target = records.find((item) => item.id === value.recordId);
+    if (!target)
+      throw new TaskStateError(
+        'Record link references an unknown record.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.recordId`,
+      );
+    if (value.recordRevision > target.revision)
+      throw new TaskStateError(
+        'Record link references an unknown revision.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.recordRevision`,
+      );
+  } else if (value.type === 'criterion') {
+    keys(
+      value,
+      ['type', 'criterionId', 'criterionRevision'],
+      ['type', 'criterionId', 'criterionRevision'],
+      path,
+    );
+    id(value.criterionId, `${path}.criterionId`, 'criterion');
+    integer(value.criterionRevision, `${path}.criterionRevision`, 1);
+    const criterion = task.criteria.find((item) => item.id === value.criterionId);
+    if (!criterion)
+      throw new TaskStateError(
+        'Record link references an unknown criterion.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.criterionId`,
+      );
+    if (value.criterionRevision > criterion.revision)
+      throw new TaskStateError(
+        'Record link references an unknown criterion revision.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.criterionRevision`,
+      );
+  } else if (value.type === 'evidence') {
+    keys(value, ['type', 'evidenceId'], ['type', 'evidenceId'], path);
+    id(value.evidenceId, `${path}.evidenceId`, 'evidence');
+    if (!task.evidence.some((item) => item.id === value.evidenceId))
+      throw new TaskStateError(
+        'Record link references unknown evidence.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.evidenceId`,
+      );
+  } else if (value.type === 'memory') {
+    keys(
+      value,
+      ['type', 'memoryId', 'memoryRevision'],
+      ['type', 'memoryId', 'memoryRevision'],
+      path,
+    );
+    if (typeof value.memoryId !== 'string' || !MEMORY_ID_PATTERN.test(value.memoryId))
+      throw new TaskStateError(
+        'Expected a stable memory ID.',
+        'TASK_STATE_INVALID',
+        `${path}.memoryId`,
+      );
+    integer(value.memoryRevision, `${path}.memoryRevision`, 1);
+  } else if (value.type === 'source') {
+    keys(
+      value,
+      ['type', 'path', 'digest', 'observedAt'],
+      ['type', 'path', 'digest', 'observedAt'],
+      path,
+    );
+    const sourcePath = string(value.path, `${path}.path`);
+    if (
+      sourcePath.includes('\\') ||
+      sourcePath.startsWith('/') ||
+      sourcePath.split('/').some((part) => !part || part === '.' || part === '..')
+    )
+      throw new TaskStateError(
+        'Expected a repository-relative path.',
+        'TASK_STATE_INVALID',
+        `${path}.path`,
+      );
+    hash(value.digest, `${path}.digest`, true);
+    timestamp(value.observedAt, `${path}.observedAt`);
+  } else {
+    throw new TaskStateError('Unknown record link type.', 'TASK_STATE_INVALID', `${path}.type`);
+  }
+}
+
+function validateRecordHistoryEntry(value: TaskRecord['history'][number], path: string) {
+  keys(
+    value,
+    ['revision', 'status', 'text', 'action', 'reason', 'authorizationId', 'createdAt'],
+    ['revision', 'status', 'text', 'action', 'reason', 'authorizationId', 'createdAt'],
+    path,
+  );
+  integer(value.revision, `${path}.revision`, 1);
+  string(value.status, `${path}.status`);
+  boundedText(value.text, `${path}.text`, MAX_RECORD_TEXT_BYTES);
+  if (!['created', 'revised', 'transitioned'].includes(value.action))
+    throw new TaskStateError(
+      'Unknown record history action.',
+      'TASK_STATE_INVALID',
+      `${path}.action`,
+    );
+  nullableString(value.reason, `${path}.reason`);
+  if (value.reason !== null && Buffer.byteLength(value.reason, 'utf8') > MAX_RECORD_REASON_BYTES)
+    throw new TaskStateError(
+      'Text exceeds the maximum size.',
+      'TASK_RECORD_TEXT_TOO_LARGE',
+      `${path}.reason`,
+    );
+  if (value.authorizationId !== null)
+    id(value.authorizationId, `${path}.authorizationId`, 'authorization');
+  timestamp(value.createdAt, `${path}.createdAt`);
+}
+
+function validateTaskRecord(value: TaskRecord, path: string, task: Task, allRecords: TaskRecord[]) {
+  keys(
+    value,
+    [
+      'id',
+      'kind',
+      'revision',
+      'status',
+      'text',
+      'provenance',
+      'links',
+      'supersedes',
+      'supersededBy',
+      'history',
+      'createdAt',
+      'updatedAt',
+    ],
+    [
+      'id',
+      'kind',
+      'revision',
+      'status',
+      'text',
+      'provenance',
+      'links',
+      'supersedes',
+      'supersededBy',
+      'history',
+      'createdAt',
+      'updatedAt',
+    ],
+    path,
+  );
+  id(value.id, `${path}.id`, 'record');
+  if (!(RECORD_KINDS as readonly string[]).includes(value.kind))
+    throw new TaskStateError('Unknown record kind.', 'TASK_STATE_INVALID', `${path}.kind`);
+  integer(value.revision, `${path}.revision`, 1);
+  if (!RECORD_STATUSES[value.kind].includes(value.status))
+    throw new TaskStateError(
+      'Status is not valid for this record kind.',
+      'TASK_STATE_INVALID',
+      `${path}.status`,
+    );
+  boundedText(value.text, `${path}.text`, MAX_RECORD_TEXT_BYTES);
+  keys(value.provenance, ['kind', 'reference'], ['kind', 'reference'], `${path}.provenance`);
+  if (!(RECORD_PROVENANCE_KINDS as readonly string[]).includes(value.provenance.kind))
+    throw new TaskStateError(
+      'Unknown record provenance kind.',
+      'TASK_STATE_INVALID',
+      `${path}.provenance.kind`,
+    );
+  boundedText(
+    value.provenance.reference,
+    `${path}.provenance.reference`,
+    MAX_RECORD_REFERENCE_BYTES,
+  );
+  if (!Array.isArray(value.links))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', `${path}.links`);
+  if (value.links.length > MAX_RECORD_LINKS)
+    throw new TaskStateError(
+      'Record has too many declared links.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      `${path}.links`,
+    );
+  value.links.forEach((link, index) =>
+    validateRecordLink(link, `${path}.links[${index}]`, task, allRecords),
+  );
+  if (value.supersedes !== null) id(value.supersedes, `${path}.supersedes`, 'record');
+  if (value.supersededBy !== null) id(value.supersededBy, `${path}.supersededBy`, 'record');
+  if (!Array.isArray(value.history) || value.history.length < 1)
+    throw new TaskStateError(
+      'A record must retain at least its creation history entry.',
+      'TASK_STATE_INVALID',
+      `${path}.history`,
+    );
+  if (value.history.length > MAX_RECORD_HISTORY)
+    throw new TaskStateError(
+      'Record has too many history entries.',
+      'TASK_RECORD_LIMIT_EXCEEDED',
+      `${path}.history`,
+    );
+  value.history.forEach((entry, index) => {
+    validateRecordHistoryEntry(entry, `${path}.history[${index}]`);
+    if (entry.revision !== index + 1)
+      throw new TaskStateError(
+        'Record history must form a contiguous revision sequence.',
+        'TASK_STATE_INVALID',
+        `${path}.history[${index}].revision`,
+      );
+  });
+  const last = value.history[value.history.length - 1];
+  if (
+    !last ||
+    last.revision !== value.revision ||
+    last.status !== value.status ||
+    last.text !== value.text
+  )
+    throw new TaskStateError(
+      'Record history must end with the current record snapshot.',
+      'TASK_STATE_INVALID',
+      `${path}.history`,
+    );
+  timestamp(value.createdAt, `${path}.createdAt`);
+  timestamp(value.updatedAt, `${path}.updatedAt`);
+}
+
+function validateTaskRecords(records: TaskRecord[], task: Task, path: string) {
+  if (!Array.isArray(records))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', path);
+  if (records.length > MAX_RECORDS_PER_TASK)
+    throw new TaskStateError('Task has too many records.', 'TASK_RECORD_LIMIT_EXCEEDED', path);
+  records.forEach((item, index) => validateTaskRecord(item, `${path}[${index}]`, task, records));
+  unique(records, 'id', path);
+  const byId = new Map(records.map((item) => [item.id, item]));
+  for (const item of records) {
+    if (item.supersedes) {
+      const target = byId.get(item.supersedes);
+      if (!target)
+        throw new TaskStateError(
+          'Record supersedes an unknown record.',
+          'TASK_RECORD_LINK_INVALID',
+          path,
+        );
+      if (target.kind !== item.kind)
+        throw new TaskStateError(
+          'A record can only supersede a record of the same kind.',
+          'TASK_STATE_INVALID',
+          path,
+        );
+      if (target.status !== 'superseded' || target.supersededBy !== item.id)
+        throw new TaskStateError(
+          'A superseded record must carry the superseded status and point back to its successor.',
+          'TASK_STATE_INVALID',
+          path,
+        );
+    }
+    if (
+      item.supersededBy &&
+      (!byId.has(item.supersededBy) || byId.get(item.supersededBy)?.supersedes !== item.id)
+    )
+      throw new TaskStateError(
+        'supersededBy must reference the record that supersedes this one.',
+        'TASK_STATE_INVALID',
+        path,
+      );
+  }
+  const cycle = detectRecordDependencyCycle(buildRecordDependencyEdges(records));
+  if (cycle)
+    throw new TaskStateError(
+      `Cyclic record dependency: ${cycle.join(' -> ')}.`,
+      'TASK_RECORD_CYCLE',
+      path,
+    );
+}
+
 function validateTask(value: Task, path: string, schemaVersion: number) {
   const fields = [
     'id',
@@ -549,6 +884,7 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
   ];
   if (schemaVersion >= 2) fields.push('enhancedWorkflow');
   if (schemaVersion >= 3) fields.push('verificationMode');
+  if (schemaVersion >= 4) fields.push('records');
   keys(value, fields, fields, path);
   id(value.id, `${path}.id`, 'task');
   string(value.title, `${path}.title`);
@@ -609,6 +945,7 @@ function validateTask(value: Task, path: string, schemaVersion: number) {
       'TASK_STATE_INVALID',
       `${path}.verificationMode`,
     );
+  if (schemaVersion >= 4) validateTaskRecords(value.records ?? [], value, `${path}.records`);
   const runs = new Map(value.runs.map((item) => [item.id, item]));
   const criteria = new Map(value.criteria.map((item) => [item.id, item]));
   const authorizations = new Set(value.authorizations.map((item) => item.id));

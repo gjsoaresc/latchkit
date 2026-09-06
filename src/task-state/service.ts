@@ -31,6 +31,29 @@ import type { StateWriteOptions } from './store.js';
 import { errorCode } from '../types.js';
 import { readOptional, resolveProjectRoot, safePath, writeAtomic } from '../storage.js';
 import { TASK_STATE_PATH } from './store.js';
+import {
+  buildRecordDependencyEdges,
+  DEFAULT_RECORD_LIST_LIMIT,
+  detectRecordDependencyCycle,
+  isRecordAuthoritativeStatus,
+  isRecordStatusTerminal,
+  isRecordTransitionValid,
+  MAX_RECORD_HISTORY,
+  MAX_RECORD_LINKS,
+  MAX_RECORD_LIST_LIMIT,
+  MAX_RECORD_REASON_BYTES,
+  MAX_RECORD_REFERENCE_BYTES,
+  MAX_RECORD_TEXT_BYTES,
+  MAX_RECORDS_PER_TASK,
+  RECORD_INITIAL_STATUS,
+  RECORD_KINDS,
+  RECORD_PROVENANCE_KINDS,
+  RECORD_STATUSES,
+  reconcileSourceLinkStatus,
+  recordTransitionRequiresAuthority,
+} from './records.js';
+import type { RecordKind, RecordLink, RecordProvenanceKind, TaskRecord } from './records.js';
+import { inspectProjectMemory } from '../project-memory/service.js';
 
 const execFileAsync = promisify(execFile);
 const TERMINAL_TASK_STATES = new Set(['cancelled', 'verified']);
@@ -417,6 +440,7 @@ export async function createTask(
       };
       if (state.schemaVersion >= 2) task.enhancedWorkflow = null;
       if (state.schemaVersion >= 3) task.verificationMode = input.verificationMode ?? 'standard';
+      if (state.schemaVersion >= 4) task.records = [];
       state.tasks.push(task);
       commitEvent(state, task, {
         mutationId,
@@ -1135,6 +1159,12 @@ function migrateTaskStep(state: TaskState, fromVersion: number): TaskState {
       schemaVersion: 3,
       tasks: state.tasks.map((task) => ({ ...task, verificationMode: 'standard' as const })),
     };
+  if (fromVersion === 3)
+    return {
+      ...state,
+      schemaVersion: 4,
+      tasks: state.tasks.map((task) => ({ ...task, records: [] })),
+    };
   throw new TaskStateError(
     `No migration is available from version ${fromVersion}.`,
     'TASK_STATE_MIGRATION_UNSUPPORTED',
@@ -1259,6 +1289,767 @@ export async function inspectTask(root: string, taskId: string, options: Mutatio
   };
 }
 
+// ---------------------------------------------------------------------------
+// Task records: decision/assumption/observation/question knowledge state with
+// explicit provenance (task-state schema version 4). See docs/task-state.md.
+// ---------------------------------------------------------------------------
+
+export type RecordLinkInput =
+  | { type: 'record'; recordId: string; recordRevision?: number }
+  | { type: 'criterion'; criterionId: string; criterionRevision?: number }
+  | { type: 'evidence'; evidenceId: string }
+  | { type: 'memory'; memoryId: string; memoryRevision: number }
+  | { type: 'source'; path: string; digestUnavailable?: boolean };
+
+export type RecordCreateInput = TaskMutationInput & {
+  kind: RecordKind;
+  text: string;
+  provenance: { kind: RecordProvenanceKind; reference: string };
+  links?: RecordLinkInput[];
+  /** ID of a prior same-kind record this one explicitly supersedes. */
+  supersedes?: string;
+  /** Authority used only when the superseded record was in an authoritative status. */
+  authorizationId?: string;
+  authorization?: AuthorizationInput;
+};
+
+export type RecordReviseInput = TaskMutationInput & {
+  recordId: string;
+  recordRevision: number;
+  text?: string;
+  links?: RecordLinkInput[];
+  reason?: string;
+};
+
+export type RecordTransitionInput = TaskMutationInput & {
+  recordId: string;
+  recordRevision: number;
+  status: string;
+  reason: string;
+  authorizationId?: string;
+  authorization?: AuthorizationInput;
+  /** Required to move an observation to `verified`: current, passing task evidence. */
+  evidenceId?: string;
+};
+
+export type RecordListInput = {
+  taskId: string;
+  kind?: RecordKind;
+  status?: string;
+  limit?: number;
+  cursor?: string;
+};
+
+export type RecordInspectInput = { taskId: string; recordId: string };
+
+function assertRecordsMigrated(state: TaskState) {
+  if (state.schemaVersion < 4)
+    throw new TaskStateError(
+      'Task records require an explicit task-state migration to version 4.',
+      'TASK_STATE_MIGRATION_REQUIRED',
+      '$.schemaVersion',
+    );
+}
+
+function findRecord(task: Task, recordId: string): TaskRecord {
+  const validId = validateStableId(recordId, 'record', '$.recordId');
+  const target = (task.records ?? []).find((item) => item.id === validId);
+  if (!target)
+    throw new TaskStateError(
+      `Record ${validId} does not exist.`,
+      'TASK_RECORD_NOT_FOUND',
+      '$.recordId',
+    );
+  return target;
+}
+
+function assertRecordExpected(
+  target: TaskRecord,
+  expectedRevision: unknown,
+  path = '$.recordRevision',
+) {
+  if (
+    typeof expectedRevision !== 'number' ||
+    !Number.isInteger(expectedRevision) ||
+    expectedRevision < 1
+  ) {
+    throw new TaskStateError('Expected a positive record revision.', 'TASK_STATE_INVALID', path);
+  }
+  if (target.revision !== expectedRevision) {
+    const error = new TaskStateError(
+      `Expected record revision ${expectedRevision}, found ${target.revision}.`,
+      'TASK_RECORD_STALE',
+      path,
+    );
+    error.expectedRevision = expectedRevision;
+    error.actualRevision = target.revision;
+    throw error;
+  }
+}
+
+function normalizeRecordText(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw new TaskStateError('Record text is required.', 'TASK_STATE_INVALID', path);
+  if (Buffer.byteLength(value, 'utf8') > MAX_RECORD_TEXT_BYTES)
+    throw new TaskStateError(
+      'Record text exceeds the maximum size.',
+      'TASK_RECORD_TEXT_TOO_LARGE',
+      path,
+    );
+  return value;
+}
+
+function normalizeRecordReason(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !value.trim())
+    throw new TaskStateError('A reason is required.', 'TASK_STATE_INVALID', path);
+  if (Buffer.byteLength(value, 'utf8') > MAX_RECORD_REASON_BYTES)
+    throw new TaskStateError(
+      'Reason exceeds the maximum size.',
+      'TASK_RECORD_TEXT_TOO_LARGE',
+      path,
+    );
+  return value;
+}
+
+function normalizeRecordProvenance(
+  value: unknown,
+  path: string,
+): { kind: RecordProvenanceKind; reference: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TaskStateError('Record provenance is required.', 'TASK_STATE_INVALID', path);
+  const provenance = value as { kind?: unknown; reference?: unknown };
+  if (
+    typeof provenance.kind !== 'string' ||
+    !(RECORD_PROVENANCE_KINDS as readonly string[]).includes(provenance.kind)
+  )
+    throw new TaskStateError(
+      'Unknown record provenance kind.',
+      'TASK_STATE_INVALID',
+      `${path}.kind`,
+    );
+  if (typeof provenance.reference !== 'string' || !provenance.reference.trim())
+    throw new TaskStateError(
+      'Record provenance reference is required.',
+      'TASK_STATE_INVALID',
+      `${path}.reference`,
+    );
+  if (Buffer.byteLength(provenance.reference, 'utf8') > MAX_RECORD_REFERENCE_BYTES)
+    throw new TaskStateError(
+      'Record provenance reference exceeds the maximum size.',
+      'TASK_RECORD_TEXT_TOO_LARGE',
+      `${path}.reference`,
+    );
+  return { kind: provenance.kind as RecordProvenanceKind, reference: provenance.reference };
+}
+
+async function normalizeRecordLink(
+  root: string,
+  input: RecordLinkInput,
+  task: Task,
+  records: TaskRecord[],
+  path: string,
+  clock: () => Date,
+): Promise<RecordLink> {
+  if (!input || typeof input !== 'object')
+    throw new TaskStateError('Expected a link object.', 'TASK_STATE_INVALID', path);
+  if (input.type === 'record') {
+    const recordId = validateStableId(input.recordId, 'record', `${path}.recordId`);
+    const target = records.find((item) => item.id === recordId);
+    if (!target)
+      throw new TaskStateError(
+        'Linked record does not exist.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.recordId`,
+      );
+    const recordRevision = input.recordRevision ?? target.revision;
+    if (!Number.isInteger(recordRevision) || recordRevision < 1 || recordRevision > target.revision)
+      throw new TaskStateError(
+        'Record link references an unknown revision.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.recordRevision`,
+      );
+    return { type: 'record', recordId, recordRevision };
+  }
+  if (input.type === 'criterion') {
+    const criterionId = validateStableId(input.criterionId, 'criterion', `${path}.criterionId`);
+    const criterion = task.criteria.find((item) => item.id === criterionId);
+    if (!criterion)
+      throw new TaskStateError(
+        'Linked criterion does not exist.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.criterionId`,
+      );
+    const criterionRevision = input.criterionRevision ?? criterion.revision;
+    if (
+      !Number.isInteger(criterionRevision) ||
+      criterionRevision < 1 ||
+      criterionRevision > criterion.revision
+    )
+      throw new TaskStateError(
+        'Criterion link references an unknown revision.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.criterionRevision`,
+      );
+    return { type: 'criterion', criterionId, criterionRevision };
+  }
+  if (input.type === 'evidence') {
+    const evidenceId = validateStableId(input.evidenceId, 'evidence', `${path}.evidenceId`);
+    if (!task.evidence.some((item) => item.id === evidenceId))
+      throw new TaskStateError(
+        'Linked evidence does not exist.',
+        'TASK_RECORD_LINK_INVALID',
+        `${path}.evidenceId`,
+      );
+    return { type: 'evidence', evidenceId };
+  }
+  if (input.type === 'memory') {
+    if (typeof input.memoryId !== 'string' || !/^memory_[0-9a-f-]{36}$/i.test(input.memoryId))
+      throw new TaskStateError(
+        'Expected a stable memory ID.',
+        'TASK_STATE_INVALID',
+        `${path}.memoryId`,
+      );
+    if (!Number.isInteger(input.memoryRevision) || input.memoryRevision < 1)
+      throw new TaskStateError(
+        'Expected a positive memory revision.',
+        'TASK_STATE_INVALID',
+        `${path}.memoryRevision`,
+      );
+    return { type: 'memory', memoryId: input.memoryId, memoryRevision: input.memoryRevision };
+  }
+  if (input.type === 'source') {
+    const relative = typeof input.path === 'string' ? input.path.replaceAll('\\', '/') : '';
+    if (
+      !relative ||
+      relative.startsWith('/') ||
+      relative.split('/').some((part) => !part || part === '.' || part === '..')
+    )
+      throw new TaskStateError(
+        'Source link path must be a repository-relative path.',
+        'TASK_STATE_INVALID',
+        `${path}.path`,
+      );
+    if (input.digestUnavailable)
+      return { type: 'source', path: relative, digest: null, observedAt: iso(clock) };
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(await safePath(root, relative));
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT')
+        throw new TaskStateError(
+          `Source link target does not exist: ${relative}. Pass digestUnavailable to link it anyway.`,
+          'TASK_RECORD_SOURCE_MISSING',
+          `${path}.path`,
+        );
+      throw error;
+    }
+    return { type: 'source', path: relative, digest: digest(bytes), observedAt: iso(clock) };
+  }
+  throw new TaskStateError('Unknown record link type.', 'TASK_STATE_INVALID', `${path}.type`);
+}
+
+function assertNoRecordCycle(records: TaskRecord[]) {
+  const cycle = detectRecordDependencyCycle(buildRecordDependencyEdges(records));
+  if (cycle)
+    throw new TaskStateError(
+      `Cyclic record dependency: ${cycle.join(' -> ')}.`,
+      'TASK_RECORD_CYCLE',
+      '$.links',
+    );
+}
+
+function resolveRecordAuthorization(
+  task: Task,
+  clock: () => Date,
+  input: { authorizationId?: string; authorization?: AuthorizationInput },
+  path: string,
+): { authorizationId: string; authorization: Authorization | null } {
+  if (input.authorizationId) {
+    const authorizationId = validateStableId(input.authorizationId, 'authorization', path);
+    const existing = task.authorizations.find((item) => item.id === authorizationId);
+    if (!existing)
+      throw new TaskStateError(
+        'Authorization does not exist on this task.',
+        'TASK_AUTHORIZATION_INVALID',
+        path,
+      );
+    return { authorizationId: existing.id, authorization: null };
+  }
+  if (input.authorization) {
+    const authorization = normalizeAuthorization(input.authorization, clock);
+    return { authorizationId: authorization.id, authorization };
+  }
+  throw new TaskStateError(
+    "This change requires referencing the task's existing direct-user authorization " +
+      '(authorizationId) or granting a new one (authorization).',
+    'TASK_AUTHORIZATION_REQUIRED',
+    path,
+  );
+}
+
+/**
+ * Create a new decision/assumption/observation/question record. Acceptance is never implied by
+ * kind or provenance: every new record starts in its kind's non-authoritative status
+ * (`RECORD_INITIAL_STATUS`), even when `provenance.kind` is `direct-user`. Optionally supersedes a
+ * prior same-kind record in the same mutation; superseding a record that is currently in its
+ * kind's authoritative status requires the same authority as an explicit transition would.
+ */
+export async function recordTaskRecord(
+  root: string,
+  input: RecordCreateInput,
+  options: MutationOptions = {},
+) {
+  const request = {
+    mutationId: input.mutationId,
+    taskId: input.taskId,
+    expectedRevision: input.expectedRevision,
+    kind: input.kind,
+    text: input.text,
+    provenance: input.provenance,
+    links: input.links ?? [],
+    supersedes: input.supersedes ?? null,
+    authorizationId: input.authorizationId ?? null,
+    authorization: input.authorization ?? null,
+  };
+  return mutate(
+    root,
+    request,
+    async ({ state, root: projectRoot, clock, mutationId, hash }) => {
+      const task = findTask(state, input.taskId);
+      assertExpected(task, input.expectedRevision);
+      ensureMutable(task);
+      assertRecordsMigrated(state);
+      if (!(RECORD_KINDS as readonly string[]).includes(input.kind))
+        throw new TaskStateError('Unknown record kind.', 'TASK_STATE_INVALID', '$.kind');
+      const records = task.records ?? (task.records = []);
+      if (records.length >= MAX_RECORDS_PER_TASK)
+        throw new TaskStateError(
+          'This task has reached its record limit.',
+          'TASK_RECORD_LIMIT_EXCEEDED',
+          '$.records',
+        );
+      const text = normalizeRecordText(input.text, '$.text');
+      const provenance = normalizeRecordProvenance(input.provenance, '$.provenance');
+      const linkInputs = input.links ?? [];
+      if (linkInputs.length > MAX_RECORD_LINKS)
+        throw new TaskStateError(
+          'Too many declared links.',
+          'TASK_RECORD_LIMIT_EXCEEDED',
+          '$.links',
+        );
+      const links: RecordLink[] = [];
+      for (const [index, linkInput] of linkInputs.entries())
+        links.push(
+          await normalizeRecordLink(
+            projectRoot,
+            linkInput,
+            task,
+            records,
+            `$.links[${index}]`,
+            clock,
+          ),
+        );
+      let supersedesId: string | null = null;
+      let supersededTarget: TaskRecord | null = null;
+      if (input.supersedes) {
+        supersedesId = validateStableId(input.supersedes, 'record', '$.supersedes');
+        supersededTarget = records.find((item) => item.id === supersedesId) ?? null;
+        if (!supersededTarget)
+          throw new TaskStateError(
+            'Superseded record does not exist.',
+            'TASK_RECORD_NOT_FOUND',
+            '$.supersedes',
+          );
+        if (supersededTarget.kind !== input.kind)
+          throw new TaskStateError(
+            'A record can only supersede a record of the same kind.',
+            'TASK_STATE_INVALID',
+            '$.supersedes',
+          );
+        if (isRecordStatusTerminal(supersededTarget.status))
+          throw new TaskStateError(
+            'That record has already been resolved and cannot be superseded again.',
+            'TASK_RECORD_TRANSITION_INVALID',
+            '$.supersedes',
+          );
+      }
+      const at = iso(clock);
+      const newId = id('record');
+      const initialStatus = RECORD_INITIAL_STATUS[input.kind];
+      const newRecord: TaskRecord = {
+        id: newId,
+        kind: input.kind,
+        revision: 1,
+        status: initialStatus,
+        text,
+        provenance,
+        links,
+        supersedes: supersedesId,
+        supersededBy: null,
+        history: [
+          {
+            revision: 1,
+            status: initialStatus,
+            text,
+            action: 'created',
+            reason: null,
+            authorizationId: null,
+            createdAt: at,
+          },
+        ],
+        createdAt: at,
+        updatedAt: at,
+      };
+      // Validate the dependency graph including the not-yet-committed record before mutating
+      // anything else, so a cyclic `record`-type link is rejected before any side effect lands.
+      assertNoRecordCycle([...records, newRecord]);
+      if (supersededTarget) {
+        let authorizationId: string | null = null;
+        if (
+          recordTransitionRequiresAuthority(
+            supersededTarget.kind,
+            supersededTarget.status,
+            'superseded',
+          )
+        ) {
+          const resolved = resolveRecordAuthorization(task, clock, input, '$.authorizationId');
+          authorizationId = resolved.authorizationId;
+          if (resolved.authorization) task.authorizations.push(resolved.authorization);
+        }
+        supersededTarget.status = 'superseded';
+        supersededTarget.supersededBy = newId;
+        supersededTarget.revision += 1;
+        supersededTarget.updatedAt = at;
+        supersededTarget.history.push({
+          revision: supersededTarget.revision,
+          status: 'superseded',
+          text: supersededTarget.text,
+          action: 'transitioned',
+          reason: `Superseded by ${newId}.`,
+          authorizationId,
+          createdAt: at,
+        });
+      }
+      records.push(newRecord);
+      commitEvent(state, task, {
+        mutationId,
+        type: `record.created:${input.kind}`,
+        hash,
+        clock,
+      });
+      return task;
+    },
+    options,
+  );
+}
+
+/**
+ * Revise a record's text and/or declared links. Only records in a non-terminal,
+ * non-authoritative status can be revised; an authoritatively accepted record must instead be
+ * superseded (`recordTaskRecord` with `supersedes`) so acceptance can never be silently edited
+ * away from what was actually authorized.
+ */
+export async function reviseTaskRecord(
+  root: string,
+  input: RecordReviseInput,
+  options: MutationOptions = {},
+) {
+  const request = {
+    mutationId: input.mutationId,
+    taskId: input.taskId,
+    expectedRevision: input.expectedRevision,
+    recordId: input.recordId,
+    recordRevision: input.recordRevision,
+    text: input.text ?? null,
+    links: input.links ?? null,
+    reason: input.reason ?? null,
+  };
+  return mutate(
+    root,
+    request,
+    async ({ state, root: projectRoot, clock, mutationId, hash }) => {
+      const task = findTask(state, input.taskId);
+      assertExpected(task, input.expectedRevision);
+      ensureMutable(task);
+      assertRecordsMigrated(state);
+      const target = findRecord(task, input.recordId);
+      assertRecordExpected(target, input.recordRevision);
+      if (isRecordStatusTerminal(target.status))
+        throw new TaskStateError(
+          'A resolved or superseded record cannot be revised.',
+          'TASK_RECORD_TRANSITION_INVALID',
+          '$.recordId',
+        );
+      if (isRecordAuthoritativeStatus(target.kind, target.status))
+        throw new TaskStateError(
+          'An authoritatively accepted record cannot be revised; supersede it instead.',
+          'TASK_RECORD_TRANSITION_INVALID',
+          '$.recordId',
+        );
+      if (input.text === undefined && input.links === undefined)
+        throw new TaskStateError('Revision requires new text or links.', 'TASK_STATE_INVALID', '$');
+      if (target.history.length >= MAX_RECORD_HISTORY)
+        throw new TaskStateError(
+          'Record history limit reached; supersede this record instead of revising it further.',
+          'TASK_RECORD_LIMIT_EXCEEDED',
+          '$.history',
+        );
+      const records = task.records ?? [];
+      if (input.text !== undefined) target.text = normalizeRecordText(input.text, '$.text');
+      if (input.links !== undefined) {
+        if (input.links.length > MAX_RECORD_LINKS)
+          throw new TaskStateError(
+            'Too many declared links.',
+            'TASK_RECORD_LIMIT_EXCEEDED',
+            '$.links',
+          );
+        const links: RecordLink[] = [];
+        for (const [index, linkInput] of input.links.entries())
+          links.push(
+            await normalizeRecordLink(
+              projectRoot,
+              linkInput,
+              task,
+              records,
+              `$.links[${index}]`,
+              clock,
+            ),
+          );
+        target.links = links;
+        assertNoRecordCycle(records);
+      }
+      const at = iso(clock);
+      target.revision += 1;
+      target.updatedAt = at;
+      target.history.push({
+        revision: target.revision,
+        status: target.status,
+        text: target.text,
+        action: 'revised',
+        reason: input.reason ?? null,
+        authorizationId: null,
+        createdAt: at,
+      });
+      commitEvent(state, task, { mutationId, type: 'record.revised', hash, clock });
+      return task;
+    },
+    options,
+  );
+}
+
+/**
+ * Move a record to a new kind-appropriate status. A transition into or out of the kind's
+ * authoritative status (accepted/confirmed/answered) requires referencing the task's existing
+ * direct-user authorization (`authorizationId`) or granting a new one (`authorization`); no
+ * parser, import, or execution observation can reach that path implicitly. Moving an observation
+ * to `verified` instead requires a linked, current, `passed` evidence record — a label or exit
+ * status alone is never sufficient.
+ */
+export async function transitionTaskRecord(
+  root: string,
+  input: RecordTransitionInput,
+  options: MutationOptions = {},
+) {
+  const request = {
+    mutationId: input.mutationId,
+    taskId: input.taskId,
+    expectedRevision: input.expectedRevision,
+    recordId: input.recordId,
+    recordRevision: input.recordRevision,
+    status: input.status,
+    reason: input.reason,
+    authorizationId: input.authorizationId ?? null,
+    authorization: input.authorization ?? null,
+    evidenceId: input.evidenceId ?? null,
+  };
+  return mutate(
+    root,
+    request,
+    async ({ state, root: projectRoot, clock, mutationId, hash }) => {
+      const task = findTask(state, input.taskId);
+      assertExpected(task, input.expectedRevision);
+      ensureMutable(task);
+      assertRecordsMigrated(state);
+      const target = findRecord(task, input.recordId);
+      assertRecordExpected(target, input.recordRevision);
+      const reason = normalizeRecordReason(input.reason, '$.reason');
+      if (!RECORD_STATUSES[target.kind].includes(input.status))
+        throw new TaskStateError(
+          'Status is not valid for this record kind.',
+          'TASK_STATE_INVALID',
+          '$.status',
+        );
+      if (!isRecordTransitionValid(target.kind, target.status, input.status))
+        throw new TaskStateError(
+          `Cannot move a ${target.kind} record from ${target.status} to ${input.status}.`,
+          'TASK_RECORD_TRANSITION_INVALID',
+          '$.status',
+        );
+      if (target.history.length >= MAX_RECORD_HISTORY)
+        throw new TaskStateError(
+          'Record history limit reached; supersede this record instead of transitioning it further.',
+          'TASK_RECORD_LIMIT_EXCEEDED',
+          '$.history',
+        );
+      let authorizationId: string | null = null;
+      if (recordTransitionRequiresAuthority(target.kind, target.status, input.status)) {
+        const resolved = resolveRecordAuthorization(task, clock, input, '$.authorizationId');
+        authorizationId = resolved.authorizationId;
+        if (resolved.authorization) task.authorizations.push(resolved.authorization);
+      }
+      if (target.kind === 'observation' && input.status === 'verified') {
+        if (!input.evidenceId)
+          throw new TaskStateError(
+            'Marking an observation verified requires linked passing evidence.',
+            'TASK_RECORD_EVIDENCE_REQUIRED',
+            '$.evidenceId',
+          );
+        const evidenceId = validateStableId(input.evidenceId, 'evidence', '$.evidenceId');
+        const evidence = task.evidence.find((item) => item.id === evidenceId);
+        if (!evidence)
+          throw new TaskStateError(
+            'Evidence does not exist.',
+            'TASK_RECORD_LINK_INVALID',
+            '$.evidenceId',
+          );
+        if (evidence.outcome !== 'passed')
+          throw new TaskStateError(
+            'Only passing evidence can verify an observation.',
+            'TASK_RECORD_EVIDENCE_REQUIRED',
+            '$.evidenceId',
+          );
+        const currentSource = await captureSource(projectRoot);
+        if (!sourceEqual(evidence.source, currentSource))
+          throw new TaskStateError(
+            'Evidence source is no longer current.',
+            'TASK_RECORD_EVIDENCE_REQUIRED',
+            '$.evidenceId',
+          );
+        if (
+          !target.links.some((link) => link.type === 'evidence' && link.evidenceId === evidenceId)
+        )
+          target.links = [...target.links, { type: 'evidence', evidenceId }];
+      }
+      const at = iso(clock);
+      target.status = input.status;
+      target.revision += 1;
+      target.updatedAt = at;
+      target.history.push({
+        revision: target.revision,
+        status: target.status,
+        text: target.text,
+        action: 'transitioned',
+        reason,
+        authorizationId,
+        createdAt: at,
+      });
+      commitEvent(state, task, {
+        mutationId,
+        type: `record.transitioned:${input.status}`,
+        hash,
+        clock,
+      });
+      return task;
+    },
+    options,
+  );
+}
+
+/** Read-only, paginated listing; never mutates and takes no lock. */
+export async function listTaskRecords(root: string, input: RecordListInput) {
+  root = await resolveProjectRoot(root);
+  const state = await readTaskState(root, { allowMissing: false });
+  const task = findTask(state, input.taskId);
+  let records = task.records ?? [];
+  if (input.kind !== undefined) {
+    if (!(RECORD_KINDS as readonly string[]).includes(input.kind))
+      throw new TaskStateError('Unknown record kind.', 'TASK_STATE_INVALID', '$.kind');
+    records = records.filter((item) => item.kind === input.kind);
+  }
+  if (input.status !== undefined) records = records.filter((item) => item.status === input.status);
+  const limit = input.limit ?? DEFAULT_RECORD_LIST_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RECORD_LIST_LIMIT)
+    throw new TaskStateError(
+      `limit must be between 1 and ${MAX_RECORD_LIST_LIMIT}.`,
+      'TASK_STATE_INVALID',
+      '$.limit',
+    );
+  let startIndex = 0;
+  if (input.cursor !== undefined) {
+    startIndex = records.findIndex((item) => item.id === input.cursor);
+    if (startIndex === -1)
+      throw new TaskStateError('Unknown list cursor.', 'TASK_RECORD_NOT_FOUND', '$.cursor');
+    startIndex += 1;
+  }
+  const page = records.slice(startIndex, startIndex + limit);
+  const last = page.at(-1);
+  const nextCursor = startIndex + limit < records.length && last ? last.id : null;
+  return {
+    taskId: task.id,
+    taskRevision: task.revision,
+    total: records.length,
+    records: structuredClone(page),
+    nextCursor,
+  };
+}
+
+/**
+ * Read-only inspection of a single record plus current link reconciliation: every declared
+ * source/record/criterion/evidence/memory link is resolved against current state and reported as
+ * `current`, `stale`, `missing`, or `unknown` (an explicitly declared-unavailable source digest).
+ * This never rewrites the persisted record; staleness is exposed, not silently repaired.
+ */
+export async function inspectTaskRecord(root: string, input: RecordInspectInput) {
+  root = await resolveProjectRoot(root);
+  const state = await readTaskState(root, { allowMissing: false });
+  const task = findTask(state, input.taskId);
+  const target = findRecord(task, input.recordId);
+  const links = await Promise.all(
+    target.links.map(async (link) => {
+      if (link.type === 'source')
+        return { link, status: await reconcileSourceLinkStatus(root, link) };
+      if (link.type === 'record') {
+        const linked = (task.records ?? []).find((item) => item.id === link.recordId);
+        return {
+          link,
+          status: !linked
+            ? 'missing'
+            : linked.revision === link.recordRevision
+              ? 'current'
+              : 'stale',
+        };
+      }
+      if (link.type === 'criterion') {
+        const criterion = task.criteria.find((item) => item.id === link.criterionId);
+        return {
+          link,
+          status: !criterion
+            ? 'missing'
+            : criterion.revision === link.criterionRevision
+              ? 'current'
+              : 'stale',
+        };
+      }
+      if (link.type === 'evidence') {
+        const exists = task.evidence.some((item) => item.id === link.evidenceId);
+        return { link, status: exists ? 'current' : 'missing' };
+      }
+      try {
+        const memory = await inspectProjectMemory(root, link.memoryId);
+        return {
+          link,
+          status: memory.revision === link.memoryRevision ? 'current' : 'stale',
+          memory,
+        };
+      } catch (error) {
+        if (errorCode(error) !== 'PROJECT_MEMORY_NOT_FOUND') throw error;
+        return { link, status: 'missing' as const };
+      }
+    }),
+  );
+  return { taskId: task.id, taskRevision: task.revision, record: structuredClone(target), links };
+}
+
 export async function listTasks(root: string) {
   root = await resolveProjectRoot(root);
   const state = await readTaskState(root, { allowMissing: false });
@@ -1285,4 +2076,16 @@ export {
   resolveCollisionSafePlanPath,
   slugifyPlanTitle,
 } from './plans.js';
+export {
+  DEFAULT_RECORD_LIST_LIMIT,
+  MAX_RECORD_LINKS,
+  MAX_RECORD_LIST_LIMIT,
+  MAX_RECORD_TEXT_BYTES,
+  MAX_RECORDS_PER_TASK,
+  RECORD_INITIAL_STATUS,
+  RECORD_KINDS,
+  RECORD_PROVENANCE_KINDS,
+  RECORD_STATUSES,
+} from './records.js';
+export type { RecordKind, RecordLink, RecordProvenanceKind, TaskRecord } from './records.js';
 export type { PlanMigrationResult } from './plans.js';
