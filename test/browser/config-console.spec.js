@@ -29,9 +29,21 @@ async function fsTemp(prefix) {
   return mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+// Issue #90 moved configuration, agents/skills, workspace preference, and FCC/tools onto their
+// own directly addressable Settings page. Establish the session at the root URL (as printed by
+// Latchkit), then navigate to Settings — the same two-step pattern the multi-project overview
+// (#94) already uses for /projects, since the session token lives in sessionStorage rather than
+// being repeated in every URL.
 async function open(page) {
   await page.goto(url);
+  await page.goto(`${new URL(url).origin}/settings`);
   await expect(page.getByRole('heading', { name: 'Meet your agents.' })).toBeVisible();
+}
+
+async function openUsage(page) {
+  await page.goto(url);
+  await page.goto(`${new URL(url).origin}/usage`);
+  await expect(page.getByRole('heading', { name: 'Understand each session.' })).toBeVisible();
 }
 
 test('saves, previews, applies, reloads, and removes skills through the filesystem-backed console', async ({
@@ -125,7 +137,7 @@ test('treats equivalent selection ordering as saved', async ({ page }) => {
 });
 
 test('shows a useful message when the session token is missing', async ({ page }) => {
-  await page.goto(url.replace(/#.*$/, ''));
+  await page.goto(`${new URL(url).origin}/settings`);
   await expect(page.getByRole('alert')).toContainText('complete session URL');
   await expect(page.getByRole('button', { name: /Save configuration/ })).toBeDisabled();
 });
@@ -155,7 +167,7 @@ test('persists an accessible dark theme choice', async ({ page }) => {
 test('local usage stays opt-in and renders unknown totals without suggesting zero spend', async ({
   page,
 }) => {
-  await open(page);
+  await openUsage(page);
   const usage = page.getByRole('region', { name: 'Understand each session.' });
   await expect(usage.getByText('Collection disabled', { exact: true })).toBeVisible();
   // Recorded totals stay unknown while collection is disabled; the overview's estimated cost
@@ -238,6 +250,17 @@ test('keeps optional FCC controls bounded to explicit inspection and lifecycle a
 
 test('has no automated accessibility violations in the configured console', async ({ page }) => {
   await open(page);
+  const report = await new AxeBuilder({ page }).analyze();
+  expect(report.violations).toEqual([]);
+});
+
+test('has no automated accessibility violations on the Settings page in dark mode', async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByRole('button', { name: 'Theme: system' }).click();
+  await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
   const report = await new AxeBuilder({ page }).analyze();
   expect(report.violations).toEqual([]);
 });

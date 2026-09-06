@@ -18,11 +18,24 @@ test('workbench renders persisted task state and supports keyboard-safe local me
   const { server, url } = await startServer(root);
   try {
     await page.goto(url);
+    // Tasks now live on the Specs & Tasks page and memory on its own Memory page (issue #90);
+    // the session token established at the root URL carries over via sessionStorage.
+    await page.goto(`${new URL(url).origin}/specs`);
     await expect(page.getByRole('heading', { name: 'Tasks, recovery, and proof.' })).toBeVisible();
     await expect(page.getByText('Awaiting approval fixture')).toBeVisible();
+
+    await page.goto(`${new URL(url).origin}/memory`);
+    await expect(
+      page.getByRole('heading', { name: 'Keep only what helps recovery.' }),
+    ).toBeVisible();
+    const addMemory = page.getByRole('button', { name: 'Add memory' });
+    // The page's own store is still finishing its initial load (a brief busy window that
+    // disables every control) when this test starts filling the form; wait for it to settle so
+    // the keyboard submit below lands on an enabled button instead of racing it.
+    await expect(addMemory).toBeEnabled();
     await page.getByLabel('Title').fill('Keyboard memory');
     await page.getByLabel('Record', { exact: true }).fill('This record is local and inspectable.');
-    await page.getByRole('button', { name: 'Add memory' }).press('Enter');
+    await addMemory.press('Enter');
     await expect(page.getByText('Keyboard memory')).toBeVisible();
     await page.getByRole('button', { name: 'Delete', exact: true }).press('Enter');
     await expect(page.getByText('No local memory has been captured.')).toBeVisible();

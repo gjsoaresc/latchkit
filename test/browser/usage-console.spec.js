@@ -43,6 +43,9 @@ test('usage console renders trends, coverage, and an explicit-baseline savings c
   const { server, url } = await startServer(root);
   try {
     await page.goto(url);
+    // Usage (#92) now lives on its own directly addressable page (issue #90); the session token
+    // established at the root URL carries over via sessionStorage.
+    await page.goto(`${new URL(url).origin}/usage`);
     const usage = page.locator('#usage');
     await expect(usage.getByRole('heading', { name: 'Understand each session.' })).toBeVisible();
 
@@ -71,11 +74,14 @@ test('usage console renders trends, coverage, and an explicit-baseline savings c
     await expect(usage.getByText(/Savings of \$4\.0000/)).toBeVisible();
     await expect(usage.getByText('paired comparison', { exact: true })).toBeVisible();
 
-    const report = await new AxeBuilder({ page })
-      .include('#usage')
-      .disableRules(['color-contrast'])
-      .analyze();
+    const report = await new AxeBuilder({ page }).include('#usage').analyze();
     expect(report.violations).toEqual([]);
+
+    await page.getByRole('button', { name: 'Theme: system' }).click();
+    await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    const darkReport = await new AxeBuilder({ page }).include('#usage').analyze();
+    expect(darkReport.violations).toEqual([]);
   } finally {
     await new Promise((resolve) => {
       server.close(resolve);

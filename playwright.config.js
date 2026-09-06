@@ -25,6 +25,10 @@ export default defineConfig({
     trace: 'off',
     screenshot: 'off',
     baseURL: 'http://127.0.0.1',
+    // Deterministic, immediate style application: a theme toggle (issue #90's per-page dark-mode
+    // accessibility scans) would otherwise land assertions and axe scans mid CSS transition,
+    // observing a transient blended color rather than the final one.
+    reducedMotion: 'reduce',
   },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },

@@ -115,11 +115,14 @@ test('multi-project overview lists grouped worktrees, opens a project, adds and 
     const info = await stat(addedRoot);
     expect(info.isDirectory()).toBe(true);
 
-    const report = await new AxeBuilder({ page })
-      .include('#workspace')
-      .disableRules(['color-contrast'])
-      .analyze();
+    const report = await new AxeBuilder({ page }).include('#workspace').analyze();
     expect(report.violations).toEqual([]);
+
+    await page.getByRole('button', { name: 'Theme: system' }).click();
+    await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+    await expect(page.locator('html')).toHaveClass(/dark/);
+    const darkReport = await new AxeBuilder({ page }).include('#workspace').analyze();
+    expect(darkReport.violations).toEqual([]);
   } finally {
     await new Promise((resolve) => {
       server.close(resolve);

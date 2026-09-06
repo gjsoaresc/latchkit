@@ -36,6 +36,8 @@ test('delivery approval displays exact content and submits its digests with the 
   });
   try {
     await page.goto(url);
+    // Delivery workflows now render on the Specs & Tasks page (issue #90).
+    await page.goto(`${new URL(url).origin}/specs`);
     await expect(page.getByText('Preserve all local files.', { exact: true })).toBeVisible();
     await expect(
       page.getByText('Implement only the requested fixture.', { exact: true }),
