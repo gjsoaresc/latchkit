@@ -72,14 +72,37 @@ export const OPENSPEC_UPSTREAM: SpecImportUpstreamPin = Object.freeze({
   ]) as readonly string[],
 });
 
-// TinySpec (issue #114, third increment) constants are added alongside its
-// adapter module; see below in this file once that increment lands.
+export const TINYSPEC_ADAPTER_ID = 'tinyspec';
+/** This adapter's own version, independent of the pinned upstream commit. */
+export const TINYSPEC_ADAPTER_VERSION = '1.0.0';
 
-export type SpecImportAdapterId = typeof SPEC_KIT_ADAPTER_ID | typeof OPENSPEC_ADAPTER_ID;
+/**
+ * The exact upstream `nmcdaines/tinyspec` release this adapter parses
+ * against. Recorded from `gh api repos/nmcdaines/tinyspec/{tags,releases}`
+ * on 2026-09-06; see the adapter compatibility table in
+ * docs/spec-imports.md. `.specs/templates/default.md` is the shipped default
+ * scaffold; `src/spec/mod.rs` and `src/spec/summary.rs` are the upstream
+ * source files this adapter's front-matter/task parsing was pinned against.
+ */
+export const TINYSPEC_UPSTREAM: SpecImportUpstreamPin = Object.freeze({
+  repository: 'https://github.com/nmcdaines/tinyspec',
+  ref: 'v0.0.9',
+  commit: 'd1c122f10f4bddf07299aea0df6f781e403ed340',
+  publishedAt: '2026-02-19T00:01:13Z',
+  pinnedTemplatePaths: Object.freeze([
+    '.specs/templates/default.md',
+    'src/spec/mod.rs',
+    'src/spec/summary.rs',
+  ]) as readonly string[],
+});
+
+export type SpecImportAdapterId =
+  typeof SPEC_KIT_ADAPTER_ID | typeof OPENSPEC_ADAPTER_ID | typeof TINYSPEC_ADAPTER_ID;
 
 const KNOWN_ADAPTER_IDS: readonly SpecImportAdapterId[] = Object.freeze([
   SPEC_KIT_ADAPTER_ID,
   OPENSPEC_ADAPTER_ID,
+  TINYSPEC_ADAPTER_ID,
 ]);
 
 export type SpecImportLimits = {

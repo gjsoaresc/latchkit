@@ -1,11 +1,11 @@
 # Foreign spec-artifact discovery and preview (issue #114)
 
-This covers the first two reviewable increments of issue #114: read-only
-discovery and preview of an external specification framework's local files,
-one adapter at a time (Spec Kit, then OpenSpec; TinySpec is the next
-increment). It does not import, register, or write anything. TinySpec,
-registration into task state, reinspection/detach, and any browser UI are
-separate, later increments — see the issue and its parent epic,
+This covers all three adapter increments of issue #114: read-only discovery
+and preview of an external specification framework's local files, one
+adapter at a time (Spec Kit, then OpenSpec, then TinySpec). It does not
+import, register, or write anything. Registration into task state,
+reinspection/detach, and any browser UI are separate, later increments —
+see the issue and its parent epic,
 [#109](https://github.com/willahealm/latchkit/issues/109).
 
 ## What this does and does not do
@@ -32,20 +32,17 @@ bounded, versioned manifest. It never:
 | ---------- | ------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------- | -------------------------- |
 | `spec-kit` | [GitHub Spec Kit](https://github.com/github/spec-kit)   | `v1.0.4` (commit `cb610277fdea781fcfa83d20522c2db37c94068d`, published 2026-09-02) | `<root>/specs/<NNN-slug>/{spec.md,plan.md,tasks.md}` plus explicit local links from those three files | Implemented |
 | `openspec` | [OpenSpec](https://github.com/Fission-AI/OpenSpec)       | `v1.12.0` (commit `e062b9572be933564ba3899d059377dfa1393e32`, published 2026-09-03) | `<root>/openspec/specs/**/spec.md` (current capabilities), `<root>/openspec/changes/<name>/{proposal.md,design.md,tasks.md,specs/**/spec.md}` (active), `<root>/openspec/changes/archive/<YYYY-MM-DD-name>/...` (archived), plus explicit local links from the three core files | Implemented |
-| `tinyspec` | [tinyspec](https://github.com/nmcdaines/tinyspec)        | Not pinned yet                                  | Not implemented                                                 | Planned (next increment)  |
+| `tinyspec` | [tinyspec](https://github.com/nmcdaines/tinyspec)        | `v0.0.9` (commit `d1c122f10f4bddf07299aea0df6f781e403ed340`, published 2026-02-19) | `<root>/.specs/*.md` and `<root>/.specs/<group>/*.md` (one level of grouping; `templates/` excluded) with `tinySpec: v0` front matter, plus explicit local links from the file body | Implemented |
 
-The pinned commit and release date for each implemented adapter were read
-directly from `gh api repos/<owner>/<repo>/tags` and `.../releases` (Spec
-Kit on 2026-09-06; OpenSpec on 2026-09-06); see `SPEC_KIT_UPSTREAM` and
-`OPENSPEC_UPSTREAM` in `src/spec-imports/contracts.ts`. A future upstream
-template change requires bumping the pinned commit and adapter version, not
-a silent parsing change — a directory or file that no longer matches the
-pinned template's recognizable markers is reported as `unsupported-version`,
-not silently accepted.
-
-Calling `discover`/`preview` with `adapter: "tinyspec"` returns a
-`SPEC_IMPORT_ADAPTER_NOT_YET_SUPPORTED` error rather than an opaque
-unknown-adapter failure, since that adapter is named in the parent issue.
+The pinned commit and release date for each adapter were read directly from
+`gh api repos/<owner>/<repo>/tags` and `.../releases` (Spec Kit and OpenSpec
+on 2026-09-06; tinyspec on 2026-09-06); see `SPEC_KIT_UPSTREAM`,
+`OPENSPEC_UPSTREAM`, and `TINYSPEC_UPSTREAM` in
+`src/spec-imports/contracts.ts`. A future upstream template change requires
+bumping the pinned commit and adapter version, not a silent parsing
+change — a directory or file that no longer matches the pinned template's
+recognizable markers is reported as `unsupported-version`, not silently
+accepted.
 
 ## What the Spec Kit adapter recognizes
 
@@ -147,23 +144,77 @@ git repository the user controls with `git`/`openspec store`; a local
 reference to one may be stale until the user pulls, which is exactly why a
 detected pointer is reported rather than followed.
 
+## What the TinySpec adapter recognizes
+
+Under the selected root, `.specs/*.md` (ungrouped) and `.specs/<group>/*.md`
+(one level of grouping, matching TinySpec's own "only one level deep" rule)
+are scanned; `.specs/templates/` is always excluded, and a second level of
+grouping is reported with a `nonstandard-tinyspec-nesting` warning and never
+scanned. Every entry uses a single `spec` artifact for the whole file (its
+`directory` field is the file's own path, since TinySpec's unit is a file,
+not a directory) and has `lifecycle: null` — TinySpec documents no
+current/active/archived distinction.
+
+A file is classified as one of:
+
+- `complete` — the filename matches the pinned `YYYY-MM-DD-HH-MM-kebab-name.md`
+  convention, front matter declares `tinySpec: v0`, and the body has all
+  three mandatory `# Background`, `# Proposal`, and `# Implementation Plan`
+  sections (exact heading text, matching the pinned CLI's own section
+  boundary check — `# Test Plan` is optional, per its own documentation).
+- `partial` — `tinySpec: v0` is declared but one or more of the three
+  mandatory sections is missing.
+- `ambiguous` — recognizable `tinySpec: v0` content, but the filename or
+  group-directory name does not follow the pinned naming convention.
+- `unsupported-version` — front matter declares a `tinySpec` value other
+  than `v0` (a future or different format version).
+- `malformed` — no `---`-delimited front matter block is found at all, or
+  the block has no `tinySpec` key — a generic Markdown file is never
+  classified as a TinySpec file by its filename or `.specs/` location alone.
+- `inaccessible` — the file itself could not be read (permission denied).
+
+Front matter is parsed with a minimal YAML subset covering the pinned
+`tinySpec`, `title`, and `applications` scalar/list keys (inline `[a, b]` or
+block `- a` form) — see "Known limitations" below. Task lines are parsed
+only from the `# Implementation Plan` section, stopping at the next
+top-level heading, mirroring the pinned CLI's own `parse_tasks` exactly:
+`- [ ]`/`- [x] ` followed by an arbitrary `ID:` and description (`A`,
+`A.1`, or a customized label — never assumed to be Spec Kit's `Txxx` or
+OpenSpec's `N.N`). `# Test Plan` checklist items are not parsed as tasks,
+since the pinned CLI's own status computation does not count them either.
+TinySpec has no user-story convention, so `parsedIdentifiers.userStories`
+is always empty, and no explicit status field, so
+`sourceDeclaredStatus.value` is always `null`.
+
+Explicit local links and plain-text inferred references are handled
+exactly as in the Spec Kit adapter (see above), reusing the same shared,
+generic helpers.
+
+**Application pointers are never followed.** An `applications:` front-matter
+list names other repositories that the pinned CLI resolves only through the
+user's local `~/.tinyspec/config.yaml` (a machine-local mapping, not part of
+the selected root). A non-empty `applications` list is reported as a
+`tinyspec-application-pointer-detected` warning naming what it declares;
+this adapter never reads `~/.tinyspec/config.yaml` or resolves an
+application name to a path.
+
 ## Limits
 
 The same `SpecImportLimits` shape and defaults are shared and enforced by
-every adapter (Spec Kit and OpenSpec so far); only the vocabulary differs
-slightly per adapter, noted below.
+every adapter (Spec Kit, OpenSpec, and TinySpec); only the vocabulary
+differs slightly per adapter, noted below.
 
 | Limit                     | Default   | What it bounds                                              |
 | -------------------------- | --------- | ------------------------------------------------------------ |
-| `maxFeatureDirectories`    | 200       | Top-level entries scanned (`specs/*` for Spec Kit; current specs + active changes + archived changes, combined and current-first, for OpenSpec) |
+| `maxFeatureDirectories`    | 200       | Top-level entries scanned (`specs/*` for Spec Kit; current specs + active changes + archived changes, combined and current-first, for OpenSpec; `.specs/**/*.md` files for TinySpec) |
 | `maxTotalFiles`            | 2000      | Files (core + supporting) read across the whole discovery    |
-| `maxFilesPerEntry`         | 32        | Files read for one feature directory                         |
+| `maxFilesPerEntry`         | 32        | Files read for one feature directory (or, for TinySpec, one file's own explicit links) |
 | `maxFileBytes`             | 512 KiB   | A single file above this is reported and never read          |
 | `maxTotalBytes`            | 8 MiB     | Bytes read across the whole discovery                        |
 | `maxDepth`                 | 6         | Path segments a resolved supporting link may add beyond root |
 | `maxLinksPerArtifact`      | 100       | Markdown links inspected per core file                       |
-| `maxTasksPerEntry`         | 500       | Checklist tasks parsed per `tasks.md`                        |
-| `maxUserStoriesPerEntry`   | 50        | User-story headings parsed per `spec.md`                     |
+| `maxTasksPerEntry`         | 500       | Checklist tasks parsed per entry                              |
+| `maxUserStoriesPerEntry`   | 50        | User-story headings parsed per `spec.md` (unused by OpenSpec/TinySpec, which have no user-story convention) |
 
 Reaching a limit never fails the call; it sets `truncated: true` on the
 manifest and records a `discovery-limit-exceeded` (or a more specific)
@@ -174,24 +225,25 @@ covering unusually large real trees, not for disabling bounding.
 ## CLI
 
 ```powershell
-latchkit spec-import discover --root <path> [--adapter spec-kit|openspec]
-latchkit spec-import preview --root <path> [--adapter spec-kit|openspec]
+latchkit spec-import discover --root <path> [--adapter spec-kit|openspec|tinyspec]
+latchkit spec-import preview --root <path> [--adapter spec-kit|openspec|tinyspec]
 ```
 
-`--root` is the local directory that directly contains `specs/` (Spec Kit)
-or `openspec/` (OpenSpec); it does not need to be the current Latchkit
-project (`--project`/`--root` are unrelated here — this command reads no
-`.latchkit/` state and writes nothing). `--adapter` defaults to `spec-kit`.
-`discover` returns a lightweight per-feature status summary; `preview`
-returns the complete manifest, its `manifestDigest`, and a `wouldCreate`
-array describing exactly what a later, separate registration action would
-create for each registrable (`complete` or `partial`) entry.
+`--root` is the local directory that directly contains `specs/` (Spec Kit),
+`openspec/` (OpenSpec), or `.specs/` (TinySpec); it does not need to be the
+current Latchkit project (`--project`/`--root` are unrelated here — this
+command reads no `.latchkit/` state and writes nothing). `--adapter`
+defaults to `spec-kit`. `discover` returns a lightweight per-feature status
+summary; `preview` returns the complete manifest, its `manifestDigest`, and
+a `wouldCreate` array describing exactly what a later, separate
+registration action would create for each registrable (`complete` or
+`partial`) entry.
 
 ## HTTP API
 
 ```
-GET /api/spec-imports/discover?root=<path>&adapter=spec-kit|openspec
-GET /api/spec-imports/preview?root=<path>&adapter=spec-kit|openspec
+GET /api/spec-imports/discover?root=<path>&adapter=spec-kit|openspec|tinyspec
+GET /api/spec-imports/preview?root=<path>&adapter=spec-kit|openspec|tinyspec
 ```
 
 Both require the same per-launch bearer token as every other route (see
@@ -224,6 +276,14 @@ own pending-mutation queue.
   the selected root only; it does not read a store's own
   `.openspec-store/store.yaml` identity file (which would itself require
   following the pointer, something this adapter never does).
+- The TinySpec adapter's front-matter parser is a minimal YAML subset
+  (scalar keys plus a single-level `applications` list, inline or block
+  form); nested maps, multi-line scalars, anchors, or other YAML features
+  are not supported and may cause a customized front matter to be reported
+  as `malformed` rather than parsed. Its filename-timestamp check
+  (`YYYY-MM-DD-HH-MM-`) is a naming-convention check this adapter adds for
+  honest reporting — the pinned upstream CLI itself does not validate the
+  prefix's characters when reading an existing file, only when creating one.
 - No adapter in this increment writes an import manifest to disk; a caller
   that wants to keep one must save the `preview` response itself. A durable,
   Latchkit-owned manifest store is part of the deferred registration

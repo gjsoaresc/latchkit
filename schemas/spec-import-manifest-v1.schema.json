@@ -11,7 +11,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["id", "version", "upstream"],
       "properties": {
-        "id": { "enum": ["spec-kit", "openspec"] },
+        "id": { "enum": ["spec-kit", "openspec", "tinyspec"] },
         "version": { "type": "string", "minLength": 1 },
         "upstream": {
           "type": "object", "additionalProperties": false,

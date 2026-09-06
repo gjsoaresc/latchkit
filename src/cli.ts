@@ -182,8 +182,8 @@ Usage: latchkit <command> [options]
   onboarding Inspect, drive, or resume the project/provider/workflow setup wizard (CLI fallback
              for the browser console's onboarding page); prints state and exits, no prompts
   projects   List, add, or remove a project in the user-local multi-project overview registry
-  spec-import Explicitly discover or preview foreign spec artifacts (Spec Kit and OpenSpec
-             so far; see issue #114) under a selected local root; read-only, creates nothing
+  spec-import Explicitly discover or preview foreign spec artifacts (Spec Kit, OpenSpec, and
+             TinySpec; see issue #114) under a selected local root; read-only, creates nothing
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -276,7 +276,7 @@ Options:
   --python <path>     tool fcc install: explicit Python 3.14+ runtime
   --uv <path>         tool fcc install: explicit uv 0.11.16+ lock installer
   --root <path>       spec-import: local root to scan (contains a "specs" directory)
-  --adapter <id>      spec-import: adapter ID ("spec-kit" or "openspec" implemented so far)
+  --adapter <id>      spec-import: adapter ID ("spec-kit", "openspec", or "tinyspec")
   --help             Show this help
   --version          Show version
 
