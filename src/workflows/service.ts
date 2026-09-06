@@ -1507,6 +1507,20 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       } else if (record.status === 'running' && !record.pendingAction) {
         // A journal-free running record is a safe persisted checkpoint. Explicit
         // resume re-enters the generated policy without repeating an effect.
+      } else if (
+        record.status === 'blocked' &&
+        record.route?.id === 'high-impact' &&
+        record.lastOutcome.summary.startsWith('Actual changed paths require the high-impact route')
+      ) {
+        // Preserve the prior lightweight artifacts as history, but require a
+        // fresh high-impact requirements/plan/approval cycle. No old check
+        // document or approval can cover the escalated consequences.
+        record.phase = 'requirements';
+        record.requirements = null;
+        record.plan = null;
+        record.proposedChecks = null;
+        record.approval = null;
+        record.lastOutcome = { status: 'none', summary: '' };
       } else {
         throw new WorkflowError(
           'Workflow cannot be resumed from this state.',

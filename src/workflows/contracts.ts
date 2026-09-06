@@ -395,12 +395,25 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
       (route as RouteSelection).policyVersion === ROUTING_POLICY_VERSION &&
       Array.isArray((route as RouteSelection).phases) &&
       (route as RouteSelection).phases.every((phase) => phases.has(phase)) &&
-      JSON.stringify((route as RouteSelection).phases) ===
-        JSON.stringify(expectedRoutePhases[(route as RouteSelection).id]) &&
+      (() => {
+        const candidate = route as RouteSelection;
+        const expected = [...(expectedRoutePhases[candidate.id] ?? [])];
+        if (candidate.phases.includes('plan') && !expected.includes('plan'))
+          expected.unshift('plan');
+        if (candidate.phases.includes('review') && !expected.includes('review'))
+          expected.push('review');
+        return JSON.stringify(candidate.phases) === JSON.stringify(expected);
+      })() &&
       ((route as RouteSelection).id === 'high-impact'
         ? (route as RouteSelection).requiresApproval &&
           (route as RouteSelection).requiresIndependentReview
         : true) &&
+      (!(route as RouteSelection).phases.includes('plan') ||
+        expectedRoutePhases[(route as RouteSelection).id]?.includes('plan') ||
+        (route as RouteSelection).requiresApproval) &&
+      (!(route as RouteSelection).phases.includes('review') ||
+        expectedRoutePhases[(route as RouteSelection).id]?.includes('review') ||
+        (route as RouteSelection).requiresIndependentReview) &&
       typeof (route as RouteSelection).requiresApproval === 'boolean' &&
       typeof (route as RouteSelection).requiresIndependentReview === 'boolean' &&
       Array.isArray((route as RouteSelection).reasons) &&
