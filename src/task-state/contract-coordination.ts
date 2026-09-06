@@ -36,6 +36,7 @@ export type ContractAssociation = {
   reconciliation: 'current' | 'pending';
   createdAt: string;
   updatedAt: string;
+  mutations: Array<{ id: string; requestDigest: string }>;
 };
 type Document = { schemaVersion: 1; associations: ContractAssociation[] };
 const empty = (): Document => ({ schemaVersion: 1, associations: [] });
@@ -49,6 +50,16 @@ async function read(root: string): Promise<Document> {
       'TASK_STATE_INVALID',
       PATH,
     );
+  for (const association of value.associations) {
+    // Additive v1 field: old sidecars stay readable without an implicit write.
+    association.mutations ??= [];
+    if (!Array.isArray(association.mutations))
+      throw new TaskStateError(
+        'Contract association mutation ledger is malformed.',
+        'TASK_STATE_INVALID',
+        PATH,
+      );
+  }
   return value;
 }
 async function write(root: string, document: Document) {
@@ -140,7 +151,16 @@ export async function createContractAssociation(
         a.producerRecordId === input.producerRecordId &&
         a.consumerRecordId === input.consumerRecordId,
     );
-    if (existing) return structuredClone(existing);
+    if (existing) {
+      const requestDigest = hash(input);
+      const replay = existing.mutations.find((item) => item.id === input.mutationId);
+      if (replay && replay.requestDigest === requestDigest) return structuredClone(existing);
+      throw new TaskStateError(
+        'This contract association already exists with a different request; inspect it before retrying.',
+        'TASK_CONTRACT_CONFLICT',
+        '$.mutationId',
+      );
+    }
     const now = new Date().toISOString();
     const association: ContractAssociation = {
       id: `contract_${randomUUID()}`,
@@ -158,6 +178,7 @@ export async function createContractAssociation(
       reconciliation: 'current',
       createdAt: now,
       updatedAt: now,
+      mutations: input.mutationId ? [{ id: input.mutationId, requestDigest: hash(input) }] : [],
     };
     await writeAtomic(
       root,

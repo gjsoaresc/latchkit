@@ -58,8 +58,21 @@ test('explicit association retains accepted history and identifies an old consum
     expectedProducerRevision: p.task.revision,
     expectedConsumerRevision: c.task.revision,
     provenance: 'test',
+    mutationId: 'event_11111111-1111-4111-8111-111111111111',
   });
   assert.equal(association.versions[0].status, 'accepted');
+  const replay = await createContractAssociation(root, {
+    producerTaskId: p.task.id,
+    consumerTaskId: c.task.id,
+    producerRecordId: p.record.id,
+    consumerRecordId: c.record.id,
+    criterionIds: [p.task.criteria[0].id],
+    expectedProducerRevision: p.task.revision,
+    expectedConsumerRevision: c.task.revision,
+    provenance: 'test',
+    mutationId: 'event_11111111-1111-4111-8111-111111111111',
+  });
+  assert.equal(replay.id, association.id);
   const pending = await proposeContractRevision(root, {
     associationId: association.id,
     expectedAssociationRevision: association.revision,
