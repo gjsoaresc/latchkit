@@ -1,3 +1,5 @@
+import { safePlanDiagnostics } from './workflow-plan-proof.js';
+
 const phases = new Set([
   'requirements',
   'plan',
@@ -56,6 +58,8 @@ export function workflowFailureEvidence({
   startedAt,
   finishedAt,
   stage,
+  failureCategory,
+  planDiagnostics,
   candidate = {},
   provider = {},
   workflow,
@@ -70,7 +74,11 @@ export function workflowFailureEvidence({
     finishedAt: date(finishedAt),
     failure: {
       stage: stages.has(stage) ? stage : 'unknown',
+      category: ['plan-checks-mismatch', 'plan-artifact-scope-mismatch'].includes(failureCategory)
+        ? failureCategory
+        : 'required-evidence-failed',
       reason: 'Qualification did not satisfy its required evidence checks.',
+      ...(planDiagnostics ? { plan: safePlanDiagnostics(planDiagnostics) } : {}),
     },
     candidate: {
       archiveSha256: hash(candidate.archiveSha256, 64),

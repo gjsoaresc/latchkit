@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isDeepStrictEqual, promisify } from 'node:util';
+import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 import {
   validateWorkflowProviderOptions,
@@ -13,6 +13,7 @@ import {
   workflowProviderInvocation,
 } from './workflow-evidence-options.js';
 import { fixtureGitScopeProof, workflowFailureEvidence } from './workflow-evidence-proof.js';
+import { compareWorkflowChecks, fixturePlanScopeProof } from './workflow-plan-proof.js';
 
 const run = promisify(execFile);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
@@ -136,29 +137,6 @@ async function writeFixture(root) {
   await writeFile(path.join(root, '.gitignore'), '.latchkit/\n');
 }
 
-function exactJson(left, right) {
-  return isDeepStrictEqual(left, right);
-}
-
-function planFitsFixtureScope(value) {
-  const text = value.toLowerCase();
-  if (!text.includes('multiply') || !text.includes('src/calculator.js')) return false;
-  const protectedMutation =
-    /\b(?:modify|edit|change|rewrite|replace|delete|remove|create|add|install|update|commit)\b/;
-  const protectedTarget =
-    /requirements\.md|test\/calculator\.test\.js|package\.json|dependenc|\bgit\b|\bnpm\b|network/;
-  const negated =
-    /\b(?:do not|don't|never|without|avoid|unchanged|immutable|read-only|not modify|not edit|not change|no changes?)\b/;
-  return !text
-    .split(/(?<=[.!?])\s+|\n+/)
-    .some(
-      (sentence) =>
-        protectedMutation.test(sentence) &&
-        protectedTarget.test(sentence) &&
-        !negated.test(sentence),
-    );
-}
-
 async function inner(values) {
   const bundle = path.resolve(required(values.bundle, '--bundle'));
   const output = path.resolve(required(values.output, '--output'));
@@ -198,6 +176,8 @@ async function inner(values) {
   const startedAt = iso();
   let stage = 'fixture-setup';
   let workflow;
+  let planDiagnostics;
+  let failureCategory;
   try {
     await mkdir(root);
     await writeFixture(root);
@@ -277,11 +257,18 @@ async function inner(values) {
       throw new Error(`Workflow did not reach exact-plan approval: ${proposed.status}.`);
     }
     stage = 'plan-scope';
-    if (!exactJson(proposed.plan.checks, exactChecks)) {
+    planDiagnostics = {
+      checks: compareWorkflowChecks(exactChecks, proposed.plan.checks),
+      scope: fixturePlanScopeProof(proposed.plan.artifact),
+    };
+    if (!planDiagnostics.checks.equal) {
+      failureCategory = 'plan-checks-mismatch';
       throw new Error('Generated plan changed the narrow predeclared acceptance document.');
     }
-    if (!planFitsFixtureScope(proposed.plan.artifact))
+    if (!planDiagnostics.scope.fits) {
+      failureCategory = 'plan-artifact-scope-mismatch';
       throw new Error('Generated plan does not fit the narrow approved fixture scope.');
+    }
 
     stage = 'implementation-verification';
     await controller.approve({
@@ -429,6 +416,8 @@ async function inner(values) {
           startedAt,
           finishedAt: iso(),
           stage,
+          failureCategory,
+          planDiagnostics,
           candidate: { ...manifest, archiveSha256 },
           provider: values,
           workflow,
