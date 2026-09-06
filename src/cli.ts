@@ -120,7 +120,7 @@ Usage: latchkit <command> [options]
   diff       Inspect a revision-bound Git diff or record review feedback
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
   tool       Inspect or explicitly manage an optional local tool
-  workspace  Inspect, create, cancel, or clean a task-owned Git worktree
+  workspace  Inspect, create, cancel, or clean a task-owned Git worktree; view or set the workspace preference
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   usage      Enable, inspect, import, export, retain, or delete local usage records
   verification Inspect or configure the project's default fast/standard verification mode
@@ -142,10 +142,13 @@ Options:
   --branch <name>     workspace create: explicit new branch name
   --revision <ref>    workspace create: base commit (default: HEAD)
   --mode <name>       workspace inspect/create: isolated or direct
+  --worktree-root <path>  workspace inspect/create/preference: worktree-root override or setting
+  --execution <name>  workspace preference: ask, always-worktree, or direct
   --authorized        workspace cleanup: direct user authorization
   --provider <id>     task start/resume: provider adapter ID
   --prompt <text>     task start/resume: provider prompt
   --session <id>      task resume: prior Latchkit session ID
+  --workspace-choice <name>  task start: explicit worktree or direct choice for this task
   --host-local-authorized  task start/resume: authorize host-local execution
   --export            diagnostics: export a reviewable local support bundle
   --clear             diagnostics: delete local diagnostic records
