@@ -150,7 +150,14 @@ async function mapInBatches<T, Result>(
   const results: Result[] = [];
   for (let start = 0; start < values.length; start += RESOURCE_BATCH_SIZE) {
     const batch = values.slice(start, start + RESOURCE_BATCH_SIZE);
-    results.push(...(await Promise.all(batch.map(operation))));
+    // Recovery must not race an operation that is still publishing a file.
+    // Drain the complete batch before propagating any failure to rollback.
+    const completed = await Promise.allSettled(batch.map(operation));
+    const failure = completed.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    for (const result of completed) {
+      if (result.status === 'fulfilled') results.push(result.value);
+    }
   }
   return results;
 }
