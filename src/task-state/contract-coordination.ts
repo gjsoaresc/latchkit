@@ -332,5 +332,8 @@ export async function contractFreshness(root: string, consumerTaskId: string) {
       expected: a.versions.at(-1)!.digest,
       actual: recordDigest(state, a.producerTaskId, a.producerRecordId),
       reconciliation: a.reconciliation,
+      acknowledged:
+        a.consumerAcknowledgedDigest === a.versions.at(-1)!.digest &&
+        a.consumerAcknowledgedRevision === task(state, a.consumerTaskId).revision,
     }));
 }

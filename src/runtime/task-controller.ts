@@ -73,6 +73,7 @@ type TaskSession = {
     expected: string;
     actual: string;
     reconciliation: string;
+    acknowledged: boolean;
   }>;
   createdAt: string;
   updatedAt: string;
@@ -341,7 +342,10 @@ export function createTaskController({
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');
     const contracts = await contractFreshness(root, taskId);
     if (
-      contracts.some((item) => item.expected !== item.actual || item.reconciliation !== 'current')
+      contracts.some(
+        (item) =>
+          item.expected !== item.actual || item.reconciliation !== 'current' || !item.acknowledged,
+      )
     )
       throw new TaskControllerError(
         'A declared producer contract changed or is awaiting reconciliation. No provider was launched; use the existing checkpoint/stop/resume path after acknowledging the changed context.',
