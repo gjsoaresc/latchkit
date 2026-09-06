@@ -15,7 +15,9 @@
 // distinguishes `controller: "scripted"` from `controller: "model"`, but no
 // such run is authorized or executed by this command.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 import {
   loadRequirementChangeSpecs,
@@ -34,6 +36,10 @@ if (!['json', 'markdown'].includes(values.format))
   throw new Error('--format must be json or markdown.');
 
 const packageJson = JSON.parse(await readFile(path.resolve('package.json'), 'utf8'));
+const execFileAsync = promisify(execFile);
+const sourceRevision = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: path.resolve('.') })
+  .then(({ stdout }) => stdout.trim())
+  .catch(() => 'unavailable');
 const specs = await loadRequirementChangeSpecs(root);
 const result = await runRequirementChangeSuite({
   specs,
@@ -41,15 +47,19 @@ const result = await runRequirementChangeSuite({
   metadata: {
     generator: 'requirement-change-evaluations',
     latchkitVersion: packageJson.version,
+    sourceRevision,
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
     baselineController: 'scripted',
+    baselineConfiguration: 'fixture scripted controller v1',
+    reconciliationController: 'scripted',
+    reconciliationConfiguration: 'task-record/reconcile API integration v1 (#110/#111)',
     reconciliationStatus: 'completed with merged #110/#111 APIs; #112 resume context unavailable',
     limitations:
       'The scripted-controller baseline is a deterministic fixed patch used to validate the ' +
       'harness and its correctness gate end to end offline; it is not a claim about live agent ' +
-      'or human behavior on ordinary current Latchkit, and its totalElapsedTimeMs is harness ' +
-      'overhead, not a productivity or cost figure.',
+      'or human behavior on ordinary current Latchkit, and totalElapsedTimeMs measures only the ' +
+      'injected controller call, not full workflow latency, productivity, or cost.',
   },
 });
 

@@ -261,10 +261,10 @@ export const REQUIREMENT_CHANGE_METRICS: readonly MetricDefinition[] = Object.fr
   },
   {
     id: 'totalElapsedTimeMs',
-    label: 'Wall-clock milliseconds the injected controller took to apply the change.',
+    label: 'Wall-clock milliseconds spent in the injected controller call only.',
     unit: 'milliseconds',
     limitation:
-      'Scripted-controller timing measures harness/file-system overhead, not human or model effort; it is not a productivity or cost figure and must not be compared across arms as one.',
+      'Excludes fixture copy, task-state reconciliation, hashing, and acceptance checks. It is not total workflow latency, human/model effort, productivity, or cost, and must not be compared across arms as one.',
   },
   {
     id: 'coordinatorUsage',

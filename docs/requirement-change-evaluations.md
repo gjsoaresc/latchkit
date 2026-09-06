@@ -37,7 +37,7 @@ Metrics are fixed in `REQUIREMENT_CHANGE_METRICS` (`src/evaluations/contracts.ts
 | `unnecessaryInvalidation` | Preserve-artifact files changed *and declared* in the change log. | A justified-but-unseeded change would still be counted. |
 | `retainedWork` / `discardedWork` | Preserve-artifact files byte-identical vs. changed after the run. | Byte identity cannot distinguish a semantic rewrite from a coincidental round-trip. |
 | `reworkAfterChange` | Files changed outside the seeded change targets and preserve set. | An unseeded but legitimate change is indistinguishable from unnecessary rework. |
-| `totalElapsedTimeMs` | Wall-clock time for the injected controller call. | Scripted-controller timing is harness/filesystem overhead, **not** a productivity or cost figure, and must not be compared across arms as one. |
+| `totalElapsedTimeMs` | Wall-clock time for the injected controller call only. | Excludes fixture copy, reconciliation, hashing, and acceptance checks; it is not total workflow latency, productivity, or cost, and must not be compared across arms as one. |
 | `coordinatorUsage` / `workerUsage` | Coordinator/worker token or session usage. | Always `unavailable`. Usage provenance and comparable baselines belong to [#32](https://github.com/willahealm/latchkit/issues/32)/[#92](https://github.com/willahealm/latchkit/issues/92); this harness supplies scenario outputs to those contracts rather than inventing a second savings ledger. |
 
 ## The deterministic correctness gate

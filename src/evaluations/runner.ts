@@ -434,14 +434,23 @@ async function runReconciliationArm(input: {
     if (!accepted) throw new Error('Failed to accept the seeded requirement decision.');
     // A declared dependent makes the impact graph inspectable; it is a question rather than an
     // authority, so the fixture's deliberately misleading memory never becomes task intent.
+    const unknownDependency = input.scenario.unknownImpactDependencies[0];
+    const unknownDependencyPath = unknownDependency?.path;
     task = await recordTaskRecord(workspace, {
       taskId: task.id,
       expectedRevision: task.revision,
       kind: 'question',
-      text: input.scenario.unknownImpactDependencies[0]?.note ?? 'Unknown impact requires review.',
+      text: unknownDependency?.note ?? 'Unknown impact requires review.',
       provenance: { kind: 'agent-inferred', reference: 'seeded unknown dependency' },
-      links: [{ type: 'record', recordId: accepted.id, recordRevision: accepted.revision }],
+      links: [
+        { type: 'record', recordId: accepted.id, recordRevision: accepted.revision },
+        ...(unknownDependency
+          ? [{ type: 'source' as const, path: unknownDependency.path, digestUnavailable: true }]
+          : []),
+      ],
     });
+    const unknownDependencyRecord = task.records?.at(-1);
+    if (!unknownDependencyRecord) throw new Error('Failed to seed the unknown-impact question.');
     const patch = {
       recordOps: [
         {
@@ -523,8 +532,20 @@ async function runReconciliationArm(input: {
           'superseded',
         stalePreviewRejected,
         unknownImpactExplicit:
-          freshPreview.impact.some((entry) => entry.classification === 'declared-dependent') &&
-          freshPreview.uncertainties.length >= 0,
+          Boolean(unknownDependency) &&
+          freshPreview.impact.some(
+            (entry) =>
+              entry.id === unknownDependencyRecord.id &&
+              entry.classification === 'declared-dependent',
+          ) &&
+          freshPreview.uncertainties.some(
+            (uncertainty) =>
+              uncertainty.kind === 'record' &&
+              uncertainty.id === unknownDependencyRecord.id &&
+              uncertainty.reasonCode === 'link-unknown' &&
+              typeof unknownDependencyPath === 'string' &&
+              uncertainty.detail.includes(unknownDependencyPath),
+          ),
         preservedArtifacts: input.scenario.preserveArtifacts.every(
           (file) => preHashes[file] === postHashes[file],
         ),
@@ -737,7 +758,7 @@ function computeRequirementChangeMetrics(input: {
       'totalElapsedTimeMs',
       'measured',
       Math.round(elapsedMs),
-      'Wall-clock time for the injected controller call only; excludes fixture copy and hashing overhead.',
+      'Wall-clock time for the injected controller call only; excludes fixture copy, reconciliation, hashing, and acceptance checks.',
     ),
     requirementChangeMetric(
       'coordinatorUsage',

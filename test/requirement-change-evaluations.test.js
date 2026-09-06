@@ -109,6 +109,18 @@ test('reconciliation arm exercises #110/#111 and marks only #112 resume context 
   assert.equal(unavailableReconciliationArm().arm, 'reconciliation');
 });
 
+test('reconciliation evidence does not claim unknown impact without the seeded dependency proof', async () => {
+  const scenario = structuredClone(await loadScenario('export-visibility'));
+  scenario.unknownImpactDependencies = [];
+  const result = await runRequirementChangeScenario({
+    spec: scenario,
+    fixturesRoot,
+    now: fixedNow,
+  });
+  assert.equal(result.arms.reconciliation.status, 'completed');
+  assert.equal(result.arms.reconciliation.reconciliationEvidence.unknownImpactExplicit, false);
+});
+
 test('gate fails a mandatory constraint that a no-op controller drops', async () => {
   const scenario = await loadScenario('export-visibility');
   const result = await runRequirementChangeScenario({

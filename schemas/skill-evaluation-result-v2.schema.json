@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://latchkit.dev/schemas/skill-evaluation-result-v2.schema.json",
   "title": "Latchkit requirement-change evaluation result v2",
-  "description": "Result shape for skill-evaluation-v2.schema.json requirement-change scenarios (issue #116). Each scenario reports two arms: a deterministic scripted-controller 'baseline' arm (never model-driven output) and an explicit, schema-level 'unavailable' reconciliation arm pending issues #110-#112. Deterministic scripted-controller results are never merged with model-driven outcomes in the same field.",
+  "description": "Result shape for skill-evaluation-v2.schema.json requirement-change scenarios (issue #116). Each scenario reports two deterministic scripted-controller arms: a baseline and a local reconciliation integration using #110/#111 task-state APIs. reconciliationEvidence records its narrow API proofs and keeps #112 provider resume-context delivery explicitly unavailable. Neither arm is a provider, model, or human comparison; deterministic scripted-controller results are never merged with model-driven outcomes in the same field.",
   "type": "object",
   "additionalProperties": false,
   "required": [
