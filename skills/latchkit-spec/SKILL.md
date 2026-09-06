@@ -33,7 +33,7 @@ Register the decision point so it is durable and machine-checkable: `latchkit sp
 
 Check this session's own currently available tools before choosing how to present the three choices:
 
-- If a structured multi-choice/question tool or an editable plan-approval control (including free-form notes) is actually available in the running session, use it. Claude Code documents such a control (its `AskUserQuestion` tool and plan-mode approval flow — see [the Claude Code adapter notes](../../docs/providers/claude.md)); use it there when available.
+- If a structured multi-choice/question tool or an editable plan-approval control (including free-form notes) is actually available in the running session, use it. Claude Code documents such a control (its `AskUserQuestion` tool and plan-mode approval flow — see [the Claude Code adapter notes](https://github.com/willahealm/latchkit/blob/main/docs/providers/claude.md)); use it there when available.
 - Otherwise — including Codex, Antigravity CLI, Cursor IDE/CLI, or any session where no such tool is actually present — offer the three choices as concise text and read the reply as ordinary conversation, with free-form notes accepted as plain text.
 
 Only Claude Code has a documented native control for this today. Never claim or invoke a native question/choice/plan-approval tool that is not actually present in the current session's toolset, and never report using a native control when the text fallback was what the user actually saw; do not fabricate capability for a provider merely because another provider has it.
