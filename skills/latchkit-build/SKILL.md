@@ -7,6 +7,8 @@ description: Implement an authorized feature against named acceptance criteria w
 
 Deliver the authorized change in small, reviewable increments. Read applicable project guidance, the requirements or specification, and the current working state before editing. Preserve unrelated user work.
 
+When the caller requests lower usage or latency, apply the [optional efficiency policy](../references/efficiency.md).
+
 ## Confirm the work boundary
 
 Use the existing authorization and scope. Distinguish plan-only requests from delivery requests; do not add approval checkpoints to already authorized work. Confirm the named criteria, allowed directories, and limits for iteration, time, and provider usage. Never merge, deploy, send messages, schedule work, or start costly orchestration merely because this skill is present.

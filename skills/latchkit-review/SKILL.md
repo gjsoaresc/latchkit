@@ -7,6 +7,8 @@ description: Review a specified change for actionable defects and requirement ga
 
 Find issues a contributor can act on, with a concrete trigger and an explained consequence. This skill provides a review procedure; it does not launch a separate reviewer automatically or make a quality-gate claim.
 
+When the caller requests lower usage or latency, apply the [optional efficiency policy](../references/efficiency.md).
+
 ## Establish the review scope
 
 Determine the intended change, applicable requirements, and exact review target: working diff, commit, branch comparison, or supplied files. Confirm the base exists before comparing branches. Inspect relevant project guidance and surrounding callers, tests, and interfaces; avoid judging a snippet without its context.

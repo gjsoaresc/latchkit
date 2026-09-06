@@ -7,6 +7,8 @@ description: Discover and record the problem, audience, scope, decisions, and ob
 
 Turn a request into a reviewable statement of intent without quietly turning discovery into implementation. Read the project guidance and inspect only the bounded repository context needed to understand the request.
 
+When the caller requests lower usage or latency, apply the [optional efficiency policy](../references/efficiency.md).
+
 ## Discover the need
 
 Record the audience, problem, desired outcome, constraints, non-goals, and decisions that materially affect the work. Separate what the requester said from assumptions and unresolved questions. Do not invent provider capabilities, credentials, approvals, or evidence.

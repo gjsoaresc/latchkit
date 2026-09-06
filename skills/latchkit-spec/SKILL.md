@@ -7,6 +7,8 @@ description: Plan and deliver a feature against explicit acceptance criteria wit
 
 Turn the user's requested outcome into a small, testable delivery plan. This skill supplies instructions; it does not install hooks, enforce a state machine, or grant extra permissions.
 
+When the caller requests lower usage or latency, apply the [optional efficiency policy](../references/efficiency.md).
+
 ## Establish the contract
 
 Read the relevant project instructions, existing implementation, and the user's constraints. Distinguish a request to write a specification from a request to implement it. For a specification-only request, stop after the reviewable specification; do not change application code.
