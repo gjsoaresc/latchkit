@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/context-brief-v1.schema.json",
+  "title": "Latchkit resumable context brief v1",
+  "description": "Shape of the versioned, deterministic context projection returned by `latchkit task context-preview` and `latchkit workflow context` (issue #112), and computed internally by `src/context-brief/service.ts#buildContextBrief`/`bindDispatchContext`. Producing or inspecting one is read-only: it performs no task migration, file rewrite, tool installation, inference, or provider execution. See docs/task-state.md#context-briefs.",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "recordKind": { "enum": ["decision", "assumption", "observation", "question"] },
+    "provenanceKind": {
+      "enum": ["direct-user", "agent-inferred", "imported", "execution-observed"]
+    },
+    "linkStatus": { "enum": ["current", "stale", "missing", "unknown"] },
+    "recordLinkSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "targetId", "status"],
+      "properties": {
+        "type": { "enum": ["record", "criterion", "evidence", "memory", "source"] },
+        "targetId": { "type": "string", "minLength": 1 },
+        "status": { "oneOf": [{ "$ref": "#/$defs/linkStatus" }, { "type": "null" }] }
+      }
+    },
+    "intentRecordSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "revision", "text", "provenance", "links"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^record_[0-9a-fA-F-]{36}$" },
+        "kind": { "$ref": "#/$defs/recordKind" },
+        "status": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "reference"],
+          "properties": {
+            "kind": { "$ref": "#/$defs/provenanceKind" },
+            "reference": { "type": "string" }
+          }
+        },
+        "links": { "type": "array", "items": { "$ref": "#/$defs/recordLinkSummary" } }
+      }
+    },
+    "criterionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "description", "required", "approvalRequired"],
+      "properties": {
+        "id": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string" },
+        "required": { "type": "boolean" },
+        "approvalRequired": { "type": "boolean" }
+      }
+    },
+    "authorizationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scope", "grantedAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^authorization_[0-9a-fA-F-]{36}$" },
+        "scope": { "type": "string" },
+        "grantedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "reconciliationOutcomeSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "createdAt",
+        "patchDigest",
+        "taskRevisionAfter",
+        "ops",
+        "impactSummary",
+        "impactTruncated",
+        "uncertaintiesCount"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^reconciliation_[0-9a-fA-F-]{36}$" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "patchDigest": { "$ref": "#/$defs/sha256" },
+        "taskRevisionAfter": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "ops": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op", "targetId", "fromStatus", "toStatus"],
+            "properties": {
+              "op": { "enum": ["transition", "supersede", "revise", "criterion"] },
+              "targetId": { "type": "string" },
+              "fromStatus": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+              "toStatus": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+            }
+          }
+        },
+        "impactSummary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["directlyAffected", "declaredDependent", "potentiallyAffected", "unchanged"],
+          "properties": {
+            "directlyAffected": { "type": "integer", "minimum": 0 },
+            "declaredDependent": { "type": "integer", "minimum": 0 },
+            "potentiallyAffected": { "type": "integer", "minimum": 0 },
+            "unchanged": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "impactTruncated": { "type": "boolean" },
+        "uncertaintiesCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "planReferenceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sourceRef", "digest"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "imported-note",
+            "enhanced-prd",
+            "enhanced-technical-plan",
+            "workflow-requirements",
+            "workflow-plan"
+          ]
+        },
+        "sourceRef": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "nextActionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "phase", "description"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "continue",
+            "await-approval",
+            "await-input",
+            "blocked",
+            "interrupted-pending",
+            "cancelled",
+            "complete",
+            "ordinary-task"
+          ]
+        },
+        "phase": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workNeedingAttentionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "outcome", "reasonCode"],
+      "properties": {
+        "kind": { "enum": ["record", "criterion", "check", "evidence"] },
+        "id": { "type": "string" },
+        "outcome": {
+          "enum": ["needs-user-decision", "needs-replanning", "needs-re-verification"]
+        },
+        "reasonCode": { "type": "string" }
+      }
+    },
+    "completedWorkEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterionId", "description", "evidenceId"],
+      "properties": {
+        "criterionId": { "type": "string" },
+        "description": { "type": "string" },
+        "evidenceId": { "type": "string", "pattern": "^evidence_[0-9a-fA-F-]{36}$" }
+      }
+    },
+    "missingDependencyLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordId", "linkType", "targetId", "status"],
+      "properties": {
+        "recordId": { "type": "string", "pattern": "^record_[0-9a-fA-F-]{36}$" },
+        "linkType": { "enum": ["record", "criterion", "evidence", "memory", "source"] },
+        "targetId": { "type": "string" },
+        "status": { "enum": ["missing", "unknown"] }
+      }
+    },
+    "changeSinceLastRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available",
+        "reason",
+        "sinceDigest",
+        "boundAt",
+        "reconciliationsSince",
+        "reconciliationsSinceTruncated",
+        "unreconciledChange",
+        "workNeedingAttention",
+        "completedWorkRemaining",
+        "missingDependencyLinks"
+      ],
+      "properties": {
+        "available": { "type": "boolean" },
+        "reason": { "enum": ["ok", "no-prior-dispatch", "digest-mismatch"] },
+        "sinceDigest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "boundAt": { "oneOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }] },
+        "reconciliationsSince": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reconciliationOutcomeSummary" }
+        },
+        "reconciliationsSinceTruncated": { "type": "boolean" },
+        "unreconciledChange": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["criteriaDigestChanged", "intentDigestChanged", "note"],
+              "properties": {
+                "criteriaDigestChanged": { "type": "boolean" },
+                "intentDigestChanged": { "type": "boolean" },
+                "note": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "workNeedingAttention": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workNeedingAttentionEntry" }
+        },
+        "completedWorkRemaining": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/completedWorkEntry" }
+        },
+        "missingDependencyLinks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/missingDependencyLink" }
+        }
+      }
+    },
+    "omittedItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section", "id", "sourceRef"],
+      "properties": {
+        "section": { "type": "string" },
+        "id": { "type": "string" },
+        "sourceRef": { "type": "string" }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "taskId",
+    "taskRevision",
+    "taskState",
+    "intentDigest",
+    "criteriaDigest",
+    "source",
+    "workflow",
+    "authorizations",
+    "acceptedDecisions",
+    "confirmedAssumptions",
+    "pendingDecisions",
+    "openAssumptions",
+    "openQuestions",
+    "historicalObservations",
+    "criteria",
+    "reconciliationOutcomes",
+    "reconciliationOutcomesTruncated",
+    "planReferences",
+    "nextAction",
+    "changeSinceLastRun",
+    "omitted",
+    "budget",
+    "deliveryNote",
+    "resumeGuidance",
+    "digest",
+    "generatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "taskId": { "type": "string", "pattern": "^task_[0-9a-fA-F-]{36}$" },
+    "taskRevision": { "type": "integer", "minimum": 1 },
+    "taskState": { "type": "string" },
+    "intentDigest": { "$ref": "#/$defs/sha256" },
+    "criteriaDigest": { "$ref": "#/$defs/sha256" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirtyFingerprint"],
+      "properties": {
+        "revision": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "dirtyFingerprint": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exists", "workflowId", "revision", "phase", "status"],
+      "properties": {
+        "exists": { "type": "boolean" },
+        "workflowId": {
+          "oneOf": [{ "type": "string", "pattern": "^workflow_[0-9a-fA-F-]{36}$" }, { "type": "null" }]
+        },
+        "revision": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+        "phase": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "status": { "oneOf": [{ "type": "string" }, { "type": "null" }] }
+      }
+    },
+    "authorizations": { "type": "array", "items": { "$ref": "#/$defs/authorizationSummary" } },
+    "acceptedDecisions": { "type": "array", "items": { "$ref": "#/$defs/intentRecordSummary" } },
+    "confirmedAssumptions": { "type": "array", "items": { "$ref": "#/$defs/intentRecordSummary" } },
+    "pendingDecisions": { "type": "array", "items": { "$ref": "#/$defs/intentRecordSummary" } },
+    "openAssumptions": { "type": "array", "items": { "$ref": "#/$defs/intentRecordSummary" } },
+    "openQuestions": { "type": "array", "items": { "$ref": "#/$defs/intentRecordSummary" } },
+    "historicalObservations": { "type": "array", "items": { "$ref": "#/$defs/intentRecordSummary" } },
+    "criteria": { "type": "array", "items": { "$ref": "#/$defs/criterionSummary" } },
+    "reconciliationOutcomes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reconciliationOutcomeSummary" }
+    },
+    "reconciliationOutcomesTruncated": { "type": "boolean" },
+    "planReferences": { "type": "array", "items": { "$ref": "#/$defs/planReferenceSummary" } },
+    "nextAction": { "$ref": "#/$defs/nextActionSummary" },
+    "changeSinceLastRun": { "$ref": "#/$defs/changeSinceLastRun" },
+    "omitted": { "type": "array", "items": { "$ref": "#/$defs/omittedItem" } },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestedBytes",
+        "effectiveBytes",
+        "mandatoryBytes",
+        "usedBytes",
+        "estimatedTokens",
+        "estimateDisclaimer"
+      ],
+      "properties": {
+        "requestedBytes": { "type": "integer", "minimum": 1 },
+        "effectiveBytes": { "type": "integer", "minimum": 1 },
+        "mandatoryBytes": { "type": "integer", "minimum": 0 },
+        "usedBytes": { "type": "integer", "minimum": 0 },
+        "estimatedTokens": { "type": "integer", "minimum": 0 },
+        "estimateDisclaimer": { "type": "string", "minLength": 1 }
+      }
+    },
+    "deliveryNote": { "type": "string", "minLength": 1 },
+    "resumeGuidance": { "type": "string", "minLength": 1 },
+    "digest": { "$ref": "#/$defs/sha256" },
+    "generatedAt": { "$ref": "#/$defs/timestamp" }
+  }
+}

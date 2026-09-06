@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { WorkflowPhase } from './policy.js';
+import type { Task } from '../task-state/contracts.js';
+import { computeIntentDigest } from '../task-state/records.js';
 
 export const WORKFLOW_SCHEMA_VERSION = 1;
 export const WORKFLOW_STATE_PATH = '.latchkit/workflows/state-v1.json';
@@ -45,6 +47,27 @@ export type WorkflowApproval = {
   reference: string;
   source: SourceIdentity;
   approvedAt: string;
+};
+
+/**
+ * The binding recorded on this dispatch journal (issue #112) each time a context brief
+ * (`src/context-brief/service.ts`) is actually assembled and delivered at the start of a new
+ * provider invocation. `digest` is the exact brief digest a resumed session can be told to expect
+ * (`workflow context --since-digest`); the remaining fields pin the precise task/workflow
+ * revisions, working-tree source snapshot, and referenced plan-artifact hashes the brief was bound
+ * to, so a later "change since last run" projection can detect drift instead of assuming nothing
+ * changed. This is intentionally a single "last" pointer, not a history archive: Latchkit does not
+ * keep a transcript of every prior brief, only what was most recently delivered. */
+export type WorkflowDispatchedContext = {
+  digest: string;
+  briefSchemaVersion: number;
+  taskRevision: number;
+  workflowRevision: number;
+  criteriaDigest: string;
+  intentDigest: string;
+  source: SourceIdentity;
+  artifactHashes: { path: string; digest: string | null }[];
+  deliveredAt: string;
 };
 
 export type WorkflowMutation = { id: string; digest: string; revision: number };
@@ -97,6 +120,12 @@ export type WorkflowRecord = {
   mutations: WorkflowMutation[];
   lastOutcome: { status: 'none' | 'passed' | 'failed' | 'needs-input' | 'error'; summary: string };
   source: SourceIdentity;
+  /** See `WorkflowDispatchedContext`. `null` until the first context brief is bound at dispatch
+   * (issue #112). Optional (rather than a schema bump) so a workflow persisted before this field
+   * existed still reads: it is treated identically to `null`, which the context-brief "change
+   * since last run" projection reports as `no-prior-dispatch` rather than a fabricated comparison
+   * — the same backward-compatibility approach `WorkflowApproval.intentDigest` already uses. */
+  lastDispatchedContext?: WorkflowDispatchedContext | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -136,6 +165,56 @@ export const digestJson = (value: unknown) => sha256(canonicalJson(value));
 
 export function sourceEqual(left: SourceIdentity, right: SourceIdentity): boolean {
   return left.revision === right.revision && left.dirtyFingerprint === right.dirtyFingerprint;
+}
+
+/**
+ * A deterministic digest over a task's current criteria, keyed by the fields that actually change
+ * an approved plan's scope. Shared by `./service.ts` (plan approval) and
+ * `../context-brief/service.ts` (issue #112's context projection) so both compare against the
+ * exact same value — a second, drifting implementation of this digest would silently break the
+ * "reconciling changed intent invalidates approval" guarantee this repository already documents.
+ */
+export function criteriaDigest(
+  criteria: readonly {
+    id: string;
+    revision: number;
+    description: string;
+    required: boolean;
+    approvalRequired: boolean;
+  }[],
+): string {
+  return digestJson(
+    criteria.map(({ id, revision, description, required, approvalRequired }) => ({
+      id,
+      revision,
+      description,
+      required,
+      approvalRequired,
+    })),
+  );
+}
+
+/**
+ * True when a workflow's recorded plan approval still matches the task's *current* criteria and
+ * adopted intent (every accepted decision and confirmed assumption — see `computeIntentDigest` in
+ * `../task-state/records.ts`). Reconciling away accepted intent, or any criteria edit, makes this
+ * false immediately and independently of any secondary bookkeeping (see
+ * docs/task-state.md#reconciling-changed-intent). An approval persisted before intent digests
+ * existed is read as if approved with no adopted intent, so it stays valid until accepted intent
+ * actually changes.
+ */
+export function approvalValid(record: WorkflowRecord, task: Task): boolean {
+  return Boolean(
+    record.approval &&
+    record.requirements &&
+    record.plan &&
+    record.approval.requirementsDigest === record.requirements.digest &&
+    record.approval.planDigest === record.plan.digest &&
+    record.approval.checksDigest === record.plan.checksDigest &&
+    record.approval.criteriaDigest === criteriaDigest(task.criteria) &&
+    (record.approval.intentDigest ?? computeIntentDigest([])) ===
+      computeIntentDigest(task.records ?? []),
+  );
 }
 
 export function boundedContext(value: unknown): string {
@@ -240,6 +319,48 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
       Number.isFinite(Date.parse(action.startedAt ?? ''))
     );
   };
+  const validDispatchedContext = (candidate: unknown): candidate is WorkflowDispatchedContext => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+    const context = candidate as Partial<WorkflowDispatchedContext>;
+    return (
+      exactKeys(candidate, [
+        'digest',
+        'briefSchemaVersion',
+        'taskRevision',
+        'workflowRevision',
+        'criteriaDigest',
+        'intentDigest',
+        'source',
+        'artifactHashes',
+        'deliveredAt',
+      ]) &&
+      digest(context.digest) &&
+      Number.isInteger(context.briefSchemaVersion) &&
+      (context.briefSchemaVersion ?? 0) >= 1 &&
+      Number.isInteger(context.taskRevision) &&
+      (context.taskRevision ?? 0) >= 1 &&
+      Number.isInteger(context.workflowRevision) &&
+      (context.workflowRevision ?? 0) >= 1 &&
+      digest(context.criteriaDigest) &&
+      digest(context.intentDigest) &&
+      source(context.source) &&
+      Array.isArray(context.artifactHashes) &&
+      context.artifactHashes.length <= 64 &&
+      context.artifactHashes.every(
+        (entry) =>
+          entry &&
+          typeof entry === 'object' &&
+          !Array.isArray(entry) &&
+          exactKeys(entry, ['path', 'digest']) &&
+          typeof (entry as { path?: unknown }).path === 'string' &&
+          ((entry as { path: string }).path.length ?? 0) > 0 &&
+          ((entry as { digest?: unknown }).digest === null ||
+            digest((entry as { digest?: unknown }).digest)),
+      ) &&
+      Number.isFinite(Date.parse(context.deliveredAt ?? ''))
+    );
+  };
+  const hasDispatchedContext = Object.hasOwn(value, 'lastDispatchedContext');
   if (
     !exactKeys(value, [
       'schemaVersion',
@@ -269,6 +390,7 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
       'mutations',
       'lastOutcome',
       'source',
+      ...(hasDispatchedContext ? ['lastDispatchedContext'] : []),
       'createdAt',
       'updatedAt',
     ]) ||
@@ -350,6 +472,9 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
         mutation.revision < 1,
     ) ||
     !source(item.source) ||
+    (hasDispatchedContext &&
+      item.lastDispatchedContext !== null &&
+      !validDispatchedContext(item.lastDispatchedContext)) ||
     item.requirements === undefined ||
     item.plan === undefined ||
     item.approval === undefined ||

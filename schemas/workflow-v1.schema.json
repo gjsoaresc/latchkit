@@ -208,10 +208,58 @@
                 "requirementsDigest": { "$ref": "#/$defs/sha256" },
                 "checksDigest": { "$ref": "#/$defs/sha256" },
                 "criteriaDigest": { "$ref": "#/$defs/sha256" },
+                "intentDigest": {
+                  "description": "Absent on an approval persisted before issue #111 added it; read as if approved with no adopted intent. See docs/task-state.md#reconciling-changed-intent.",
+                  "$ref": "#/$defs/sha256"
+                },
                 "scope": { "type": "string", "minLength": 1 },
                 "reference": { "type": "string", "minLength": 1 },
                 "source": { "$ref": "#/$defs/source" },
                 "approvedAt": { "$ref": "#/$defs/timestamp" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "lastDispatchedContext": {
+          "description": "Issue #112: the context-brief binding recorded at the start of the most recent provider dispatch. Absent on a workflow persisted before this field existed; read as `null` (no-prior-dispatch) in that case. See schemas/context-brief-v1.schema.json.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "digest",
+                "briefSchemaVersion",
+                "taskRevision",
+                "workflowRevision",
+                "criteriaDigest",
+                "intentDigest",
+                "source",
+                "artifactHashes",
+                "deliveredAt"
+              ],
+              "properties": {
+                "digest": { "$ref": "#/$defs/sha256" },
+                "briefSchemaVersion": { "type": "integer", "minimum": 1 },
+                "taskRevision": { "type": "integer", "minimum": 1 },
+                "workflowRevision": { "type": "integer", "minimum": 1 },
+                "criteriaDigest": { "$ref": "#/$defs/sha256" },
+                "intentDigest": { "$ref": "#/$defs/sha256" },
+                "source": { "$ref": "#/$defs/source" },
+                "artifactHashes": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["path", "digest"],
+                    "properties": {
+                      "path": { "type": "string", "minLength": 1 },
+                      "digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+                    }
+                  }
+                },
+                "deliveredAt": { "$ref": "#/$defs/timestamp" }
               }
             },
             { "type": "null" }
