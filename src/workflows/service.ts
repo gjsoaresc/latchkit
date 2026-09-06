@@ -9,8 +9,8 @@ import {
   policy_version_async,
   type WorkflowAction,
   type WorkflowPhase,
-} from '../baml_sdk/index.js';
-import { BYTECODE } from '../baml_sdk/_inlinedbaml.js';
+  policy_artifact_digest,
+} from './policy.js';
 import {
   validateAcceptanceDocument,
   type AcceptanceDocument,
@@ -502,7 +502,10 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
   >();
 
   const now = () => clock().toISOString();
-  const currentPolicyDigest = sha256(BYTECODE);
+  const currentPolicyDigest = policy_artifact_digest([
+    new URL(import.meta.url),
+    new URL('../reviews/orchestrator.js', import.meta.url),
+  ]);
 
   function assertCurrentPolicy(record: WorkflowRecord): void {
     if (record.policyDigest !== currentPolicyDigest)

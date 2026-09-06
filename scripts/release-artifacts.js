@@ -11,6 +11,27 @@ import { buildBundle } from './bundle.js';
 const command = promisify(execFile);
 const repository = path.resolve(import.meta.dirname, '..');
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const requiredSmokeChecks = Object.freeze([
+  'compiled workflow policy async exit',
+  'CLI',
+  'UI/API',
+  'hooks',
+  'stable hook dispatch before/after rollback/uninstall',
+  'spaces/Unicode',
+  'installation',
+  'failed-upgrade preservation',
+  'rollback selection',
+  'uninstall retention',
+  'local archive bootstrap',
+]);
+const requiredWorkflowPhases = Object.freeze([
+  'requirements',
+  'plan',
+  'implementation',
+  'verification',
+  'review',
+  'handoff',
+]);
 
 function safeArchivePath(value) {
   return (
@@ -24,6 +45,145 @@ function safeArchivePath(value) {
 }
 
 const canonical = (value) => JSON.stringify(value);
+
+function archiveTool(archive) {
+  return path.extname(archive).toLowerCase() === '.zip' && process.platform === 'linux'
+    ? 'bsdtar'
+    : 'tar';
+}
+
+async function archiveCommand(archive, args, options) {
+  try {
+    return await command(archiveTool(archive), args, options);
+  } catch (error) {
+    if (
+      path.extname(archive).toLowerCase() === '.zip' &&
+      process.platform === 'linux' &&
+      error &&
+      typeof error === 'object' &&
+      error.code === 'ENOENT'
+    )
+      throw new Error('ZIP verification requires bsdtar (libarchive-tools) on this platform.', {
+        cause: error,
+      });
+    throw error;
+  }
+}
+
+function record(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function validPriorArtifact(directory, prior, manifest) {
+  const invalidShape =
+    !record(prior) ||
+    !safeArchivePath(prior.archive) ||
+    !/^[a-f0-9]{64}$/.test(prior.sha256) ||
+    typeof prior.version !== 'string' ||
+    prior.version === manifest.version;
+  if (invalidShape) return false;
+  const location = path.join(directory, 'previous', prior.archive);
+  const manifestLocation = `${location}.manifest.json`;
+  const checksumLocation = `${location}.sha256`;
+  try {
+    if (sha256(await readFile(location)) !== prior.sha256) return false;
+    if ((await readFile(checksumLocation, 'utf8')).trim() !== `${prior.sha256}  ${prior.archive}`)
+      return false;
+    const priorManifest = JSON.parse(await readFile(manifestLocation, 'utf8'));
+    const valid =
+      record(priorManifest) &&
+      priorManifest.archive === prior.archive &&
+      priorManifest.sha256 === prior.sha256 &&
+      priorManifest.version === prior.version &&
+      priorManifest.version !== manifest.version &&
+      priorManifest.target === manifest.target;
+    return valid;
+  } catch {
+    return false;
+  }
+}
+
+function smokeArtifactEvidence(item, manifest) {
+  return (
+    record(item) &&
+    item.status === 'passed' &&
+    item.archive === manifest.archive &&
+    item.sha256 === manifest.sha256 &&
+    item.target === manifest.target &&
+    item.node === 'v24.20.0' &&
+    item.systemToolchains === 'absent from PATH' &&
+    Array.isArray(item.checks) &&
+    requiredSmokeChecks.every((check) => item.checks.includes(check))
+  );
+}
+
+async function exactSmokeEvidence(directory, item, manifest) {
+  if (
+    !smokeArtifactEvidence(item, manifest) ||
+    item.upgradeKind !== 'exact-prior-archive' ||
+    !record(item.prior)
+  )
+    return false;
+  return validPriorArtifact(directory, item.prior, manifest);
+}
+
+function windows11Qualification(item) {
+  if (typeof item.qualificationOS !== 'string') return false;
+  const osName = item.qualificationOS.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return (
+    osName.includes('windows11') &&
+    !osName.includes('server') &&
+    typeof item.qualificationVersion === 'string' &&
+    /^10\.0\.\d+(?:\.\d+)?$/.test(item.qualificationVersion)
+  );
+}
+
+function macOS14Qualification(item) {
+  if (
+    typeof item.qualificationOS !== 'string' ||
+    !/(?:darwin|mac\s*os)/i.test(item.qualificationOS) ||
+    typeof item.qualificationVersion !== 'string'
+  )
+    return false;
+  const match = item.qualificationVersion.match(/^(\d+)(?:\.\d+){1,2}$/);
+  return Boolean(match && Number(match[1]) >= 14);
+}
+
+function exactWorkflowEvidence(item, manifests) {
+  if (!record(item) || item.kind !== 'live-workflow-qualification' || !record(item.candidate))
+    return false;
+  const manifest = manifests.find(
+    (candidate) =>
+      candidate.sha256 === item.candidate.archiveSha256 &&
+      candidate.commit === item.candidate.commit &&
+      candidate.version === item.candidate.version &&
+      candidate.target === item.candidate.target &&
+      candidate.nodeVersion === item.candidate.nodeVersion,
+  );
+  if (
+    !manifest ||
+    item.candidate.nodeVersion !== '24.20.0' ||
+    item.candidate.privateNodeVersion !== 'v24.20.0' ||
+    !record(item.workflow) ||
+    item.workflow.status !== 'verified' ||
+    item.workflow.phase !== 'handoff' ||
+    typeof item.workflow.workflowId !== 'string' ||
+    !item.workflow.workflowId ||
+    typeof item.workflow.taskId !== 'string' ||
+    !item.workflow.taskId ||
+    !Array.isArray(item.workflow.actions) ||
+    !record(item.proof) ||
+    item.proof.taskState !== 'verified' ||
+    item.proof.independentReview !== 'passed' ||
+    item.proof.handoff !== 'present'
+  )
+    return false;
+  return requiredWorkflowPhases.every((phase) =>
+    item.workflow.actions.some(
+      (action) => record(action) && action.phase === phase && action.status === 'passed',
+    ),
+  );
+}
 
 async function inventory(directory, prefix = '') {
   const files = [];
@@ -42,7 +202,7 @@ async function inventory(directory, prefix = '') {
 
 export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbom) {
   const commandOptions = { windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 };
-  const listing = (await command('tar', ['-tf', archive], commandOptions)).stdout
+  const listing = (await archiveCommand(archive, ['-tf', archive], commandOptions)).stdout
     .split(/\r?\n/)
     .filter(Boolean);
   const normalized = listing
@@ -53,7 +213,7 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
     new Set(normalized).size !== normalized.length
   )
     throw new Error('Archive contains an unsafe or duplicate entry.');
-  const verbose = (await command('tar', ['-tvf', archive], commandOptions)).stdout
+  const verbose = (await archiveCommand(archive, ['-tvf', archive], commandOptions)).stdout
     .split(/\r?\n/)
     .filter(Boolean);
   if (verbose.some((line) => !/^[-d]/.test(line)))
@@ -62,7 +222,7 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
   try {
     if (!path.resolve(temporary).startsWith(`${path.resolve(os.tmpdir())}${path.sep}`))
       throw new Error('Unexpected archive verification temporary directory.');
-    await command('tar', ['-xf', archive, '-C', temporary], commandOptions);
+    await archiveCommand(archive, ['-xf', archive, '-C', temporary], commandOptions);
     const embedded = JSON.parse(
       await readFile(path.join(temporary, 'bundle-manifest.json'), 'utf8'),
     );
@@ -163,7 +323,7 @@ export async function verifyReleaseArtifacts(
       throw new Error('Bundle was not built from the approved tag commit.');
     if (requireClean && manifest.dirty !== false)
       throw new Error('Publication requires a clean committed source tree.');
-    if (manifest.nodeVersion !== '24.20.0' || manifest.bamlVersion !== '0.17.0')
+    if (manifest.nodeVersion !== '24.20.0')
       throw new Error('Runtime pins do not match the qualified release.');
     if (sha256(await readFile(path.join(directory, manifest.archive))) !== manifest.sha256)
       throw new Error('Bundle checksum verification failed.');
@@ -180,11 +340,9 @@ export async function verifyReleaseArtifacts(
       !Array.isArray(sbom.packages) ||
       manifest.packages.length !== sbom.packages.length ||
       !manifest.packages.some((item) => item.name === 'node') ||
-      !manifest.packages.some((item) => item.name === '@boundaryml/baml-bridge') ||
-      !manifest.packages.some((item) => item.name.startsWith('@boundaryml/baml-bridge-')) ||
-      !manifest.packages.some((item) => item.name === 'protobufjs')
+      !manifest.packages.some((item) => item.name === 'latchkit')
     )
-      throw new Error('The SBOM must cover Node and the complete native BAML dependency closure.');
+      throw new Error('The SBOM must cover the bundled Node runtime and application.');
     embeddedChecks.push({ archive: path.join(directory, manifest.archive), manifest, sbom });
     manifests.push(manifest);
   }
@@ -202,7 +360,7 @@ export async function verifyReleaseArtifacts(
     }
     const published = await readdir(directory);
     for (const name of published) {
-      if (allowed.has(name) || name.endsWith('.evidence.json')) continue;
+      if (allowed.has(name) || name === 'previous' || name.endsWith('.evidence.json')) continue;
       throw new Error(`Publication directory contains an unrecognized artifact: ${name}`);
     }
     for (const bootstrap of ['install.ps1', 'install.sh']) {
@@ -218,23 +376,37 @@ export async function verifyReleaseArtifacts(
         .map(async (name) => JSON.parse(await readFile(path.join(directory, name), 'utf8'))),
     );
     for (const manifest of manifests) {
-      const matching = evidence.filter(
-        (item) =>
-          item.status === 'passed' &&
-          item.archive === manifest.archive &&
-          item.sha256 === manifest.sha256 &&
-          item.target === manifest.target &&
-          item.node === 'v24.20.0',
-      );
+      const matching = (
+        await Promise.all(
+          evidence.map(async (item) => ({
+            item,
+            valid: await exactSmokeEvidence(directory, item, manifest),
+          })),
+        )
+      )
+        .filter(({ valid }) => valid)
+        .map(({ item }) => item);
+      const supplemental = evidence.filter((item) => smokeArtifactEvidence(item, manifest));
       if (!matching.some((item) => item.runtime === 'native'))
-        throw new Error('Native qualification evidence is missing for ' + manifest.target);
+        throw new Error(
+          'Exact prior-archive qualification evidence is missing for ' + manifest.target,
+        );
+      const native = matching.filter((item) => item.runtime === 'native');
+      if (manifest.target === 'win32-x64' && !native.some(windows11Qualification))
+        throw new Error(
+          'Windows qualification requires exact prior-archive evidence from Windows 11, not Windows Server.',
+        );
+      if (manifest.target.startsWith('darwin-') && !native.some(macOS14Qualification))
+        throw new Error(
+          'macOS qualification requires exact prior-archive evidence from macOS 14 or newer.',
+        );
       if (
         manifest.target === 'linux-x64' &&
-        (!matching.some((item) => item.runtime === 'WSL') ||
-          !matching.some(
+        (!supplemental.some((item) => item.runtime === 'WSL') ||
+          !supplemental.some(
             (item) => item.runtime === 'native' && /VERSION_ID="24\.04"/.test(item.qualificationOS),
           ) ||
-          !matching.some(
+          !supplemental.some(
             (item) => item.runtime === 'native' && /VERSION_ID="22\.04"/.test(item.qualificationOS),
           ))
       )
@@ -242,6 +414,8 @@ export async function verifyReleaseArtifacts(
           'Linux qualification requires Ubuntu 22.04, Ubuntu 24.04, and WSL evidence for the same archive.',
         );
     }
+    if (!evidence.some((item) => exactWorkflowEvidence(item, manifests)))
+      throw new Error('Exact current-artifact live workflow qualification evidence is missing.');
   }
   return manifests;
 }

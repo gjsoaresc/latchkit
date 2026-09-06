@@ -3,7 +3,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default [
-  { ignores: ['node_modules/**', 'dist/**', 'src/baml_sdk/**'] },
+  { ignores: ['node_modules/**', 'dist/**'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

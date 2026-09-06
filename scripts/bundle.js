@@ -52,7 +52,11 @@ async function dependencyPackages(app) {
       }
     }
   }
-  await visit(path.join(app, 'node_modules'));
+  try {
+    await visit(path.join(app, 'node_modules'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
   return packages.sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -72,8 +76,6 @@ export async function buildBundle({
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
     throw new Error('Invalid bundle version.');
   const lock = await json(path.join(repository, 'package-lock.json'));
-  if (metadata.dependencies['@boundaryml/baml-bridge'] !== '0.17.0')
-    throw new Error('BAML runtime must be exactly 0.17.0.');
   output = path.resolve(output);
   await mkdir(output, { recursive: true });
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bundle-'));
@@ -93,26 +95,28 @@ export async function buildBundle({
     await writeFile(path.join(app, 'package.json'), `${JSON.stringify(metadata, null, 2)}\n`);
     await writeFile(path.join(app, 'dist/package.json'), `${JSON.stringify(metadata, null, 2)}\n`);
     await writeFile(path.join(app, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
-    // Install the entire locked production closure, including the target's optional native SDK.
-    const npmCli = process.env.npm_execpath;
-    if (!npmCli)
-      throw new Error('Run bundle preparation through npm so the development npm CLI is explicit.');
-    await run(
-      process.execPath,
-      [
-        npmCli,
-        'ci',
-        '--omit=dev',
-        '--ignore-scripts',
-        '--bin-links=false',
-        '--no-audit',
-        '--no-fund',
-      ],
-      { cwd: app, windowsHide: true, timeout: 180_000 },
-    );
+    const productionDependencies = Object.keys(metadata.dependencies ?? {});
+    if (productionDependencies.length) {
+      const npmCli = process.env.npm_execpath;
+      if (!npmCli)
+        throw new Error(
+          'Run bundle preparation through npm so the development npm CLI is explicit.',
+        );
+      await run(
+        process.execPath,
+        [
+          npmCli,
+          'ci',
+          '--omit=dev',
+          '--ignore-scripts',
+          '--bin-links=false',
+          '--no-audit',
+          '--no-fund',
+        ],
+        { cwd: app, windowsHide: true, timeout: 180_000 },
+      );
+    }
     const dependencies = await dependencyPackages(app);
-    if (!dependencies.some((item) => item.name === pin.nativePackage && item.version === '0.17.0'))
-      throw new Error('Target native BAML dependency is absent.');
     const nodeUrl = `https://nodejs.org/dist/v${pins.nodeVersion}/${pin.archive}`;
     const response = await fetch(nodeUrl, { signal: AbortSignal.timeout(120_000) });
     if (!response.ok) throw new Error(`Node download failed: HTTP ${response.status}`);
@@ -189,7 +193,6 @@ export async function buildBundle({
       version,
       target,
       nodeVersion: pins.nodeVersion,
-      bamlVersion: '0.17.0',
       commit,
       dirty,
       packages,
@@ -210,7 +213,7 @@ export async function buildBundle({
       [
         '--input-type=module',
         '-e',
-        "import {policy_version_async} from './dist/src/baml_sdk/index.js'; if(await policy_version_async() !== 'latchkit-workflow-v1') throw new Error('BAML smoke failed');",
+        "import {policy_version_async} from './dist/src/workflows/policy.js'; if(await policy_version_async() !== 'latchkit-workflow-v1') throw new Error('Workflow policy smoke failed');",
       ],
       { cwd: app, windowsHide: true, timeout: 30_000 },
     );

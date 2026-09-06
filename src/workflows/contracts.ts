@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { WorkflowPhase } from '../baml_sdk/index.js';
+import type { WorkflowPhase } from './policy.js';
 
 export const WORKFLOW_SCHEMA_VERSION = 1;
 export const WORKFLOW_STATE_PATH = '.latchkit/workflows/state-v1.json';

@@ -2,7 +2,7 @@
 
 ## Project shape
 
-Latchkit is an MIT-licensed, original strict TypeScript application with a Node.js 22+ ESM CLI and local browser UI. Runtime code is in `src/`, the UI is in `web/`, canonical portable skills are in `skills/`, JSON contracts are in `schemas/`, and tests are in `test/`. TypeScript is compiled to emitted ESM under `dist/`; standalone CommonJS hook handlers remain `.cts` sources. BAML selects delivery actions and phase prompts; TypeScript executes authorized sessions through existing coding tools, which retain authentication and their configured models.
+Latchkit is an MIT-licensed, original strict TypeScript application with a Node.js 22+ ESM CLI and local browser UI. Runtime code is in `src/`, the UI is in `web/`, canonical portable skills are in `skills/`, JSON contracts are in `schemas/`, and tests are in `test/`. TypeScript is compiled to emitted ESM under `dist/`; standalone CommonJS hook handlers remain `.cts` sources. TypeScript policy selects delivery actions and phase prompts; the dispatcher executes authorized sessions through existing coding tools, which retain authentication and their configured models.
 
 ## Commands
 
@@ -14,7 +14,7 @@ npm run check
 npm test
 ```
 
-The same commands work in a POSIX shell. `npm run check` performs deterministic formatting validation, TypeScript typechecking/build validation, ESLint, recursive skill metadata/reference validation, and schema validation. Use `npm run format` to apply the repository formatter, then rerun `npm run check`. Use `npm start` to launch the local UI. BAML workflow sources use the pinned 0.17.0 toolchain and generated TypeScript SDK; use the repository BAML scripts when editing them.
+The same commands work in a POSIX shell. `npm run check` performs deterministic formatting validation, TypeScript typechecking/build validation, ESLint, recursive skill metadata/reference validation, and schema validation. Use `npm run format` to apply the repository formatter, then rerun `npm run check`. Use `npm start` to launch the local UI. BAML is retained separately on `feat/experimental-baml`; it is not required by the 1.0 development or runtime paths.
 
 ## Change boundaries
 

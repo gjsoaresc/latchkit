@@ -2,16 +2,16 @@
 
 Latchkit 1.0 is distributed through GitHub Releases as standalone, immutable
 bundles. npm remains development tooling and is not the end-user installation
-route. A qualified bundle contains the compiled application, generated BAML
-SDK, complete production dependency closure, licenses and SBOM, and private
-Node.js 24.20.0. End users do not need Node, npm, or the BAML compiler.
+route. A qualified bundle contains the compiled TypeScript application,
+licenses and SBOM, and private Node.js 24.20.0. End users do not need Node,
+npm, or BAML. The BAML integration is retained on an experimental branch.
 
 The supported release targets are Windows x64 (`win32-x64`), Linux x64 with
 glibc (`linux-x64`, including WSL), macOS x64 (`darwin-x64`), and macOS arm64
 (`darwin-arm64`). musl Linux and other architectures are not advertised.
 Each archive has a SHA-256 sidecar and manifest. The manifest records the
 exact source commit, runtime pins, target, package inventory, and archive
-checksum; the SBOM covers Node and the native BAML dependency closure.
+checksum; the SBOM covers the complete delivered application and Node runtime.
 
 ## Candidate qualification
 
@@ -29,15 +29,30 @@ npm ci --ignore-scripts
 npm run check
 npm test
 npm run release:artifacts
+cp install.sh install.ps1 release-artifacts/
 node scripts/bundle-smoke.js --directory release-artifacts
 ```
 
-The release workflow also runs the Linux archive on Ubuntu 24.04 and in WSL,
+The release workflow builds on Ubuntu 24.04 and also runs the exact Linux archive on Ubuntu 22.04 and in WSL,
 including a mounted Windows checkout. Bundle smoke removes `node`, `npm`, and
 `baml` from `PATH`, exercises the packaged CLI, UI/API, hooks, spaces and
-Unicode, BAML async exit, installation, failed-upgrade preservation, rollback,
+Unicode, asynchronous policy execution, installation, failed-upgrade preservation, rollback,
 and uninstall retention. A release is not qualified until the corresponding
 evidence files are reviewed for the exact archive bytes.
+
+Dispatch a preparation run with `publish: false`. For a subsequent version,
+set `prior_run_id` to the completed preparation run for its predecessor. This
+downloads the exact prior archives and proves installation, upgrade, rollback,
+and continued dispatch through hooks bound to the prior version. A smoke run
+without a prior archive is useful for initial candidate validation but cannot
+satisfy the publication upgrade gate. Prior archives and their checksum and
+manifest sidecars are retained under `release-artifacts/previous/` for verification.
+
+Qualify the downloaded Windows archive on Windows 11, and run the live workflow
+harness against an exact candidate archive with an authenticated coding tool.
+Keep the resulting sanitized `.evidence.json` records in
+`.github/release-evidence/`. These records bind qualification to archive hashes;
+they cannot qualify a later rebuild with different bytes.
 
 ## GitHub Release publication
 
@@ -47,6 +62,14 @@ uploads the archives, checksums, manifests, SBOMs, and qualification evidence
 as workflow artifacts. Publication downloads those already-qualified bytes and
 verifies them against the exact tag commit before calling `gh release create`.
 It does not rebuild during publication.
+
+After final maintainer approval, create the exact version tag at the candidate
+source commit. Dispatch publication with that `tag`, `publish: true`, and
+`artifact_run_id` set to the qualified preparation run. Set `evidence_ref` to the
+reviewed repository ref containing any additional Windows 11 or live workflow
+records. The verifier checks all four bundles, their complete file inventories,
+prior-version upgrade evidence, supported-platform records, and a completed
+delivery workflow before the protected publication step can proceed.
 
 The publication job requires the protected `github-release-production`
 environment, which is configured with required reviewer `willahealm` (GitHub

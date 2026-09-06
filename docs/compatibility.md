@@ -67,7 +67,7 @@ IDE launcher nor `cursor-agent` substitutes for an editor Agent session.
 
 ## Verification policy
 
-The native CLI and local UI target Windows, Linux and macOS. The [cross-platform workflow](../.github/workflows/ci.yml) remains the candidate gate for typechecking, tests, emitted assets, and platform behavior. The 1.0 release gate will qualify the exact GitHub Release bundles, including their private Node runtime, generated BAML SDK, native dependencies, hooks, UI, upgrade, rollback, uninstall, spaces, Unicode, and WSL mounted-drive paths. Existing RC1 evidence remains historical evidence for the prior application and does not qualify this architecture change.
+The native CLI and local UI target Windows, Linux and macOS. The [cross-platform workflow](../.github/workflows/ci.yml) remains the candidate gate for typechecking, tests, emitted assets, and platform behavior. The 1.0 release gate will qualify the exact GitHub Release bundles, including their private Node runtime, compiled TypeScript policy, hooks, UI, upgrade, rollback, uninstall, spaces, Unicode, and WSL mounted-drive paths. Existing RC1 evidence remains historical evidence for the prior application and does not qualify this architecture change.
 
 Windows jobs require real junction and file-symlink creation. If a runner lacks those privileges, the required smoke fails with an explicit capability error; an unexplained skip is not release evidence. The smoke also exercises paths containing spaces and Unicode and a long-lived temporary installation outside the repository. Filesystem-specific guarantees remain bounded by the durability and link limitations documented in [architecture](architecture.md) and [recovery](recovery.md).
 

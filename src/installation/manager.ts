@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { withTaskStateLock } from '../task-state/lock.js';
@@ -25,7 +35,6 @@ export interface BundleManifest {
   version: string;
   target: string;
   nodeVersion: string;
-  bamlVersion: '0.17.0';
   files: BundleFile[];
 }
 export interface InstallationInspection {
@@ -43,6 +52,12 @@ interface LauncherOwnership {
   schemaVersion: 1;
   files: Record<string, string>;
 }
+interface LauncherIntent {
+  schemaVersion: 1;
+  relative: string;
+  previousHash: string | null;
+  nextHash: string;
+}
 
 const DEFAULT_HOOKS: readonly HookHandlerBinding[] = [
   { id: 'codex', relativeHandler: 'app/dist/src/providers/codex-handler.js' },
@@ -52,6 +67,7 @@ const DEFAULT_HOOKS: readonly HookHandlerBinding[] = [
 
 const ACTIVE = 'current';
 const LAUNCHERS = '.launchers.json';
+const LAUNCHER_INTENT = '.launchers.intent.json';
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const digest = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
@@ -66,15 +82,81 @@ function validVersion(value: unknown): value is string {
   return typeof value === 'string' && VERSION.test(value);
 }
 
-async function rejectSymlinkAncestors(location: string): Promise<void> {
-  const resolved = path.resolve(location);
-  const parsed = path.parse(resolved);
-  let current = parsed.root;
-  for (const segment of resolved.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+function within(root: string, location: string): boolean {
+  const relative = path.relative(root, location);
+  return (
+    relative === '' ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+  );
+}
+
+/** Resolve existing parent aliases such as macOS /var and /tmp, but never accept a linked final root. */
+async function canonicalLocation(location: string): Promise<string> {
+  let current = path.resolve(location);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const info = await lstat(current);
+      if (info.isDirectory()) return path.join(await realpath(current), ...missing.reverse());
+      if (info.isSymbolicLink() && missing.length > 0)
+        return path.join(await realpath(current), ...missing.reverse());
+      throw new Error(`Refusing symlink or non-directory path: ${current}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+async function ensureRoot(root: string): Promise<string> {
+  const canonical = await canonicalLocation(root);
+  await mkdir(canonical, { recursive: true });
+  const info = await lstat(canonical);
+  if (!info.isDirectory() || info.isSymbolicLink())
+    throw new Error(`Installation root is not a real directory: ${canonical}`);
+  const resolved = await realpath(canonical);
+  if (resolved !== canonical)
+    throw new Error(`Installation root escaped its canonical path: ${canonical}`);
+  return resolved;
+}
+
+async function ensureDirectoryWithinRoot(root: string, relative: string): Promise<string> {
+  const destination = path.resolve(root, relative);
+  if (!within(root, destination))
+    throw new Error(`Managed path escapes installation root: ${relative}`);
+  let current = root;
+  for (const segment of path.relative(root, destination).split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
     try {
-      if ((await lstat(current)).isSymbolicLink())
-        throw new Error(`Refusing symlink or junction: ${current}`);
+      const info = await lstat(current);
+      if (!info.isDirectory() || info.isSymbolicLink())
+        throw new Error(`Refusing symlink or non-directory managed ancestor: ${current}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      await mkdir(current);
+      const info = await lstat(current);
+      if (!info.isDirectory() || info.isSymbolicLink())
+        throw new Error(`Refusing symlink or non-directory managed ancestor: ${current}`);
+    }
+  }
+  return destination;
+}
+
+async function rejectSymlinksWithin(root: string, location: string): Promise<void> {
+  const destination = path.resolve(location);
+  if (!within(root, destination)) throw new Error(`Path escapes verified root: ${location}`);
+  let current = root;
+  const segments = path.relative(root, destination).split(path.sep).filter(Boolean);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    try {
+      const info = await lstat(current);
+      if (info.isSymbolicLink()) throw new Error(`Refusing symlink or junction: ${current}`);
+      if (index < segments.length - 1 && !info.isDirectory())
+        throw new Error(`Expected a directory ancestor: ${current}`);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       break;
@@ -112,7 +194,6 @@ function validateManifest(value: unknown): BundleManifest {
     !VERSION.test(candidate.version) ||
     typeof candidate.target !== 'string' ||
     typeof candidate.nodeVersion !== 'string' ||
-    candidate.bamlVersion !== '0.17.0' ||
     !Array.isArray(candidate.files)
   )
     throw new Error('Bundle manifest is invalid.');
@@ -140,7 +221,6 @@ function validateManifest(value: unknown): BundleManifest {
     version: candidate.version,
     target: candidate.target,
     nodeVersion: candidate.nodeVersion,
-    bamlVersion: '0.17.0',
     files,
   };
 }
@@ -152,8 +232,7 @@ async function ensureRegular(file: string): Promise<void> {
 }
 
 async function verifyBundle(bundle: string, target: string): Promise<BundleManifest> {
-  const source = path.resolve(bundle);
-  await rejectSymlinkAncestors(source);
+  const source = await canonicalLocation(bundle);
   const rootInfo = await lstat(source);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink())
     throw new Error('Bundle must be a real directory.');
@@ -164,7 +243,7 @@ async function verifyBundle(bundle: string, target: string): Promise<BundleManif
     throw new Error(`Unsupported bundle target: ${manifest.target}.`);
   for (const entry of manifest.files) {
     const filename = path.join(source, ...entry.path.split('/'));
-    await rejectSymlinkAncestors(filename);
+    await rejectSymlinksWithin(source, filename);
     await ensureRegular(filename);
     const bytes = await readFile(filename);
     if (bytes.length !== entry.bytes || digest(bytes) !== entry.sha256)
@@ -173,7 +252,7 @@ async function verifyBundle(bundle: string, target: string): Promise<BundleManif
   for (const required of [
     `runtime/${executable()}`,
     'app/dist/src/cli.js',
-    'app/dist/src/baml_sdk/index.js',
+    'app/dist/src/workflows/policy.js',
   ]) {
     if (!manifest.files.some((entry) => entry.path === required))
       throw new Error(`Bundle is missing required runtime content: ${required}`);
@@ -181,13 +260,24 @@ async function verifyBundle(bundle: string, target: string): Promise<BundleManif
   return manifest;
 }
 
-async function writeAtomic(file: string, content: string): Promise<void> {
-  await rejectSymlinkAncestors(path.dirname(file));
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeDurable(path.dirname(file), path.basename(file), content);
+async function writeAtomic(root: string, relative: string, content: string): Promise<void> {
+  if (!safeRelative(relative)) throw new Error(`Invalid managed relative path: ${relative}`);
+  const parentRelative = path.posix.dirname(relative);
+  const parent = await ensureDirectoryWithinRoot(
+    root,
+    parentRelative === '.' ? '' : parentRelative,
+  );
+  const destination = path.join(root, ...relative.split('/'));
+  try {
+    if ((await lstat(destination)).isSymbolicLink())
+      throw new Error(`Refusing symlink or junction: ${destination}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  await writeDurable(parent, path.basename(destination), content);
 }
 
-async function launcherOwnership(root: string): Promise<LauncherOwnership> {
+async function readLauncherOwnership(root: string): Promise<LauncherOwnership> {
   try {
     const value = JSON.parse(await readFile(path.join(root, LAUNCHERS), 'utf8')) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -207,6 +297,52 @@ async function launcherOwnership(root: string): Promise<LauncherOwnership> {
   }
 }
 
+async function writeLauncherOwnership(root: string, ownership: LauncherOwnership): Promise<void> {
+  await writeAtomic(root, LAUNCHERS, `${JSON.stringify(ownership, null, 2)}\n`);
+}
+
+async function recoverLauncherIntent(root: string): Promise<void> {
+  let intent: LauncherIntent;
+  try {
+    const value = JSON.parse(await readFile(path.join(root, LAUNCHER_INTENT), 'utf8')) as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('Invalid launcher ownership intent.');
+    const candidate = value as Partial<LauncherIntent>;
+    if (
+      candidate.schemaVersion !== 1 ||
+      !safeRelative(candidate.relative) ||
+      (candidate.previousHash !== null && !SHA256.test(candidate.previousHash ?? '')) ||
+      !SHA256.test(candidate.nextHash ?? '')
+    )
+      throw new Error('Invalid launcher ownership intent.');
+    intent = candidate as LauncherIntent;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const ownership = await readLauncherOwnership(root);
+  const destination = path.join(root, ...intent.relative.split('/'));
+  let currentHash: string | null = null;
+  try {
+    const info = await lstat(destination);
+    if (!info.isFile() || info.isSymbolicLink())
+      throw new Error(`Refusing symlink or non-regular launcher: ${intent.relative}`);
+    currentHash = digest(await readFile(destination));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  if (currentHash === intent.nextHash) {
+    ownership.files[intent.relative] = intent.nextHash;
+    await writeLauncherOwnership(root, ownership);
+  }
+  await rm(path.join(root, LAUNCHER_INTENT), { force: true });
+}
+
+async function launcherOwnership(root: string): Promise<LauncherOwnership> {
+  await recoverLauncherIntent(root);
+  return readLauncherOwnership(root);
+}
+
 async function writeOwnedLauncher(
   root: string,
   relative: string,
@@ -215,17 +351,29 @@ async function writeOwnedLauncher(
 ): Promise<void> {
   const ownership = await launcherOwnership(root);
   const destination = path.join(root, ...relative.split('/'));
+  let previousHash: string | null = null;
   try {
+    const info = await lstat(destination);
+    if (!info.isFile() || info.isSymbolicLink())
+      throw new Error(`Refusing symlink or non-regular launcher: ${relative}`);
     const current = await readFile(destination);
-    if (!ownership.files[relative] || digest(current) !== ownership.files[relative])
+    previousHash = digest(current);
+    if (!ownership.files[relative] || previousHash !== ownership.files[relative])
       throw new Error(`Refusing to overwrite an unowned launcher: ${relative}`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  await writeAtomic(destination, content);
+  const nextHash = digest(Buffer.from(content));
+  await writeAtomic(
+    root,
+    LAUNCHER_INTENT,
+    `${JSON.stringify({ schemaVersion: 1, relative, previousHash, nextHash } satisfies LauncherIntent)}\n`,
+  );
+  await writeAtomic(root, relative, content);
   if (mode !== undefined) await chmod(destination, mode);
-  ownership.files[relative] = digest(Buffer.from(content));
-  await writeAtomic(path.join(root, LAUNCHERS), `${JSON.stringify(ownership, null, 2)}\n`);
+  ownership.files[relative] = nextHash;
+  await writeLauncherOwnership(root, ownership);
+  await rm(path.join(root, LAUNCHER_INTENT), { force: true });
 }
 
 async function removeOwnedLauncher(root: string, relative: string): Promise<void> {
@@ -240,12 +388,11 @@ async function removeOwnedLauncher(root: string, relative: string): Promise<void
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   delete ownership.files[relative];
-  await writeAtomic(path.join(root, LAUNCHERS), `${JSON.stringify(ownership, null, 2)}\n`);
+  await writeLauncherOwnership(root, ownership);
 }
 
 async function withInstallationLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
-  await rejectSymlinkAncestors(root);
-  await mkdir(root, { recursive: true });
+  await ensureRoot(root);
   // Reuse the challenged ownership lock inside the installation root. A PID
   // lookup failure alone cannot establish that another installer is absent.
   return withTaskStateLock(root, operation);
@@ -303,22 +450,22 @@ async function smoke(versionDirectory: string, expectedVersion: string): Promise
   ]);
   if (output !== expectedVersion)
     throw new Error(`Bundle CLI reported ${output}, expected ${expectedVersion}.`);
-  const baml = await run(
+  const policy = await run(
     [
       '--input-type=module',
       '-e',
-      "import {policy_version_async} from './dist/src/baml_sdk/index.js'; process.stdout.write(await policy_version_async());",
+      "import {policy_version_async} from './dist/src/workflows/policy.js'; process.stdout.write(await policy_version_async());",
     ],
     path.join(versionDirectory, 'app'),
   );
-  if (baml !== 'latchkit-workflow-v1')
-    throw new Error('Bundle BAML smoke returned an unexpected policy version.');
+  if (policy !== 'latchkit-workflow-v1')
+    throw new Error('Bundle workflow policy smoke returned an unexpected policy version.');
 }
 
 export async function createStableLaunchers(root: string, target: string): Promise<string[]> {
   if (!validTarget(target)) throw new Error(`Unsupported launcher target: ${target}`);
-  const bin = path.join(root, 'bin');
-  await mkdir(bin, { recursive: true });
+  root = await ensureRoot(root);
+  const bin = await ensureDirectoryWithinRoot(root, 'bin');
   const active = path.join(root, ACTIVE);
   const node = target.startsWith('win32-') ? 'node.exe' : 'node';
   const cli = 'app/dist/src/cli.js';
@@ -363,6 +510,7 @@ export async function createStableHookLaunchers(
     )
   )
     throw new Error('Invalid hook dispatcher binding.');
+  root = await ensureRoot(root);
   const allowed = new Map(handlers.map((handler) => [handler.id, handler.relativeHandler]));
   if (allowed.size !== handlers.length) throw new Error('Duplicate hook dispatcher binding.');
   if (target.startsWith('win32-')) {
@@ -387,7 +535,7 @@ export async function createStableHookLaunchers(
   await writeOwnedLauncher(
     root,
     'bin/latchkit-hook',
-    `#!/bin/sh\nset -eu\nversion= handler=\nwhile [ "$#" -gt 0 ]; do case "$1" in --version) [ "$#" -ge 2 ] || exit 2; version=$2; shift 2;; --handler) [ "$#" -ge 2 ] || exit 2; handler=$2; shift 2;; *) break;; esac; done\ncase "$version" in ''|*[!A-Za-z0-9.-]*) echo 'Invalid hook version binding.' >&2; exit 2;; *-win32-x64|*-win32-arm64|*-linux-x64|*-linux-arm64|*-darwin-x64|*-darwin-arm64) ;; *) echo 'Invalid hook version binding.' >&2; exit 2;; esac\ncase "$handler" in\n${cases}\n*) echo 'Unknown hook handler.' >&2; exit 2;; esac\nesac\nexec '${root.replaceAll("'", "'\\''")}/versions/'"$version"'/runtime/node' '${root.replaceAll("'", "'\\''")}/versions/'"$version"'/$script "$@"\n`,
+    `#!/bin/sh\nset -eu\nversion= handler=\nwhile [ "$#" -gt 0 ]; do case "$1" in --version) [ "$#" -ge 2 ] || exit 2; version=$2; shift 2;; --handler) [ "$#" -ge 2 ] || exit 2; handler=$2; shift 2;; *) break;; esac; done\ncase "$version" in ''|*[!A-Za-z0-9.-]*) echo 'Invalid hook version binding.' >&2; exit 2;; *-win32-x64|*-win32-arm64|*-linux-x64|*-linux-arm64|*-darwin-x64|*-darwin-arm64) ;; *) echo 'Invalid hook version binding.' >&2; exit 2;; esac\ncase "$handler" in\n${cases}\n*) echo 'Unknown hook handler.' >&2; exit 2;; esac\nexec '${root.replaceAll("'", "'\\''")}/versions/'"$version"'/runtime/node' '${root.replaceAll("'", "'\\''")}/versions/'"$version"/"$script" "$@"\n`,
     0o755,
   );
   return [path.join(root, 'bin', 'latchkit-hook')];
@@ -397,21 +545,21 @@ export async function installBundle(
   request: Omit<InstallationRequest, 'command'>,
 ): Promise<InstallationInspection> {
   if (!request.bundle) throw new Error('A verified extracted bundle path is required.');
-  const bundle = request.bundle;
-  const root = path.resolve(request.root);
-  await rejectSymlinkAncestors(root);
+  const bundle = await canonicalLocation(request.bundle);
+  const root = await ensureRoot(request.root);
   const target = request.target ?? targetOf();
   const manifest = await verifyBundle(bundle, target);
   if (request.version && request.version !== manifest.version)
     throw new Error('Requested version does not match bundle version.');
   return withInstallationLock(root, async () => {
     const key = versionKey(manifest);
-    const versions = path.join(root, 'versions');
+    const versions = await ensureDirectoryWithinRoot(root, 'versions');
     const destination = path.join(versions, key);
     try {
       const existing = await lstat(destination);
       if (!existing.isDirectory() || existing.isSymbolicLink())
         throw new Error(`Installed version is invalid: ${key}`);
+      await rejectSymlinksWithin(root, destination);
       const existingManifest = await verifyBundle(destination, target);
       const inventoryDigest = (files: BundleFile[]) =>
         digest(
@@ -426,21 +574,24 @@ export async function installBundle(
       await smoke(destination, manifest.version);
       await createStableLaunchers(root, target);
       await createStableHookLaunchers(root, target, DEFAULT_HOOKS);
-      await writeAtomic(path.join(root, ACTIVE), `${key}\n`);
+      await writeAtomic(root, ACTIVE, `${key}\n`);
       return inspectInstallation(root);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     const staged = path.join(versions, `.${key}.${randomUUID()}.staging`);
-    await mkdir(staged, { recursive: true });
     try {
-      await copyVerifiedBundle(path.resolve(bundle), staged, manifest);
+      await mkdir(staged);
+      const stagedInfo = await lstat(staged);
+      if (!stagedInfo.isDirectory() || stagedInfo.isSymbolicLink())
+        throw new Error(`Refusing symlink or non-directory staging path: ${staged}`);
+      await copyVerifiedBundle(bundle, staged, manifest);
       if (!target.startsWith('win32-')) await chmod(path.join(staged, 'runtime', 'node'), 0o755);
       await smoke(staged, manifest.version);
       await createStableLaunchers(root, target);
       await rename(staged, destination);
       await createStableHookLaunchers(root, target, DEFAULT_HOOKS);
-      await writeAtomic(path.join(root, ACTIVE), `${key}\n`);
+      await writeAtomic(root, ACTIVE, `${key}\n`);
     } catch (error) {
       await rm(staged, { recursive: true, force: true });
       throw error;
@@ -454,24 +605,26 @@ export async function rollbackInstallation(
   version: string,
   target = targetOf(),
 ): Promise<InstallationInspection> {
-  const resolved = path.resolve(root);
+  const resolved = await canonicalLocation(root);
   if (!validVersion(version) || !validTarget(target))
     throw new Error('Invalid rollback version or target.');
   return withInstallationLock(resolved, async () => {
     const key = `${version}-${target}`;
-    const directory = path.join(resolved, 'versions', key);
+    const versions = await ensureDirectoryWithinRoot(resolved, 'versions');
+    const directory = path.join(versions, key);
     if (!(await lstat(directory)).isDirectory())
       throw new Error(`Installed version is unavailable: ${key}`);
+    await rejectSymlinksWithin(resolved, directory);
     const manifest = await verifyBundle(directory, target);
     await smoke(directory, manifest.version);
     await createStableLaunchers(resolved, target);
-    await writeAtomic(path.join(resolved, ACTIVE), `${key}\n`);
+    await writeAtomic(resolved, ACTIVE, `${key}\n`);
     return inspectInstallation(resolved);
   });
 }
 
 export async function uninstallInstallation(root: string): Promise<InstallationInspection> {
-  const resolved = path.resolve(root);
+  const resolved = await canonicalLocation(root);
   return withInstallationLock(resolved, async () => {
     await rm(path.join(resolved, ACTIVE), { force: true });
     await removeOwnedLauncher(resolved, 'bin/latchkit.cmd');
@@ -482,7 +635,7 @@ export async function uninstallInstallation(root: string): Promise<InstallationI
 }
 
 export async function inspectInstallation(root: string): Promise<InstallationInspection> {
-  const resolved = path.resolve(root);
+  const resolved = await canonicalLocation(root);
   const active = await readFile(path.join(resolved, ACTIVE), 'utf8')
     .then((value) => {
       const current = value.trim();

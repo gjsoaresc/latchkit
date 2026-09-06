@@ -11,7 +11,7 @@ import {
   next_step_async,
   parse_agent_outcome_async,
   policy_version_async,
-} from '../dist/src/baml_sdk/index.js';
+} from '../dist/src/workflows/policy.js';
 import { createWorkflowController } from '../dist/src/workflows/service.js';
 import { assertWorkflowRecord } from '../dist/src/workflows/contracts.js';
 import { mutateWorkflow, readWorkflow } from '../dist/src/workflows/store.js';
@@ -289,7 +289,7 @@ async function rootFixture(t) {
   return root;
 }
 
-test('generated BAML policy gates plans and parses strict outcomes', async () => {
+test('TypeScript policy gates plans and parses strict outcomes', async () => {
   const version = await policy_version_async();
   const action = await next_step_async(
     new WorkflowSnapshot({
@@ -360,7 +360,7 @@ test('workflow state rejects null documents, invalid enums and asynchronous lock
   assert.equal((await controller.inspect(planned.taskId)).revision, planned.revision);
 });
 
-test('persisted workflows refuse changed policy bytecode before approval or execution', async (t) => {
+test('persisted workflows refuse a changed emitted policy before approval or execution', async (t) => {
   const root = await rootFixture(t);
   const fixture = harness();
   const controller = createWorkflowController({
@@ -393,6 +393,12 @@ test('persisted workflows refuse changed policy bytecode before approval or exec
     }),
     { code: 'WORKFLOW_POLICY_CHANGED' },
   );
+  assert.equal((await controller.inspect(planned.taskId)).policyDigest, '0'.repeat(64));
+  const cancelled = await controller.cancel({
+    taskId: planned.taskId,
+    expectedRevision: changed.revision,
+  });
+  assert.equal(cancelled.status, 'cancelled');
 });
 
 test('an explicit run resumes a journal-free running checkpoint after restart', async (t) => {

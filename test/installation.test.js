@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -52,38 +52,28 @@ async function inventory(directory, prefix = '') {
   return files;
 }
 
+async function fixtureBundle(scratch, version) {
+  const bundle = path.join(scratch, `bundle-${version}`);
+  await cp(path.join(repository, 'dist'), path.join(bundle, 'app', 'dist'), { recursive: true });
+  await cp(
+    process.execPath,
+    path.join(bundle, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node'),
+  );
+  const target = `${process.platform}-${process.arch}`;
+  await writeFile(
+    path.join(bundle, 'bundle-manifest.json'),
+    `${JSON.stringify({ schemaVersion: 1, package: 'latchkit', version, target, nodeVersion: process.version, files: await inventory(bundle) })}\n`,
+  );
+  return { bundle, target };
+}
+
 test('standalone manager stages, activates, rolls back, and retains versions on uninstall', async (t) => {
   const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-installation-'));
   t.after(async () => {
     await (await import('node:fs/promises')).rm(scratch, { recursive: true, force: true });
   });
-  const bundle = path.join(scratch, 'bundle');
-  await cp(path.join(repository, 'dist'), path.join(bundle, 'app', 'dist'), { recursive: true });
-  await cp(
-    path.join(repository, 'node_modules', '@boundaryml'),
-    path.join(bundle, 'app', 'node_modules', '@boundaryml'),
-    { recursive: true },
-  );
-  await cp(
-    path.join(repository, 'node_modules', 'protobufjs'),
-    path.join(bundle, 'app', 'node_modules', 'protobufjs'),
-    { recursive: true },
-  );
-  await cp(
-    path.join(repository, 'node_modules', '@protobufjs'),
-    path.join(bundle, 'app', 'node_modules', '@protobufjs'),
-    { recursive: true },
-  );
-  await cp(
-    process.execPath,
-    path.join(bundle, 'runtime', process.platform === 'win32' ? 'node.exe' : 'node'),
-  );
   const version = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8')).version;
-  const target = `${process.platform}-${process.arch}`;
-  await writeFile(
-    path.join(bundle, 'bundle-manifest.json'),
-    `${JSON.stringify({ schemaVersion: 1, package: 'latchkit', version, target, nodeVersion: process.version, bamlVersion: '0.17.0', files: await inventory(bundle) })}\n`,
-  );
+  const { bundle, target } = await fixtureBundle(scratch, version);
   const root = path.join(scratch, 'root é %');
   const installed = await installBundle({ root, bundle, target });
   assert.equal(installed.active, `${version}-${target}`);
@@ -124,6 +114,21 @@ test('standalone manager stages, activates, rolls back, and retains versions on 
     );
     assert.match(hook.stdout, /"eventName":"PreToolUse"/);
     assert.match(hook.stdout, /"session_id":"session"/);
+  } else {
+    const hookFile = path.join(root, 'bin', 'latchkit-hook');
+    await run('sh', ['-n', hookFile]);
+    const hook = await runWithInput(
+      hookFile,
+      ['--version', `${version}-${target}`, '--handler', 'claude', '--event', 'PreToolUse'],
+      JSON.stringify({
+        hook_event_name: 'PreToolUse',
+        session_id: 'session',
+        tool_name: 'Bash',
+        tool_input: {},
+      }),
+    );
+    assert.match(hook.stdout, /"eventName":"PreToolUse"/);
+    assert.match(hook.stdout, /"session_id":"session"/);
   }
   const upgradedVersion = '1.0.1';
   const upgradedBundle = path.join(scratch, 'bundle-upgrade');
@@ -135,7 +140,7 @@ test('standalone manager stages, activates, rolls back, and retains versions on 
   await writeFile(packageFile, `${JSON.stringify(packageJson, null, 2)}\n`);
   await writeFile(
     path.join(upgradedBundle, 'bundle-manifest.json'),
-    `${JSON.stringify({ schemaVersion: 1, package: 'latchkit', version: upgradedVersion, target, nodeVersion: process.version, bamlVersion: '0.17.0', files: await inventory(upgradedBundle) })}\n`,
+    `${JSON.stringify({ schemaVersion: 1, package: 'latchkit', version: upgradedVersion, target, nodeVersion: process.version, files: await inventory(upgradedBundle) })}\n`,
   );
   const upgraded = await installBundle({ root, bundle: upgradedBundle, target });
   assert.equal(upgraded.active, `${upgradedVersion}-${target}`);
@@ -200,4 +205,45 @@ test('standalone manager rejects unsupported targets and rollback traversal', as
     () => rollbackInstallation(root, '../escape', `${process.platform}-${process.arch}`),
     /Invalid rollback/,
   );
+});
+
+test(
+  'standalone manager rejects a Windows versions junction before staging outside root',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-junction-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const version = JSON.parse(
+      await readFile(path.join(repository, 'package.json'), 'utf8'),
+    ).version;
+    const { bundle, target } = await fixtureBundle(scratch, version);
+    const root = path.join(scratch, 'root');
+    const outside = path.join(scratch, 'outside');
+    await mkdir(root);
+    await mkdir(outside);
+    await run('cmd.exe', ['/d', '/c', 'mklink', '/J', path.join(root, 'versions'), outside]);
+    await assert.rejects(() => installBundle({ root, bundle, target }), /symlink|junction/i);
+    assert.deepEqual(await readdir(outside), []);
+  },
+);
+
+test('launcher recovery records an already-written launcher after an interrupted ownership update', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-launcher-intent-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const target = `${process.platform}-${process.arch}`;
+  await createStableLaunchers(root, target);
+  const relative = process.platform === 'win32' ? 'bin/latchkit.cmd' : 'bin/latchkit';
+  const launcher = await readFile(path.join(root, ...relative.split('/')));
+  const ownershipFile = path.join(root, '.launchers.json');
+  const ownership = JSON.parse(await readFile(ownershipFile, 'utf8'));
+  delete ownership.files[relative];
+  await writeFile(ownershipFile, `${JSON.stringify(ownership)}\n`);
+  await writeFile(
+    path.join(root, '.launchers.intent.json'),
+    `${JSON.stringify({ schemaVersion: 1, relative, previousHash: null, nextHash: hash(launcher) })}\n`,
+  );
+  await createStableLaunchers(root, target);
+  const recovered = JSON.parse(await readFile(ownershipFile, 'utf8'));
+  assert.equal(recovered.files[relative], hash(launcher));
+  await assert.rejects(readFile(path.join(root, '.launchers.intent.json')), { code: 'ENOENT' });
 });

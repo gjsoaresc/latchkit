@@ -28,10 +28,6 @@
     "build": "node scripts/build.js",
     "build:clean": "node scripts/build.js --clean",
     "typecheck": "tsc --noEmit --project tsconfig.json",
-    "baml:check": "node scripts/baml.js check",
-    "baml:test": "node scripts/baml.js test",
-    "baml:generate": "node scripts/baml.js generate",
-    "baml:check-generated": "node scripts/baml.js check-generated",
     "test": "npm run build && node --test test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
     "test:browser": "npm run build && playwright test",
     "format": "prettier --write src web scripts test package.json tsconfig.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
@@ -39,9 +35,10 @@
     "lint": "eslint src web scripts test",
     "check:skills": "node scripts/validate-skills.js",
     "evaluate:skills": "node scripts/skill-evaluations.js",
-    "check": "npm run format:check && npm run lint && npm run baml:check && npm run baml:test && npm run baml:check-generated && npm run typecheck && node scripts/check.js",
+    "check": "npm run format:check && npm run lint && npm run typecheck && node scripts/check.js",
     "verify:providers": "node scripts/provider-e2e.js",
     "verify:lifecycle": "node scripts/live-lifecycle-evidence.js",
+    "verify:workflow": "node scripts/live-workflow-evidence.js",
     "smoke:artifact": "node scripts/artifact-smoke.js",
     "release:artifacts": "npm run build && node scripts/release-artifacts.js",
     "release:dry-run": "npm run build && node scripts/release-artifacts.js --dry-run",
@@ -66,8 +63,5 @@
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.69.0"
-  },
-  "dependencies": {
-    "@boundaryml/baml-bridge": "0.17.0"
   }
 }

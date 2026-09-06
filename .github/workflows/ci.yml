@@ -18,12 +18,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts
-      - name: Install pinned BAML (Windows)
-        if: runner.os == 'Windows'
-        run: ./scripts/setup-baml.ps1
-      - name: Install pinned BAML (POSIX)
-        if: runner.os != 'Windows'
-        run: sh scripts/setup-baml.sh
+      - name: Install archive verification tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - run: npm run build

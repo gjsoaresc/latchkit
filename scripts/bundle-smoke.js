@@ -176,16 +176,7 @@ async function main() {
         process.env.SystemRoot,
         'System32/WindowsPowerShell/v1.0/Modules',
       );
-    for (const name of [
-      'NODE_PATH',
-      'NODE_OPTIONS',
-      'NAPI_RS_NATIVE_LIBRARY_PATH',
-      'NAPI_RS_FORCE_WASI',
-      'BAML_VERSION',
-      'LATCHKIT_BAML_BIN',
-    ])
-      delete process.env[name];
-    process.env.NAPI_RS_ENFORCE_VERSION_CHECK = '1';
+    for (const name of ['NODE_PATH', 'NODE_OPTIONS']) delete process.env[name];
     process.env.HOME = path.join(scratch, 'isolated home');
     process.env.USERPROFILE = process.env.HOME;
     await mkdir(process.env.HOME);
@@ -196,13 +187,17 @@ async function main() {
       await mkdir(process.env.APPDATA, { recursive: true });
       await mkdir(process.env.LOCALAPPDATA, { recursive: true });
     }
-    for (const command of ['node', 'npm', 'baml'])
+    for (const command of ['node', 'npm'])
       await assert.rejects(run(command, ['--version'], { windowsHide: true, timeout: 5000 }));
     const nodeVersion = (
       await run(executable, ['--version'], { windowsHide: true, timeout: 10_000 })
     ).stdout.trim();
     const qualificationOS =
       process.platform === 'linux' ? await readFile('/etc/os-release', 'utf8') : os.version();
+    const qualificationVersion =
+      process.platform === 'darwin'
+        ? (await run('/usr/bin/sw_vers', ['-productVersion'], { timeout: 10_000 })).stdout.trim()
+        : os.release();
     const version = await run(executable, [entry, '--version'], {
       windowsHide: true,
       timeout: 30_000,
@@ -213,7 +208,7 @@ async function main() {
       [
         '--input-type=module',
         '-e',
-        "import {policy_version_async} from './dist/src/baml_sdk/index.js'; if(await policy_version_async() !== 'latchkit-workflow-v1') process.exitCode=1;",
+        "import {policy_version_async} from './dist/src/workflows/policy.js'; if(await policy_version_async() !== 'latchkit-workflow-v1') process.exitCode=1;",
       ],
       { cwd: app, windowsHide: true, timeout: 30_000 },
     );
@@ -385,14 +380,19 @@ async function main() {
       target: manifest.target,
       node: nodeVersion,
       qualificationOS,
+      qualificationVersion,
       runtime: args.includes('--require-wsl') ? 'WSL' : 'native',
       upgradeKind: previousManifest ? 'exact-prior-archive' : 'single-archive-fallback',
       prior: previousManifest
-        ? { archive: previousManifest.archive, sha256: previousManifest.sha256 }
+        ? {
+            archive: previousManifest.archive,
+            sha256: previousManifest.sha256,
+            version: previousManifest.version,
+          }
         : null,
       systemToolchains: 'absent from PATH',
       checks: [
-        'BAML async exit',
+        'compiled workflow policy async exit',
         'CLI',
         'UI/API',
         'hooks',

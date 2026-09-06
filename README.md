@@ -22,12 +22,19 @@ Latchkit is an open-source toolkit for shared coding-agent workflows. This repos
 
 ## Install and try it
 
+GitHub Releases and the PowerShell/POSIX installers are the primary distribution
+route for 1.0. The candidate is still being qualified; no 1.0 release is published.
+The [release guide](docs/releases.md) explains exact-version installation, local
+candidate archives, upgrades, and rollback. Standalone bundles include private
+Node and require neither npm nor BAML.
+
 For development, install [Node.js 22 or newer](https://nodejs.org/) and Git, then install the repository tooling:
 
 ```sh
 npm install
 npm run build
 node dist/src/cli.js --version
+npm link
 ```
 
 Then run these commands from your project directory:
@@ -61,7 +68,7 @@ For development, no Bash installer, Homebrew, Python, symlinks, or WSL is requir
 | Local project memory     | Explicit, inspectable decisions and discoveries with bounded, capability-aware recovery                                               |
 | Cross-platform checks    | Candidate checks for emitted application code and standalone artifact qualification; platform evidence is recorded per exact artifact |
 
-`doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates the installed distributable, runtime/filesystem behavior, and bundled assets; real provider sessions remain outside this release gate. Contributors can run `npm run smoke:artifact` locally. See the [Claude adapter notes](docs/providers/claude.md) for hook activation and capability limitations.
+`doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates the installed distributable, runtime/filesystem behavior, and bundled assets. Publication additionally requires a credentialed delivery workflow against an exact release archive. Contributors can run `npm run smoke:artifact` locally. See the [Claude adapter notes](docs/providers/claude.md) for hook activation and capability limitations.
 
 ## Use the skills
 
@@ -119,7 +126,7 @@ npm test
 npm pack --dry-run
 ```
 
-See [release and recovery procedures](docs/releases.md) for the GitHub Release bundles, PowerShell/POSIX installation scripts, dry-run evidence, upgrades, rollback, and recovery. End users will not need Node.js, npm, or the BAML compiler for a qualified standalone bundle; npm remains available for development.
+See [release and recovery procedures](docs/releases.md) for the GitHub Release bundles, PowerShell/POSIX installation scripts, dry-run evidence, upgrades, rollback, and recovery. End users will not need Node.js, npm, or BAML for a qualified standalone bundle; npm remains available for development.
 
 For task-oriented operations, see [support and troubleshooting](docs/support.md)
 and [upgrade, migration, rollback, and removal](docs/migration.md).

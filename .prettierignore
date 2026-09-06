@@ -1,5 +1,4 @@
 node_modules/
 dist/
-src/baml_sdk/
 package-lock.json
 .git/

@@ -11,10 +11,24 @@ on:
         required: false
         default: false
         type: boolean
+      prior_run_id:
+        description: 'Completed candidate run containing the prior standalone version for upgrade qualification'
+        required: false
+        type: string
+      artifact_run_id:
+        description: 'Completed qualified run to publish without rebuilding (required for publication)'
+        required: false
+        type: string
+      evidence_ref:
+        description: 'Repository ref containing additional exact-artifact evidence, such as Windows 11 and live delivery'
+        required: false
+        type: string
 permissions:
   contents: read
+  actions: read
 jobs:
   prepare:
+    if: '!inputs.publish'
     name: Native bundle / ${{ matrix.target }}
     strategy:
       fail-fast: false
@@ -39,12 +53,9 @@ jobs:
           node-version: 24.20.0
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Install pinned BAML (Windows)
-        if: runner.os == 'Windows'
-        run: ./scripts/setup-baml.ps1
-      - name: Install pinned BAML (POSIX)
-        if: runner.os != 'Windows'
-        run: sh scripts/setup-baml.sh
+      - name: Install archive verification tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       - run: npm run check
       - run: npm test
       - run: npm run release:artifacts
@@ -52,7 +63,22 @@ jobs:
         shell: bash
         run: cp install.sh install.ps1 release-artifacts/
       - name: Qualify the exact standalone archive
+        if: inputs.prior_run_id == ''
         run: node scripts/bundle-smoke.js --directory release-artifacts
+      - name: Download exact prior version
+        if: inputs.prior_run_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: standalone-${{ matrix.target }}
+          path: prior-artifacts
+          run-id: ${{ inputs.prior_run_id }}
+          github-token: ${{ github.token }}
+      - name: Qualify exact upgrade and rollback
+        if: inputs.prior_run_id != ''
+        run: node scripts/bundle-smoke.js --directory release-artifacts --previous-directory prior-artifacts
+      - name: Retain exact prior bytes for publication verification
+        if: inputs.prior_run_id != ''
+        run: node -e "require('node:fs').cpSync('prior-artifacts','release-artifacts/previous',{recursive:true})"
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: standalone-${{ matrix.target }}
@@ -111,11 +137,12 @@ jobs:
   publish:
     name: Publish approved GitHub Release
     needs: [prepare, ubuntu-22-smoke, wsl-artifact-smoke]
-    if: inputs.publish && inputs.tag != ''
+    if: always() && inputs.publish && inputs.tag != '' && inputs.artifact_run_id != ''
     runs-on: ubuntu-24.04
     environment: github-release-production
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -129,11 +156,23 @@ jobs:
           pattern: standalone-*
           path: release-artifacts
           merge-multiple: true
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: qualification-*
           path: release-artifacts
           merge-multiple: true
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.evidence_ref || github.ref }}
+          path: qualification-evidence
+      - name: Collect matching external qualification records
+        run: node scripts/collect-release-evidence.js --artifacts release-artifacts --evidence qualification-evidence/.github/release-evidence
+      - name: Install archive verification tools
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       - name: Verify qualified bytes against the existing tag commit
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -142,4 +181,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release create "$RELEASE_TAG" release-artifacts/* --verify-tag --title "$RELEASE_TAG" --generate-notes
+        shell: bash
+        run: |
+          mapfile -d '' assets < <(find release-artifacts -maxdepth 1 -type f -print0)
+          gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --title "$RELEASE_TAG" --generate-notes

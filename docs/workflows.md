@@ -36,6 +36,12 @@ afterward. On restart, the controller inspects the checkpoint and current task
 evidence before continuing; it does not infer completion from a provider exit
 status.
 
+An upgrade that changes the policy, dispatcher, or review prompts cannot resume
+an existing approved checkpoint under the new code. Inspection and cancellation
+remain available. Roll back to the retained version that created the workflow
+to continue it, or cancel it and start a newly approved workflow with the new
+version. Automatic migration of approved pending work is not implemented.
+
 ## CLI
 
 Start a workflow with a prompt and selected provider. `--host-local-authorized`

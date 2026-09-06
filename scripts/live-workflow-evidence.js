@@ -163,7 +163,9 @@ async function inner(values) {
     'runtime',
     process.platform === 'win32' ? 'node.exe' : 'node',
   );
-  if (path.resolve(process.execPath) !== path.resolve(privateNode))
+  const normalizePath = (value) =>
+    process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  if (normalizePath(process.execPath) !== normalizePath(privateNode))
     throw new Error('Inner qualification is not running under the extracted private Node runtime.');
   const manifest = JSON.parse(await readFile(path.join(bundle, 'bundle-manifest.json'), 'utf8'));
   if (manifest.dirty || !/^[a-f0-9]{40}$/i.test(manifest.commit))
@@ -177,6 +179,7 @@ async function inner(values) {
 
   const moduleAt = (relative) => pathToFileURL(path.join(app, relative)).href;
   const { createWorkflowController } = await import(moduleAt('dist/src/workflows/service.js'));
+  const { policy_artifact_digest } = await import(moduleAt('dist/src/workflows/policy.js'));
   const { createTask, inspectTask } = await import(moduleAt('dist/src/task-state/service.js'));
   const { runProviderProcess } = await import(moduleAt('dist/src/runtime/process-runner.js'));
   const { validateAcceptanceDocument } = await import(moduleAt('dist/src/acceptance/contracts.js'));
@@ -270,6 +273,12 @@ async function inner(values) {
     const completed = await controller.wait(proposed.taskId);
     if (completed.status !== 'verified' || completed.phase !== 'handoff')
       throw new Error(`Workflow did not reach verified handoff: ${completed.status}.`);
+    const packagedPolicyDigest = policy_artifact_digest([
+      new URL(moduleAt('dist/src/workflows/service.js')),
+      new URL(moduleAt('dist/src/reviews/orchestrator.js')),
+    ]);
+    if (completed.policyDigest !== packagedPolicyDigest)
+      throw new Error('Workflow policy digest does not match the exact packaged implementation.');
     const inspected = await inspectTask(root, task.id);
     if (inspected.task.state !== 'verified') throw new Error('Host task did not become verified.');
     if (sha256(await readFile(path.join(root, 'REQUIREMENTS.md'))) !== immutable.requirements)
@@ -338,6 +347,7 @@ async function inner(values) {
         phase: completed.phase,
         policyVersion: completed.policyVersion,
         policyDigest: completed.policyDigest,
+        packagedPolicyDigest,
         promptDigest: completed.promptDigest,
         requirementsDigest: completed.requirements.digest,
         planDigest: completed.plan.digest,
