@@ -4,12 +4,9 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { createTask, recordTaskRecord, transitionTaskRecord } from '../dist/src/task-state/service.js';
 import {
-  createTask,
-  recordTaskRecord,
-  transitionTaskRecord,
-} from '../dist/src/task-state/service.js';
-import {
+  acknowledgeContractReceipt,
   createContractAssociation,
   inspectContractImpact,
   proposeContractRevision,
@@ -77,6 +74,18 @@ test('explicit association retains accepted history and identifies an old consum
     }),
     { code: 'RESULT_DECISION_CONTRACT_STALE' },
   );
+  const accepted = await proposeContractRevision(root, {
+    associationId: association.id,
+    expectedProducerRevision: p.task.revision,
+    provenance: 'coordinator accepts the proposal',
+  });
+  assert.equal(accepted.versions.at(-1).status, 'accepted');
+  const receipt = await acknowledgeContractReceipt(root, {
+    associationId: association.id,
+    expectedConsumerRevision: c.task.revision,
+    contractDigest: accepted.versions.at(-1).digest,
+  });
+  assert.equal(receipt.reconciliation, 'current');
   const impact = await inspectContractImpact(root, {
     producerTaskId: p.task.id,
     producerRecordId: p.record.id,

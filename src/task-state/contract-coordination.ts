@@ -111,6 +111,18 @@ export async function createContractAssociation(
       );
     validateStableId(input.producerRecordId, 'record');
     validateStableId(input.consumerRecordId, 'record');
+    if (!producer.records?.some((item) => item.id === input.producerRecordId))
+      throw new TaskStateError(
+        'Producer record does not exist on the producer task.',
+        'TASK_RECORD_NOT_FOUND',
+        '$.producerRecordId',
+      );
+    if (!consumer.records?.some((item) => item.id === input.consumerRecordId))
+      throw new TaskStateError(
+        'Consumer record does not exist on the consumer task.',
+        'TASK_RECORD_NOT_FOUND',
+        '$.consumerRecordId',
+      );
     for (const id of input.criterionIds)
       if (!producer.criteria.some((c) => c.id === id))
         throw new TaskStateError(
@@ -188,6 +200,15 @@ export async function proposeContractRevision(
       );
     const digest = recordDigest(state, a.producerTaskId, a.producerRecordId);
     const current = a.versions.at(-1)!;
+    // A coordinator may explicitly accept the pending proposal. Receipt still has to be
+    // recorded separately by the consumer before a new dispatch is permitted.
+    if (current.digest === digest && current.status === 'pending' && input.accept !== false) {
+      current.status = 'accepted';
+      a.reconciliation = 'pending';
+      a.updatedAt = new Date().toISOString();
+      await write(root, document);
+      return structuredClone(a);
+    }
     if (current.digest === digest && input.accept !== false) return structuredClone(a);
     current.status = 'superseded';
     const now = new Date().toISOString();
