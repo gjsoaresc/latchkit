@@ -403,6 +403,100 @@ test('unrelated source-linked records are not surfaced by the impact report', as
   );
 });
 
+test('a confirmed assumption is superseded exactly like an accepted decision, and reconciling it never relabels existing passing evidence', async (t) => {
+  const root = await fixture(t);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'plan.md'), '# Plan\n');
+
+  const task = await baseTask(root, [
+    { description: 'Export completes successfully', required: true },
+  ]);
+  const criterion = task.criteria[0];
+  const enrolled = await registerEnhancedWorkflow(root, {
+    taskId: task.id,
+    expectedRevision: task.revision,
+    artifacts: {
+      prd: { path: 'docs/plans/prd.md', templateVersion: 1 },
+      technicalPlan: { path: 'docs/plans/plan.md', templateVersion: 1 },
+    },
+    checks: [{ id: 'export-check', criterionId: criterion.id, type: 'manual' }],
+  });
+
+  // Adopt a *confirmed assumption* (not a decision) — the first-slice example in issue #111 is
+  // exactly this: an assumption the implementation is currently relying on turns out to be wrong.
+  let updated = await recordTaskRecord(root, {
+    taskId: task.id,
+    expectedRevision: enrolled.revision,
+    kind: 'assumption',
+    text: 'The export query has no per-user filter',
+    provenance: { kind: 'agent-inferred', reference: 'code review' },
+    links: [
+      { type: 'criterion', criterionId: criterion.id, criterionRevision: criterion.revision },
+    ],
+  });
+  const assumption = updated.records.at(-1);
+  updated = await transitionTaskRecord(root, {
+    taskId: task.id,
+    expectedRevision: updated.revision,
+    recordId: assumption.id,
+    recordRevision: assumption.revision,
+    status: 'confirmed',
+    reason: 'confirmed by reading the query',
+    authorization: authorization('confirm assumption'),
+  });
+  const confirmedAssumption = updated.records.find((item) => item.id === assumption.id);
+
+  // Record real, current, passing evidence for the mapped check before reconciling.
+  const resumed = await resumeTask(root, { taskId: task.id, expectedRevision: updated.revision });
+  const withEvidence = await recordEvidence(root, {
+    taskId: task.id,
+    expectedRevision: resumed.revision,
+    runId: resumed.owner.runId,
+    criterionId: criterion.id,
+    criterionRevision: criterion.revision,
+    kind: `enhanced-check:${enrolled.enhancedWorkflow.checks[0].id}`,
+    outcome: 'passed',
+  });
+  const evidenceBefore = withEvidence.evidence.at(-1);
+
+  const patch = {
+    recordOps: [
+      {
+        op: 'supersede',
+        recordId: confirmedAssumption.id,
+        recordRevision: confirmedAssumption.revision,
+        kind: 'assumption',
+        text: 'The export query does filter by the current user',
+        provenance: { kind: 'execution-observed', reference: 're-reading the query' },
+        authorization: authorization('correct the assumption'),
+      },
+    ],
+  };
+  const preview = await previewTaskReconciliation(root, { taskId: task.id, patch });
+  const assumptionEntry = preview.impact.find((item) => item.id === confirmedAssumption.id);
+  assert.equal(assumptionEntry.classification, 'directly-affected');
+  const criterionEntry = preview.impact.find((item) => item.id === criterion.id);
+  assert.equal(criterionEntry.classification, 'declared-dependent');
+  const checkEntry = preview.impact.find((item) => item.kind === 'check');
+  assert.equal(checkEntry.outcome, 'needs-re-verification');
+  const evidenceEntry = preview.impact.find((item) => item.kind === 'evidence');
+  assert.equal(evidenceEntry.outcome, 'needs-re-verification');
+
+  const applied = await applyTaskReconciliation(root, {
+    taskId: task.id,
+    expectedRevision: withEvidence.revision,
+    patch,
+    previewDigest: preview.digest,
+  });
+
+  // The report only ever suggests where new verification is needed; it never touches the
+  // existing evidence record's own outcome, criterion binding, or source snapshot.
+  const evidenceAfter = applied.task.evidence.find((item) => item.id === evidenceBefore.id);
+  assert.deepEqual(evidenceAfter, evidenceBefore);
+  assert.equal(evidenceAfter.outcome, 'passed', 'reconciliation never relabels old evidence');
+});
+
 test('reconcile-apply refuses a stale preview after a concurrent source edit, without mutating state', async (t) => {
   const root = await fixture(t);
   const task = await baseTask(root);
