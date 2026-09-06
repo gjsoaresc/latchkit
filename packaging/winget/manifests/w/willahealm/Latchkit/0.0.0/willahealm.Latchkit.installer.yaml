@@ -1,0 +1,24 @@
+# DRAFT / NOT FUNCTIONAL — see packaging/winget/README.md.
+#
+# This assumes a "pre-staged root" archive variant that the release pipeline
+# (scripts/release-artifacts.js) does not build yet: a zip already shaped
+# like an activated install root (bin/latchkit.cmd, current, versions/...),
+# not today's raw bundle archive (runtime/, app/dist/, bundle-manifest.json)
+# that install.ps1 consumes. PackageVersion, InstallerUrl, and
+# InstallerSha256 below are placeholders.
+PackageIdentifier: willahealm.Latchkit
+PackageVersion: 0.0.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: bin\latchkit.cmd
+    PortableCommandAlias: latchkit
+InstallModes:
+  - silent
+UpgradeBehavior: install
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/willahealm/latchkit/releases/download/v0.0.0/latchkit-0.0.0-win32-x64-portable.zip
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.6.0

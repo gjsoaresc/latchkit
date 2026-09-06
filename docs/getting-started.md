@@ -22,7 +22,7 @@ $latchkit = "$env:USERPROFILE/.local/share/latchkit/bin/latchkit.ps1"
 & $latchkit --version
 ```
 
-The installer verifies the archive and installs a versioned user-local runtime without changing your PATH. Keep using the printed launcher path, or add its directory to PATH yourself. The explicit user-home root above also avoids AppData filesystem virtualization in packaged Windows hosts. The [release guide](releases.md) covers exact-version downloads after publication, upgrades, rollback, and qualification. Preparing or installing a candidate does not publish or qualify it.
+The installer verifies the archive and installs a versioned user-local runtime without changing your PATH. Keep using the printed launcher path, or add its directory to PATH yourself. The explicit user-home root above also avoids AppData filesystem virtualization in packaged Windows hosts. The [release guide](releases.md) covers exact-version downloads after publication, upgrades, rollback, and qualification; [installation](installation.md) covers the supported/deferred target matrix, PATH setup, and the onboarding hand-off in detail. Preparing or installing a candidate does not publish or qualify it.
 
 ## Initialize and sync a project
 

@@ -1,0 +1,7 @@
+# DRAFT — placeholder version. See packaging/winget/README.md: this manifest
+# set is a plan, not a functional or submitted WinGet package.
+PackageIdentifier: willahealm.Latchkit
+PackageVersion: 0.0.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

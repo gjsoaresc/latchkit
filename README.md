@@ -50,7 +50,7 @@ Open the local URL printed by `latchkit ui`. The console can select providers an
 
 See the [clean-machine quickstart](docs/getting-started.md) for the Windows path.
 
-For development, no Bash installer, Homebrew, Python, symlinks, or WSL is required. The Windows standalone GitHub Release installer uses PowerShell, installs into user-local versioned directories without elevation or symlinks, and includes private Node.js 24.20.0. It prints the full launcher path; add that directory to `PATH` yourself if desired. Linux and macOS installers remain deferred experimental work.
+For development, no Bash installer, Homebrew, Python, symlinks, or WSL is required. The Windows standalone GitHub Release installer uses PowerShell, installs into user-local versioned directories without elevation or symlinks, and includes private Node.js 24.20.0. It prints the full launcher path; add that directory to `PATH` yourself if desired. Linux and macOS installers remain deferred experimental work. See [installation](docs/installation.md) for the full target matrix, PowerShell/shell usage, and the current Homebrew/WinGet packaging scaffolds (not yet published or installable).
 
 ## What works today
 
