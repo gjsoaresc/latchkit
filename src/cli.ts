@@ -94,6 +94,7 @@ Usage: latchkit <command> [options]
   review     Run bounded independent reviews
   diff       Inspect a revision-bound Git diff or record review feedback
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
+  tool       Inspect or explicitly manage an optional local tool
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
   usage      Enable, inspect, import, export, retain, or delete local usage records
@@ -150,6 +151,10 @@ Options:
   --install-root <path> self: user-local installation directory
   --to <version>      self upgrade/rollback: exact release version
   --bundle <path>     self install/upgrade: extracted local bundle
+  --archive <path>    tool fcc preview/install: pinned local FCC archive
+  --tool-root <path>  tool fcc: recorded user-local FCC tool directory
+  --python <path>     tool fcc install: explicit Python 3.14+ runtime
+  --uv <path>         tool fcc install: explicit uv 0.11.16+ lock installer
   --help             Show this help
   --version          Show version
 
@@ -219,6 +224,10 @@ try {
       'timeout-ms': { type: 'string' },
       'output-limit-bytes': { type: 'string' },
       'max-runs': { type: 'string' },
+      archive: { type: 'string' },
+      'tool-root': { type: 'string' },
+      python: { type: 'string' },
+      uv: { type: 'string' },
     },
   });
   cliValues = values;
@@ -240,6 +249,7 @@ try {
         'diff',
         'pack',
         'schedule',
+        'tool',
       ].includes(command) &&
       extra.length
     )
@@ -255,6 +265,7 @@ try {
       ui: ['project', 'port'],
       diagnostics: ['project', 'export', 'clear'],
       self: ['install-root', 'to', 'bundle'],
+      tool: ['archive', 'tool-root', 'python', 'uv'],
       workflow: [
         'project',
         'task',
@@ -350,7 +361,37 @@ try {
       if (!allowed.includes(option)) throw new Error(`--${option} is not valid for ${command}.`);
     const root = path.resolve(values.project ?? process.cwd());
     const print = (value: unknown) => console.log(JSON.stringify(value, null, 2));
-    if (command === 'self') {
+    if (command === 'tool') {
+      if (
+        extra.length !== 2 ||
+        extra[0] !== 'fcc' ||
+        !['inspect', 'preview', 'install', 'start', 'stop', 'remove'].includes(extra[1] ?? '')
+      )
+        throw new Error(
+          'Usage: latchkit tool fcc <inspect|preview|install|start|stop|remove> [--archive <path>] [--python <path>] [--tool-root <path>].',
+        );
+      const fcc = await import('./managed-tools/fcc.js');
+      const options = {
+        ...(values.archive ? { archive: path.resolve(values.archive) } : {}),
+        ...(values.python ? { python: path.resolve(values.python) } : {}),
+        ...(values.uv ? { uv: path.resolve(values.uv) } : {}),
+        ...(values['tool-root'] ? { root: path.resolve(values['tool-root']) } : {}),
+      };
+      const action = extra[1];
+      print(
+        action === 'inspect'
+          ? await fcc.inspectFcc(options)
+          : action === 'preview'
+            ? await fcc.previewFccInstall(options)
+            : action === 'install'
+              ? await fcc.installFcc(options)
+              : action === 'start'
+                ? await fcc.startFcc(options)
+                : action === 'stop'
+                  ? await fcc.stopFcc(options)
+                  : await fcc.removeFcc(options),
+      );
+    } else if (command === 'self') {
       const action = extra[0];
       if (
         extra.length !== 1 ||

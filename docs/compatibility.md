@@ -85,6 +85,12 @@ Windows jobs require real junction and file-symlink creation. If a runner lacks 
 
 These checks verify Latchkit's distributable and filesystem/runtime behavior. They do not authenticate provider binaries or prove a real agent session; provider discovery and invocation still require separate credentialed evidence. Issues #19, #24, #25, and #32 remain outside the 1.0 scope. Issue #86 is a separate umbrella for optional enhanced specs, tools, and workers and is not absorbed into this release.
 
+## Optional Free Claude Code setup
+
+`latchkit tool fcc inspect` is read-only. The optional `preview`, `install`, `start`, `stop`, and `remove` actions are separate and never run during normal Latchkit setup. Installation accepts only the local archive pinned to FCC 5.22.8 commit `c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a` with SHA-256 `7de379974935a29a59419b96665464205ea847f010cbb5684d098edf139686df`; it verifies ZIP members before extraction, stages a private Python environment, and records activation through Latchkit's transaction journal. It does not invoke FCC's installer, edit PATH or shell profiles, configure clients, or read credentials.
+
+An explicit Python 3.14+ runtime and uv 0.11.16+ executable are required. Latchkit does not select a system Python or substitute an older runtime; uv applies the archive's frozen `uv.lock` to the private environment. Existing `~/.fcc` is preserved and reported as attachable; it is not adopted or deleted. A managed start generates an in-memory proxy-authentication token, binds loopback, and disables messaging and paid fallback. Add the NVIDIA NIM key and model through FCC's own Admin UI only. This endpoint is an external tool's security boundary, so Latchkit does not proxy or embed it. FCC is MIT-licensed upstream software; the pinned archive retains its upstream license and notices.
+
 The maintained browser console suite runs API-backed Chromium on Windows. Browser artifacts are disabled by default so screenshots and traces cannot capture session tokens or local project paths. CI explicitly captures and retains only the credential-free acceptance fixture screenshot; browser checks dynamically load Playwright and report missing packages or browser binaries as unsupported.
 
 Provider end-to-end evidence is tracked separately in the [verification matrix](verification/provider-e2e.md). Until an observed, sanitized record exists for a provider/version/OS cell, that cell is **unknown**, not verified support.

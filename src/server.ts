@@ -19,6 +19,14 @@ import { appendEvent, clearDiagnostics } from './diagnostics/logger.js';
 import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
 import { createTaskController } from './runtime/task-controller.js';
+import {
+  inspectFcc,
+  installFcc,
+  previewFccInstall,
+  removeFcc,
+  startFcc,
+  stopFcc,
+} from './managed-tools/fcc.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
 import {
   createDiffAnnotation,
@@ -330,6 +338,24 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           respond(res, 200, await serialize(() => exportSupportBundle(root)));
         } else if (pathname === '/api/diagnostics' && req.method === 'DELETE') {
           respond(res, 200, await serialize(() => clearDiagnostics(root)));
+        } else if (pathname === '/api/tools/fcc' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectFcc());
+        } else if (pathname === '/api/tools/fcc/preview' && req.method === 'POST') {
+          const body = await readJson<{ archive?: string; python?: string; root?: string }>(req);
+          respond(res, 200, await previewFccInstall(body));
+        } else if (pathname === '/api/tools/fcc/install' && req.method === 'POST') {
+          const body = await readJson<{ archive?: string; python?: string; root?: string }>(req);
+          respond(res, 200, await serialize(() => installFcc(body)));
+        } else if (pathname === '/api/tools/fcc/start' && req.method === 'POST') {
+          const body = await readJson<{ root?: string }>(req);
+          respond(res, 200, await serialize(() => startFcc(body)));
+        } else if (pathname === '/api/tools/fcc/stop' && req.method === 'POST') {
+          const body = await readJson<{ root?: string }>(req);
+          respond(res, 200, await serialize(() => stopFcc(body)));
+        } else if (pathname === '/api/tools/fcc' && req.method === 'DELETE') {
+          const body = await readJson<{ root?: string }>(req);
+          respond(res, 200, await serialize(() => removeFcc(body)));
         } else if (pathname === '/api/workflows' && req.method === 'GET') {
           const taskId = requestUrl.searchParams.get('task');
           respond(
