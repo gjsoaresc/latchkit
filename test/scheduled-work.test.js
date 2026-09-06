@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, mkdir, symlink, realpath } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdtemp,
+  rm,
+  readFile,
+  writeFile,
+  mkdir,
+  symlink,
+  realpath,
+} from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -551,3 +560,157 @@ test('large forward clock changes skip missed intervals and repeated unauthorize
   assert.equal(current.runs.length, 1);
   assert.equal(current.enabled, false);
 });
+
+test(
+  'native emitted CLI covers schedule lifecycle including start and cancel',
+  { skip: process.platform !== 'win32' ? 'Native Windows CLI qualification.' : false },
+  async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit CLI schedule é with spaces-'));
+    t.after(async () => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+
+    const cli = path.resolve('dist/src/cli.js');
+    const fakeBin = path.join(root, 'fake provider bin é');
+    const invocationMarker = path.join(root, 'provider-invocations.log');
+    const invocationModule = path.join(fakeBin, 'record-invocation.cjs');
+    await mkdir(fakeBin, { recursive: true });
+    await writeFile(
+      invocationModule,
+      "if (process.argv[1] === '--ask-for-approval') require('node:fs').appendFileSync(process.env.LATCHKIT_PROVIDER_INVOCATIONS, 'invoked\\n');\n",
+    );
+    await copyFile(process.execPath, path.join(fakeBin, 'codex.exe'));
+    const env = {
+      ...process.env,
+      PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+      LATCHKIT_PROVIDER_INVOCATIONS: invocationMarker,
+      NODE_OPTIONS: `--require="${invocationModule.replaceAll('\\', '/')}"`,
+    };
+    const runCli = async (...args) =>
+      executeFile(process.execPath, [cli, ...args], {
+        cwd: root,
+        env,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+        timeout: 10_000,
+      });
+    const readScheduleState = async () =>
+      JSON.parse(await readFile(path.join(root, '.latchkit/schedules/state-v1.json'), 'utf8'));
+    const makeDue = async () => {
+      const state = await readScheduleState();
+      state.schedules[0].nextRunAt = new Date(Date.now() + 5_000).toISOString();
+      await writeFile(
+        path.join(root, '.latchkit/schedules/state-v1.json'),
+        JSON.stringify(state, null, 2),
+      );
+    };
+    const inspect = async (id) =>
+      JSON.parse((await runCli('schedule', 'inspect', '--project', root, '--id', id)).stdout);
+    const waitFor = async (check) => {
+      for (let tries = 0; tries < 400; tries += 1) {
+        const result = await check();
+        if (result) return result;
+        await wait();
+      }
+      assert.fail('CLI scheduler condition did not settle within 10 seconds.');
+    };
+    const stopForeground = async (child) => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await Promise.race([
+        new Promise((resolve) => child.once('close', resolve)),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Foreground CLI did not stop within 10 seconds.')),
+            10_000,
+          ),
+        ),
+      ]);
+    };
+
+    const created = JSON.parse(
+      (
+        await runCli(
+          'schedule',
+          'create',
+          '--project',
+          root,
+          '--provider',
+          'codex',
+          '--prompt',
+          'Inspect only the scoped CLI fixture.',
+          '--scope',
+          'Read only the CLI fixture.',
+          '--reference',
+          'Native Windows qualification',
+          '--every-minutes',
+          '1',
+        )
+      ).stdout,
+    );
+    const id = created.id;
+    assert.equal(
+      JSON.parse((await runCli('schedule', 'list', '--project', root)).stdout).schedules.length,
+      1,
+    );
+    assert.equal((await inspect(id)).id, id);
+    assert.equal(
+      JSON.parse((await runCli('schedule', 'pause', '--project', root, '--id', id)).stdout).enabled,
+      false,
+    );
+    const edited = JSON.parse(
+      (
+        await runCli(
+          'schedule',
+          'edit',
+          '--project',
+          root,
+          '--id',
+          id,
+          '--prompt',
+          'Inspect only the edited CLI fixture.',
+          '--every-minutes',
+          '2',
+          '--expected-revision',
+          '2',
+        )
+      ).stdout,
+    );
+    assert.equal(edited.authorization.executionAuthorized, false);
+    assert.equal(
+      JSON.parse((await runCli('schedule', 'resume', '--project', root, '--id', id)).stdout)
+        .enabled,
+      true,
+    );
+    assert.equal(
+      JSON.parse((await runCli('schedule', 'export', '--project', root)).stdout).schedules[0].id,
+      id,
+    );
+    await makeDue();
+    const blockedStart = spawn(process.execPath, [cli, 'schedule', 'start', '--project', root], {
+      cwd: root,
+      env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    t.after(() => {
+      if (blockedStart.exitCode === null && blockedStart.signalCode === null) blockedStart.kill();
+    });
+    await waitFor(async () => (await inspect(id)).runs[0]?.state === 'blocked');
+    assert.equal(
+      await readFile(invocationMarker, 'utf8').then(
+        () => true,
+        () => false,
+      ),
+      false,
+    );
+    const cancellation = JSON.parse(
+      (await runCli('schedule', 'cancel', '--project', root, '--id', id)).stdout,
+    );
+    assert.equal(cancellation.cancelled, false);
+    await stopForeground(blockedStart);
+    assert.equal(
+      JSON.parse((await runCli('schedule', 'remove', '--project', root, '--id', id)).stdout).removed
+        .id,
+      id,
+    );
+  },
+);
