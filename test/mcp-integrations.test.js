@@ -20,6 +20,7 @@ import { providerById } from '../dist/src/providers/registry.js';
 import { runProviderProcess } from '../dist/src/runtime/process-runner.js';
 const execute = promisify(execFile);
 const cli = path.resolve('dist/src/cli.js');
+const CODEX_VERSION = 'codex-cli 0.153.2';
 const integration = (enabled = true) => ({
   schemaVersion: 1,
   id: 'fixture',
@@ -92,7 +93,11 @@ test('authorization binds exact configuration and runtime policy; unsupported na
     'MCP_TOOL_POLICY_UNSUPPORTED',
   );
   assert.equal(
-    (await planManagedMcp(root, [{ ...initial, providers: ['codex'] }])).diagnostics[0].code,
+    (
+      await planManagedMcp(root, [{ ...initial, providers: ['codex'] }], [], process.env, {
+        versionOutput: CODEX_VERSION,
+      })
+    ).diagnostics[0].code,
     'MCP_RUNTIME_DENIED',
   );
 });
