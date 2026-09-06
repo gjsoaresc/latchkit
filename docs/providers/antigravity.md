@@ -2,7 +2,8 @@
 
 Latchkit exports shared workspace skills and plans bounded `agy -p` sessions.
 Authentication, model choice, workspace trust, and permissions remain owned by
-Antigravity. No provider settings or hooks are installed by this adapter.
+Antigravity. Hook registration is opt-in and project-local; it never changes a
+user's global `settings.json`.
 
 ## Explicit conversation resume
 
@@ -35,11 +36,21 @@ and the original authorization. No configuration or state migration is needed.
 
 ## Capability and verification limits
 
-Official documentation now describes hook input/output contracts, including CLI
-conversation metadata. Hook installation and lifecycle translation remain
-unimplemented here; compaction and normalized usage remain unknown. The
-[shared hooks documentation](https://antigravity.google/docs/hooks) is distinct
-from the IDE-specific hook contract.
+When explicitly enabled through the adapter integration API, Latchkit writes
+only its `latchkit` namespace in `.agents/hooks.json`, plus an owned handler and
+ownership record under `.latchkit/providers/antigravity/`. It preserves all
+other hook namespaces and refuses removal if its own entries or handler were
+edited. Enable, disable, and recovery use the registered-resource transaction
+layer, so interrupted changes remain inspectable and recoverable.
+
+The documented CLI events are `PreToolUse`, `PostToolUse`, `PreInvocation`,
+`PostInvocation`, and `Stop`. The adapter translates only `Stop` into the
+normalized `turn-completed` lifecycle event; the other events are observations.
+It emits only advisory responses: the published hook documentation establishes
+JSON stdin/stdout but does not justify a blocking enforcement response here.
+Malformed payloads, unknown event names, unsupported decisions, and missing
+correlation fields are refused. The [shared hooks documentation](https://antigravity.google/docs/hooks)
+is distinct from the IDE-specific hook contract.
 
 Headless permission denials may return process exit zero. Existing permissions
 must therefore be preserved and acceptance checked independently. The

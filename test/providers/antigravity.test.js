@@ -1,13 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   ANTIGRAVITY_ADAPTER,
+  ANTIGRAVITY_HANDLER_PATH,
+  ANTIGRAVITY_HOOKS_PATH,
+  ANTIGRAVITY_HOOK_EVENTS,
+  ANTIGRAVITY_STATE_PATH,
+  applyAntigravityHookExport,
   inspectAntigravity,
   parseAntigravitySessionIdentity,
   parseAntigravityVersion,
   planAntigravityInvocation,
+  planAntigravityHookExport,
   planAntigravityResume,
+  translateAntigravityLifecycleOutput,
 } from '../../dist/src/providers/antigravity.js';
+
+const temporaryRoot = async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-antigravity-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  return root;
+};
 
 test('Antigravity exposes the documented bounded print-mode contract', () => {
   assert.equal(ANTIGRAVITY_ADAPTER.contract.id, 'antigravity');
@@ -100,7 +116,111 @@ test('Antigravity resumes only an explicit conversation on the evidenced exact v
     'partial',
   );
   assert.equal(ANTIGRAVITY_ADAPTER.contract.capabilities.invocation.state, 'supported');
-  assert.equal(ANTIGRAVITY_ADAPTER.operations.planInstall().supported, false);
+  assert.equal(ANTIGRAVITY_ADAPTER.contract.capabilities.hooks.Stop.state, 'supported');
+});
+
+test('Antigravity hook registration is explicit, reversible, and preserves unrelated settings', async (t) => {
+  const root = await temporaryRoot(t);
+  await fs.mkdir(path.join(root, '.agents'), { recursive: true });
+  const original = `${JSON.stringify({ future: { keep: true }, other: { Stop: [{ command: 'user-hook' }] } }, null, 2)}\n`;
+  await fs.writeFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), original);
+  const preview = await planAntigravityHookExport(root, {
+    enabled: true,
+    nodeExecutable: 'node',
+    platform: 'win32',
+  });
+  assert.equal(preview.configured, true);
+  assert.equal(preview.changes.length, 3);
+  assert.equal(preview.backup.bytes, original);
+  await applyAntigravityHookExport(root, {
+    enabled: true,
+    nodeExecutable: 'node',
+    platform: 'win32',
+  });
+  const installed = JSON.parse(await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8'));
+  assert.deepEqual(installed.future, { keep: true });
+  assert.deepEqual(installed.other, { Stop: [{ command: 'user-hook' }] });
+  assert.deepEqual(Object.keys(installed.latchkit).sort(), [...ANTIGRAVITY_HOOK_EVENTS].sort());
+  assert.match(installed.latchkit.Stop[0].command, /--event Stop/);
+  assert.ok(await fs.readFile(path.join(root, ANTIGRAVITY_HANDLER_PATH), 'utf8'));
+  await applyAntigravityHookExport(root, { enabled: false });
+  // The original document's unrelated content survives, while an empty managed namespace is removed.
+  const removed = JSON.parse(await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8'));
+  assert.deepEqual(removed, {
+    future: { keep: true },
+    other: { Stop: [{ command: 'user-hook' }] },
+  });
+  await assert.rejects(fs.readFile(path.join(root, ANTIGRAVITY_HANDLER_PATH)), /ENOENT/);
+  await assert.rejects(fs.readFile(path.join(root, ANTIGRAVITY_STATE_PATH)), /ENOENT/);
+});
+
+test('Antigravity hook ownership conflicts refuse removal and transaction failures restore bytes', async (t) => {
+  const root = await temporaryRoot(t);
+  await applyAntigravityHookExport(root, {
+    enabled: true,
+    nodeExecutable: 'node',
+    platform: 'win32',
+  });
+  const before = await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8');
+  const edited = JSON.parse(before);
+  edited.latchkit.Stop[0].timeout = 9;
+  await fs.writeFile(
+    path.join(root, ANTIGRAVITY_HOOKS_PATH),
+    `${JSON.stringify(edited, null, 2)}\n`,
+  );
+  await assert.rejects(
+    planAntigravityHookExport(root, { enabled: false }),
+    /local edits or is missing/,
+  );
+  await fs.writeFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), before);
+  await assert.rejects(
+    applyAntigravityHookExport(root, {
+      enabled: false,
+      faultBoundary: async (boundary) => {
+        if (boundary === 'resource:0') throw new Error('injected Antigravity transaction failure');
+      },
+    }),
+    /injected Antigravity transaction failure/,
+  );
+  assert.equal(await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8'), before);
+  assert.ok(await fs.readFile(path.join(root, ANTIGRAVITY_HANDLER_PATH), 'utf8'));
+});
+
+test('Antigravity lifecycle translation is advisory and refuses unsupported decisions and malformed correlation', () => {
+  const translated = ANTIGRAVITY_ADAPTER.operations.translateLifecycleInput(
+    { conversationId: 'conversation-1', toolCall: { name: 'run_command' } },
+    {
+      eventName: 'Stop',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      version: 'unknown',
+      timestamp: 1,
+    },
+  );
+  assert.equal(translated.envelope.kind, 'turn-completed');
+  assert.deepEqual(translated.envelope.decisionModes, ['advisory']);
+  assert.equal(
+    ANTIGRAVITY_ADAPTER.operations.translateLifecycleInput({}, { eventName: 'PreInvocation' })
+      .envelope,
+    null,
+  );
+  assert.deepEqual(translateAntigravityLifecycleOutput('Stop', { decision: 'advisory' }), {});
+  assert.throws(
+    () => ANTIGRAVITY_ADAPTER.operations.translateLifecycleInput({}, { eventName: 'Unknown' }),
+    /Unsupported/,
+  );
+  assert.throws(
+    () => translateAntigravityLifecycleOutput('PreToolUse', { decision: 'deny' }),
+    /not supported/,
+  );
+  assert.throws(
+    () =>
+      ANTIGRAVITY_ADAPTER.operations.translateLifecycleInput(
+        {},
+        { eventName: 'Stop', projectId: 'p', taskId: 't' },
+      ),
+    /sessionId/,
+  );
 });
 
 test('Antigravity version inspection refuses ambiguous and prerelease output', () => {
