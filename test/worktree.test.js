@@ -25,7 +25,8 @@ async function git(root, args) {
 }
 
 async function fixture(t) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit worktrees é '));
+  // Canonicalize so expectations match the paths Git reports (8.3 temp names on CI runners).
+  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit worktrees é ')));
   const root = path.join(base, 'main project 東京');
   await fs.mkdir(root);
   await git(root, ['init']);
