@@ -110,6 +110,17 @@ import {
 } from './projects/service.js';
 import { defaultProjectsRegistryRoot } from './projects/store.js';
 import { errorCode, errorRecord, isRecord } from './types.js';
+import {
+  applyManagedMcp,
+  authorizeManagedMcp,
+  inspectManagedMcp,
+  inspectManagedMcpRecovery,
+  managedMcpSnapshotDigest,
+  planManagedMcp,
+  recoverManagedMcp,
+} from './integrations/mcp/managed.js';
+import { entryHash } from './integrations/mcp/contracts.js';
+import { checkManagedMcpHealth } from './integrations/mcp/health.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
 export const LOCAL_API_VERSION = 1;
@@ -129,6 +140,7 @@ const ASSETS = new Map<string, [string, string]>([
   ['/memory', ['index.html', 'text/html; charset=utf-8']],
   ['/usage', ['index.html', 'text/html; charset=utf-8']],
   ['/settings', ['index.html', 'text/html; charset=utf-8']],
+  ['/mcp', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/docs/managed-fcc.md', ['../../docs/managed-fcc.md', 'text/plain; charset=utf-8']],
@@ -331,6 +343,18 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
   let origin = '';
   let host = '';
   let pendingMutation: Promise<unknown> = Promise.resolve();
+  // Preview IDs are launch-session scoped and bind mutation to the exact reviewed input. They
+  // carry no authorization and expire when this local console exits.
+  const mcpPreviews = new Map<
+    string,
+    {
+      digest: string;
+      snapshotDigest: string;
+      planDigest: string;
+      reviewsActivation: boolean;
+      expiresAt: number;
+    }
+  >();
   const taskController = createTaskController({ root });
   const reviewOrchestrator = createReviewOrchestrator({ root });
   const acceptanceVerifier = createAcceptanceVerifier({ root });
@@ -426,6 +450,92 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
             throw fail(400, 'Send the reviewed planId to apply a sync.');
           const planId = body.planId;
           respond(res, 200, await serialize(() => syncProject(root, { planId })));
+        } else if (pathname === '/api/mcp' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectManagedMcp(root));
+        } else if (pathname === '/api/mcp/preview' && req.method === 'POST') {
+          const body = await readJson<{ definitions?: unknown; reviewActivation?: boolean }>(req);
+          if (!Array.isArray(body.definitions) || body.definitions.length > 64)
+            throw fail(400, 'Send 1–64 MCP definitions as an array.');
+          await pendingMutation;
+          const snapshotDigest = await managedMcpSnapshotDigest(root);
+          const reviewsActivation = body.reviewActivation === true;
+          const grants = authorizeManagedMcp(body.definitions, reviewsActivation);
+          const plan = await planManagedMcp(root, body.definitions, grants);
+          if (snapshotDigest !== (await managedMcpSnapshotDigest(root)))
+            throw fail(409, 'Managed MCP configuration changed during preview. Review it again.');
+          const previewId = randomBytes(24).toString('hex');
+          mcpPreviews.set(previewId, {
+            digest: entryHash(body.definitions),
+            snapshotDigest,
+            planDigest: entryHash(plan),
+            reviewsActivation,
+            expiresAt: Date.now() + 10 * 60 * 1000,
+          });
+          respond(res, 200, { previewId, plan });
+        } else if (pathname === '/api/mcp/apply' && req.method === 'POST') {
+          const body = await readJson<{
+            definitions?: unknown;
+            previewId?: string;
+            authorized?: boolean;
+          }>(req);
+          if (!Array.isArray(body.definitions) || typeof body.previewId !== 'string')
+            throw fail(400, 'Send the exact reviewed definitions and previewId.');
+          const reviewed = mcpPreviews.get(body.previewId);
+          mcpPreviews.delete(body.previewId);
+          if (
+            !reviewed ||
+            reviewed.expiresAt < Date.now() ||
+            reviewed.digest !== entryHash(body.definitions)
+          )
+            throw fail(
+              409,
+              'The MCP preview is missing, expired, or no longer matches. Review it again.',
+            );
+          if (body.authorized !== true)
+            throw fail(400, 'Explicit local activation confirmation is required.');
+          if (!reviewed.reviewsActivation)
+            throw fail(400, 'Review activation implications before applying this MCP definition.');
+          const reviewedDefinitions: unknown[] = body.definitions;
+          respond(
+            res,
+            200,
+            await serialize(async () => {
+              if (reviewed.snapshotDigest !== (await managedMcpSnapshotDigest(root)))
+                throw fail(
+                  409,
+                  'The reviewed MCP preview no longer matches the managed configuration. Review it again.',
+                );
+              return applyManagedMcp(
+                root,
+                reviewedDefinitions,
+                authorizeManagedMcp(reviewedDefinitions, true),
+                {
+                  expectedSnapshotDigest: reviewed.snapshotDigest,
+                  expectedPlanDigest: reviewed.planDigest,
+                },
+              );
+            }),
+          );
+        } else if (pathname === '/api/mcp/remove' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => applyManagedMcp(root, [])));
+        } else if (pathname === '/api/mcp/recovery' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectManagedMcpRecovery(root));
+        } else if (pathname === '/api/mcp/recovery' && req.method === 'POST') {
+          respond(res, 200, await serialize(() => recoverManagedMcp(root)));
+        } else if (pathname === '/api/mcp/health' && req.method === 'POST') {
+          const body = await readJson<{ id?: string; timeoutMs?: number }>(req);
+          if (
+            typeof body.id !== 'string' ||
+            (body.timeoutMs !== undefined && !Number.isInteger(body.timeoutMs))
+          )
+            throw fail(400, 'Send an MCP server ID and an optional whole-number timeout.');
+          respond(
+            res,
+            200,
+            await checkManagedMcpHealth(root, body.id, { timeoutMs: body.timeoutMs }),
+          );
         } else if (pathname === '/api/diagnostics' && req.method === 'GET') {
           await pendingMutation;
           respond(res, 200, await previewSupportBundle(root));

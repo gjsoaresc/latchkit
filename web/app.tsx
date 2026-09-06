@@ -6,6 +6,7 @@ import { ReviewConsole } from './review.js';
 import { MemoryConsolePage } from './memory.js';
 import { UsageConsolePage } from './usage.js';
 import { SettingsConsole } from './settings.js';
+import { McpConsole } from './mcp.js';
 
 /**
  * Issue #90: the console is one bundle (dist/web/app.js) serving several directly addressable
@@ -38,6 +39,8 @@ if (location.hash === '#onboarding' && location.pathname !== '/settings') {
       <UsageConsolePage />
     ) : pathname === '/settings' ? (
       <SettingsConsole />
+    ) : pathname === '/mcp' ? (
+      <McpConsole />
     ) : (
       <OverviewConsole />
     );

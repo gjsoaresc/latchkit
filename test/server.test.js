@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { initProject, readConfig } from '../dist/src/core.js';
+import { initProject, readConfig, syncProject } from '../dist/src/core.js';
 import { startServer } from '../dist/src/server.js';
 import { createTask, resumeTask } from '../dist/src/task-state/service.js';
 import { createTaskWorkspace } from '../dist/src/workspaces/git.js';
@@ -47,6 +47,109 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
+});
+
+test('MCP API preview is inert, apply requires the exact reviewed preview, and unsupported providers stay refused', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  const definition = {
+    schemaVersion: 1,
+    id: 'local-fixture',
+    transport: 'http',
+    endpoint: 'http://127.0.0.1:8765/mcp',
+    providers: ['claude'],
+    scope: 'project',
+    requiredEnvironment: [],
+    enabled: true,
+  };
+  const preview = await fetch(`${origin}/api/mcp/preview`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ definitions: [definition], reviewActivation: true }),
+  });
+  assert.equal(preview.status, 200);
+  const reviewed = await preview.json();
+  assert.equal(reviewed.plan.changes[0].action, 'create');
+  await assert.rejects(readFile(path.join(root, '.mcp.json'), 'utf8'));
+  const stale = await fetch(`${origin}/api/mcp/apply`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      definitions: [{ ...definition, endpoint: 'http://127.0.0.1:9876/mcp' }],
+      previewId: reviewed.previewId,
+      authorized: true,
+    }),
+  });
+  assert.equal(stale.status, 409);
+  const unsupported = await fetch(`${origin}/api/mcp/preview`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      definitions: [{ ...definition, providers: ['codex'] }],
+      reviewActivation: true,
+    }),
+  });
+  assert.equal(unsupported.status, 200);
+  assert.equal((await unsupported.json()).plan.diagnostics[0].code, 'MCP_PROVIDER_UNSUPPORTED');
+});
+
+test('MCP apply refuses stale managed state and a preview that did not review activation', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  await syncProject(root);
+  const alpha = {
+    schemaVersion: 1,
+    id: 'alpha',
+    transport: 'http',
+    endpoint: 'http://127.0.0.1:8765/mcp',
+    providers: ['claude'],
+    scope: 'project',
+    requiredEnvironment: [],
+    enabled: true,
+  };
+  const beta = { ...alpha, id: 'beta', endpoint: 'http://127.0.0.1:8766/mcp' };
+  const post = (route, body) =>
+    fetch(`${origin}/api/mcp/${route}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  const initial = await (
+    await post('preview', { definitions: [alpha], reviewActivation: true })
+  ).json();
+  assert.equal(
+    (await post('apply', { definitions: [alpha], previewId: initial.previewId, authorized: true }))
+      .status,
+    200,
+  );
+  const clientA = await (
+    await post('preview', { definitions: [alpha], reviewActivation: true })
+  ).json();
+  const clientB = await (
+    await post('preview', { definitions: [alpha, beta], reviewActivation: true })
+  ).json();
+  assert.equal(
+    (
+      await post('apply', {
+        definitions: [alpha, beta],
+        previewId: clientB.previewId,
+        authorized: true,
+      })
+    ).status,
+    200,
+  );
+  assert.equal(
+    (await post('apply', { definitions: [alpha], previewId: clientA.previewId, authorized: true }))
+      .status,
+    409,
+  );
+  assert.match(await readFile(path.join(root, '.mcp.json'), 'utf8'), /"beta"/);
+  const inert = await (
+    await post('preview', { definitions: [alpha], reviewActivation: false })
+  ).json();
+  assert.equal(
+    (await post('apply', { definitions: [alpha], previewId: inert.previewId, authorized: true }))
+      .status,
+    400,
+  );
 });
 
 test('usage API is authenticated, opt-in, and returns only normalized local records', async (t) => {

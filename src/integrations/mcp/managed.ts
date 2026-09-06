@@ -284,6 +284,15 @@ export async function planManagedMcp(
 ): Promise<McpPlan> {
   return (await buildPlan(root, values, grants, environment)).plan;
 }
+
+/** Binds a reviewed console plan to the managed resources only. It deliberately excludes
+ * unrelated project files and never exposes configuration bytes to API consumers. */
+export async function managedMcpSnapshotDigest(root: string): Promise<string> {
+  return entryHash({
+    config: await readOptional(root, TARGET),
+    state: await readOptional(root, STATE),
+  });
+}
 export async function applyManagedMcp(
   root: string,
   values: readonly unknown[],
@@ -291,6 +300,8 @@ export async function applyManagedMcp(
   options: {
     environment?: NodeJS.ProcessEnv;
     faultBoundary?: TransactionInput['faultBoundary'];
+    expectedSnapshotDigest?: string;
+    expectedPlanDigest?: string;
   } = {},
 ): Promise<McpPlan> {
   return withProjectLock(root, async () => {
@@ -301,6 +312,17 @@ export async function applyManagedMcp(
         'MCP_PROJECT_UNINITIALIZED',
       );
     const built = await buildPlan(root, values, grants, options.environment ?? process.env);
+    const snapshotDigest = entryHash({ config: built.raw, state: built.stateRaw });
+    if (
+      (options.expectedSnapshotDigest !== undefined &&
+        options.expectedSnapshotDigest !== snapshotDigest) ||
+      (options.expectedPlanDigest !== undefined &&
+        options.expectedPlanDigest !== entryHash(built.plan))
+    )
+      throw new McpContractError(
+        'The reviewed MCP preview no longer matches the managed configuration. Review it again.',
+        'MCP_EDIT_CONFLICT',
+      );
     if (built.plan.diagnostics.length)
       throw Object.assign(
         new McpContractError(
