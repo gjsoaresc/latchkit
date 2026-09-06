@@ -21,10 +21,10 @@ test('workbench renders persisted task state and supports keyboard-safe local me
     await expect(page.getByRole('heading', { name: 'Tasks, recovery, and proof.' })).toBeVisible();
     await expect(page.getByText('Awaiting approval fixture')).toBeVisible();
     await page.getByLabel('Title').fill('Keyboard memory');
-    await page.getByLabel('Record').fill('This record is local and inspectable.');
+    await page.getByLabel('Record', { exact: true }).fill('This record is local and inspectable.');
     await page.getByRole('button', { name: 'Add memory' }).press('Enter');
     await expect(page.getByText('Keyboard memory')).toBeVisible();
-    await page.getByRole('button', { name: 'Delete' }).press('Enter');
+    await page.getByRole('button', { name: 'Delete', exact: true }).press('Enter');
     await expect(page.getByText('No local memory has been captured.')).toBeVisible();
     await page.setViewportSize({ width: 420, height: 800 });
     await expect(

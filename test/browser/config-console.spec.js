@@ -150,6 +150,26 @@ test('persists an accessible dark theme choice', async ({ page }) => {
   await expect(page.locator('html')).toHaveClass(/dark/);
 });
 
+test('local usage stays opt-in and renders unknown totals without suggesting zero spend', async ({
+  page,
+}) => {
+  await open(page);
+  const usage = page.getByRole('region', { name: 'Understand each session.' });
+  await expect(usage.getByText('Collection disabled', { exact: true })).toBeVisible();
+  await expect(usage.getByText('Unknown', { exact: true })).toHaveCount(2);
+  await usage.getByRole('button', { name: 'Enable local collection' }).click();
+  await expect(usage.getByText('Collection enabled', { exact: true })).toBeVisible();
+  await usage.getByLabel('Retention days').fill('7');
+  await usage.getByRole('button', { name: 'Save retention' }).click();
+  await page.reload();
+  await expect(usage.getByLabel('Retention days')).toHaveValue('7');
+  const state = JSON.parse(
+    await readFile(path.join(root, '.latchkit/usage/state-v1.json'), 'utf8'),
+  );
+  expect(state.settings).toEqual({ enabled: true, retentionDays: 7 });
+  expect(state.records).toEqual([]);
+});
+
 test('has no automated accessibility violations in the configured console', async ({ page }) => {
   await open(page);
   const report = await new AxeBuilder({ page }).analyze();

@@ -4,6 +4,7 @@ import { ArrowUpRight, CheckCircle2, CircleDot, ExternalLink, RefreshCw, Save } 
 import { createConsoleStore } from './console-store.js';
 import { exportMemory, MemoryConsole } from './memory.js';
 import { ThemeToggle } from './theme.js';
+import { UsageConsole } from './usage.js';
 import type { ConsoleState } from './types.js';
 import { AcceptanceEvidence, TaskList } from './workbench.js';
 import { WorkflowConsole } from './workflows.js';
@@ -467,6 +468,7 @@ function Console() {
           </div>
           <AcceptanceEvidence tasks={snapshot.workbench?.tasks.tasks ?? []} />
         </section>
+        <UsageConsole />
         <footer>
           <span className="footer-brand">latchkit.</span>
           <span>Built for the way you work.</span>
