@@ -4,7 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readdir, readFile, readlink } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { EVIDENCE_OUTCOMES, TaskStateError, validateStableId } from './contracts.js';
+import {
+  EVIDENCE_OUTCOMES,
+  PLAN_ARTIFACT_PATH_PATTERN,
+  TaskStateError,
+  validateStableId,
+} from './contracts.js';
 import { cleanupTaskStateTemps, readTaskState, writeTaskState } from './store.js';
 import { withTaskStateLock } from './lock.js';
 import type {
@@ -418,13 +423,9 @@ export async function importMarkdownTask(
 ) {
   root = await resolveProjectRoot(root);
   const relative = input.notePath?.replaceAll('\\', '/');
-  if (
-    typeof relative !== 'string' ||
-    !relative.startsWith('.latchkit/notes/') ||
-    !relative.endsWith('.md')
-  ) {
+  if (typeof relative !== 'string' || !PLAN_ARTIFACT_PATH_PATTERN.test(relative)) {
     throw new TaskStateError(
-      'Import path must be a Markdown note under .latchkit/notes/.',
+      'Import path must be a Markdown plan under docs/plans/ or the legacy .latchkit/notes/.',
       'TASK_IMPORT_INVALID',
       '$.notePath',
     );
@@ -497,10 +498,10 @@ async function enhancedArtifact(
   if (
     !input ||
     typeof input.path !== 'string' ||
-    !/^\.latchkit\/notes\/.+\.md$/.test(input.path.replaceAll('\\', '/'))
+    !PLAN_ARTIFACT_PATH_PATTERN.test(input.path.replaceAll('\\', '/'))
   )
     throw new TaskStateError(
-      'Enhanced artifacts must be Markdown notes under .latchkit/notes/.',
+      'Enhanced artifacts must be Markdown plans under docs/plans/ or the legacy .latchkit/notes/.',
       'TASK_ENHANCED_WORKFLOW_INVALID',
       `${field}.path`,
     );
@@ -1173,3 +1174,12 @@ export {
   EVIDENCE_OUTCOMES,
   TaskStateError,
 } from './contracts.js';
+export {
+  isDurablePlanPath,
+  LEGACY_NOTE_DIRECTORY,
+  migrateLegacyPlan,
+  PLAN_DIRECTORY,
+  resolveCollisionSafePlanPath,
+  slugifyPlanTitle,
+} from './plans.js';
+export type { PlanMigrationResult } from './plans.js';

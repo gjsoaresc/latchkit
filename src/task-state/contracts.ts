@@ -140,6 +140,13 @@ const ID_PATTERN =
   /^(project|task|run|criterion|checkpoint|evidence|authorization|owner|event)_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
+/**
+ * Durable plans (PRDs and technical plans) default to collision-safe filenames under
+ * `docs/plans/`. Reads continue to accept the legacy `.latchkit/notes/` location so existing
+ * registered artifacts remain valid without an implicit migration. See docs/task-state.md.
+ */
+export const PLAN_ARTIFACT_PATH_PATTERN = /^(?:docs\/plans|\.latchkit\/notes)\/.+\.md$/;
+
 export class TaskStateError extends Error {
   code: string;
   path: string;
@@ -447,9 +454,9 @@ function validateImport(value: TaskImport | null, path: string) {
 function validateEnhancedArtifact(value: EnhancedArtifact, path: string) {
   keys(value, ['path', 'sha256', 'templateVersion'], ['path', 'sha256', 'templateVersion'], path);
   const artifactPath = string(value.path, `${path}.path`);
-  if (!/^\.latchkit\/notes\/.+\.md$/.test(artifactPath))
+  if (!PLAN_ARTIFACT_PATH_PATTERN.test(artifactPath))
     throw new TaskStateError(
-      'Enhanced artifacts must be Markdown notes under .latchkit/notes/.',
+      'Enhanced artifacts must be Markdown plans under docs/plans/ or the legacy .latchkit/notes/.',
       'TASK_STATE_INVALID',
       `${path}.path`,
     );

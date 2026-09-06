@@ -9,7 +9,7 @@ Preserve the information another session needs to continue the user's task witho
 
 ## Prepare a handoff
 
-Read current project instructions and inspect the actual working state. Record branch or revision when available, changed files, relevant existing notes, running commands or services that still matter, and checks already performed. Identify unrelated user changes so the next agent can preserve them.
+Read current project instructions and inspect the actual working state. Record branch or revision when available, changed files, relevant existing notes, running commands or services that still matter, and checks already performed. Identify unrelated user changes so the next agent can preserve them. If a durable plan exists, it is normally under `docs/plans/` (or the legacy `.latchkit/notes/` for older tasks); point to it instead of restating it.
 
 Write `.latchkit/notes/<unique-task-slug>-handoff.md`, or provide it inline when writes are disallowed. Keep the note focused on:
 
