@@ -117,6 +117,7 @@ export async function buildBundle({
       );
     }
     const dependencies = await dependencyPackages(app);
+    const browserDependencies = await json(path.join(app, 'dist/web/licenses/manifest.json'));
     const nodeUrl = `https://nodejs.org/dist/v${pins.nodeVersion}/${pin.archive}`;
     const response = await fetch(nodeUrl, { signal: AbortSignal.timeout(120_000) });
     if (!response.ok) throw new Error(`Node download failed: HTTP ${response.status}`);
@@ -153,6 +154,12 @@ export async function buildBundle({
         path: 'runtime',
       },
       ...dependencies.map((item) => ({ ...item, path: `app/${item.path}` })),
+      ...browserDependencies.map(({ name, version, license, path: location }) => ({
+        name,
+        version,
+        license,
+        path: `app/${location}`,
+      })),
     ];
     const licenses = [];
     for (const file of await inventory(bundle))

@@ -40,6 +40,23 @@ installation, failed-upgrade preservation, rollback, and uninstall retention.
 A release is not qualified until the corresponding evidence files are reviewed
 for the exact archive bytes.
 
+For a reproducible synthetic performance record against an extracted or installed
+candidate, run the benchmark harness from that candidate's private Node runtime.
+Pass its sibling `app` directory and a separate evidence filename:
+
+```powershell
+& 'C:\\candidate\\runtime\\node.exe' .\\scripts\\benchmarks.js `
+  --app 'C:\\candidate\\app' `
+  --output '.github\\release-evidence\\rc2\\benchmarks-standalone.json'
+```
+
+An installed version uses the same layout beneath `versions\\<version>-win32-x64`.
+The harness verifies the local embedded manifest, clean commit, app receipts, and
+private runtime binding before it imports application modules or runs a sample. It
+does not assert an archive name or checksum; use the release artifact verifier for
+archive-byte qualification. Without `--app`, `npm run benchmark:baseline` retains
+the development-compiled-tree baseline and its default output path.
+
 Dispatch a preparation run with `publish: false`. For a subsequent version,
 set `prior_run_id` to the completed preparation run for its predecessor. This
 downloads the exact prior Windows archive and proves installation, upgrade,

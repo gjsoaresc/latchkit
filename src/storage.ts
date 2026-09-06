@@ -89,12 +89,21 @@ export async function writeAtomic(
   relative: string,
   content: string | Uint8Array,
   mode = 0o600,
+  {
+    faultBoundary,
+  }: {
+    faultBoundary?: (
+      boundary: string,
+      detail: { temporary?: string; target: string },
+    ) => Promise<void>;
+  } = {},
 ): Promise<void> {
   const target = await safePath(root, relative);
   const directory = path.dirname(target);
   await mkdir(directory, { recursive: true });
   await safePath(root, relative);
   const temporary = `${target}.${randomUUID()}.tmp`;
+  let failed = false;
   try {
     const handle = await open(temporary, 'wx', mode);
     try {
@@ -103,13 +112,40 @@ export async function writeAtomic(
     } finally {
       await handle.close();
     }
-    await rename(temporary, target);
+    await faultBoundary?.('prepared', { temporary, target });
+    const delays = [10, 20, 40, 80, 160, 320, 500, 500];
+    for (let attempt = 0; ; attempt += 1) {
+      // A short-lived Windows reader/scanner must not force delete-then-write.
+      // Recheck both paths after waiting so a new junction is still refused.
+      if (attempt > 0) {
+        await safePath(root, relative);
+        await safePath(root, path.relative(root, temporary).split(path.sep).join('/'));
+      }
+      try {
+        await rename(temporary, target);
+        break;
+      } catch (error) {
+        const delay = delays[attempt];
+        if (
+          process.platform !== 'win32' ||
+          delay === undefined ||
+          !['EPERM', 'EACCES', 'EBUSY'].includes(errorCode(error) ?? '')
+        )
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+    await faultBoundary?.('committed', { target });
     await syncDirectory(directory);
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
     try {
+      if (failed) await safePath(root, path.relative(root, temporary).split(path.sep).join('/'));
       await unlink(temporary);
     } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error;
+      if (!failed && errorCode(error) !== 'ENOENT') throw error;
     }
   }
 }

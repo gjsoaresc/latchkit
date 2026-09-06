@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
-import { verifyEmbeddedArchive, verifyReleaseArtifacts } from '../scripts/release-artifacts.js';
+import {
+  prepareReleaseArtifacts,
+  stageWindowsBootstrap,
+  verifyEmbeddedArchive,
+  verifyReleaseArtifacts,
+} from '../scripts/release-artifacts.js';
 
 const run = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '..');
@@ -379,6 +384,107 @@ test('release preparation refuses a mismatched tag before building', async () =>
     run(process.execPath, ['scripts/release-artifacts.js', '--tag', 'v99.0.0'], { cwd: root }),
     /does not match package version/,
   );
+});
+
+test('Windows release staging creates, reuses, and protects install.ps1', async (t) => {
+  const output = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bootstrap-stage-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const expected = await readFile(path.join(root, 'install.ps1'));
+
+  await stageWindowsBootstrap(output, 'win32-x64');
+  assert.deepEqual(await readFile(path.join(output, 'install.ps1')), expected);
+
+  await stageWindowsBootstrap(output, 'win32-x64');
+  assert.deepEqual(await readFile(path.join(output, 'install.ps1')), expected);
+
+  const conflicting = Buffer.from('user-authored bootstrap');
+  await writeFile(path.join(output, 'install.ps1'), conflicting);
+  await assert.rejects(
+    stageWindowsBootstrap(output, 'win32-x64'),
+    /differs from the reviewed install\.ps1/,
+  );
+  assert.deepEqual(await readFile(path.join(output, 'install.ps1')), conflicting);
+});
+
+test('release preparation stages a missing output directory before building with the native target', async (t) => {
+  if (process.platform !== 'win32' || process.arch !== 'x64') return t.skip('Windows x64 staging');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bootstrap-prepare-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, 'new output', 'Unicode é');
+  const expected = await readFile(path.join(root, 'install.ps1'));
+  let builds = 0;
+  const result = await prepareReleaseArtifacts({ output, version: '1.2.3' }, async (options) => {
+    builds += 1;
+    assert.deepEqual(options, { output, version: '1.2.3', target: 'win32-x64' });
+    assert.deepEqual(await readFile(path.join(output, 'install.ps1')), expected);
+    return { archive: 'fixture.zip' };
+  });
+  assert.equal(builds, 1);
+  assert.deepEqual(result, { archive: 'fixture.zip' });
+});
+
+test('bootstrap conflicts stop preparation before changing existing artifacts', async (t) => {
+  const output = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bootstrap-conflict-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const files = new Map([
+    ['install.ps1', 'user-authored bootstrap'],
+    ['existing.zip', 'existing archive'],
+    ['notes.txt', 'unrelated user file'],
+  ]);
+  for (const [name, bytes] of files) await writeFile(path.join(output, name), bytes);
+  let builds = 0;
+  await assert.rejects(
+    prepareReleaseArtifacts({ output, version: '1.2.3', target: 'win32-x64' }, async () => {
+      builds += 1;
+    }),
+    /differs from the reviewed install\.ps1/,
+  );
+  assert.equal(builds, 0);
+  for (const [name, bytes] of files)
+    assert.equal(await readFile(path.join(output, name), 'utf8'), bytes);
+});
+
+test('release preparation rejects a non-regular bootstrap before building', async (t) => {
+  const output = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bootstrap-directory-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const destination = path.join(output, 'install.ps1');
+  await mkdir(destination);
+  await writeFile(path.join(destination, 'notes.txt'), 'retained');
+  let builds = 0;
+  await assert.rejects(
+    prepareReleaseArtifacts({ output, version: '1.2.3', target: 'win32-x64' }, async () => {
+      builds += 1;
+    }),
+    /regular file/,
+  );
+  assert.equal(builds, 0);
+  assert.equal(await readFile(path.join(destination, 'notes.txt'), 'utf8'), 'retained');
+});
+
+test('release preparation refuses even an identical bootstrap symlink', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bootstrap-link-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const output = path.join(directory, 'output');
+  await mkdir(output);
+  const canonical = await readFile(path.join(root, 'install.ps1'));
+  const referent = path.join(directory, 'user-bootstrap.ps1');
+  await writeFile(referent, canonical);
+  try {
+    await symlink(referent, path.join(output, 'install.ps1'), 'file');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOSYS'].includes(error.code))
+      return t.skip('symbolic links are unavailable');
+    throw error;
+  }
+  let builds = 0;
+  await assert.rejects(
+    prepareReleaseArtifacts({ output, version: '1.2.3', target: 'win32-x64' }, async () => {
+      builds += 1;
+    }),
+    /regular file/,
+  );
+  assert.equal(builds, 0);
+  assert.deepEqual(await readFile(referent), canonical);
 });
 
 test('embedded archive verification rejects mismatched metadata and untracked delivered files', async (t) => {

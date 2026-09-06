@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -137,4 +138,99 @@ test('shows a useful message when the session token expires', async ({ page }) =
   );
   await page.goto(url);
   await expect(page.getByRole('alert')).toContainText('session key has expired');
+});
+
+test('persists an accessible dark theme choice', async ({ page }) => {
+  await open(page);
+  await page.getByRole('button', { name: 'Theme: system' }).click();
+  await page.getByRole('menuitemradio', { name: 'Dark' }).click();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Theme: dark' })).toBeVisible();
+  await expect(page.locator('html')).toHaveClass(/dark/);
+});
+
+test('local usage stays opt-in and renders unknown totals without suggesting zero spend', async ({
+  page,
+}) => {
+  await open(page);
+  const usage = page.getByRole('region', { name: 'Understand each session.' });
+  await expect(usage.getByText('Collection disabled', { exact: true })).toBeVisible();
+  await expect(usage.getByText('Unknown', { exact: true })).toHaveCount(2);
+  await usage.getByRole('button', { name: 'Enable local collection' }).click();
+  await expect(usage.getByText('Collection enabled', { exact: true })).toBeVisible();
+  await usage.getByLabel('Retention days').fill('7');
+  await usage.getByRole('button', { name: 'Save retention' }).click();
+  await page.reload();
+  await expect(usage.getByLabel('Retention days')).toHaveValue('7');
+  const state = JSON.parse(
+    await readFile(path.join(root, '.latchkit/usage/state-v1.json'), 'utf8'),
+  );
+  expect(state.settings).toEqual({ enabled: true, retentionDays: 7 });
+  expect(state.records).toEqual([]);
+});
+
+test('keeps optional FCC controls bounded to explicit inspection and lifecycle actions', async ({
+  page,
+}) => {
+  const absent = {
+    apiVersion: 1,
+    tool: { version: '5.22.8' },
+    state: 'absent',
+    active: null,
+    lifecycle: null,
+  };
+  const managed = { ...absent, state: 'managed' };
+  let inspections = 0;
+  await page.route('**/api/tools/fcc**', async (route) => {
+    const request = route.request();
+    if (request.url().endsWith('/start')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          apiVersion: 1,
+          action: 'started',
+          active: { state: 'running', adminUrl: 'http://127.0.0.1:8082/admin' },
+        }),
+      });
+      return;
+    }
+    if (request.url().endsWith('/stop')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ apiVersion: 1, action: 'stopped' }),
+      });
+      return;
+    }
+    inspections += 1;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(inspections === 1 ? absent : managed),
+    });
+  });
+  await open(page);
+  const tool = page.getByRole('region', { name: 'Free Claude Code.' });
+  const guide = await page.request.get(new URL('/docs/managed-fcc.md', page.url()).href);
+  expect(guide.status()).toBe(200);
+  expect(await guide.text()).toContain('latchkit tool fcc install');
+  await expect(tool).toContainText('FCC is not installed');
+  await expect(tool.getByRole('button', { name: 'Start server' })).toBeDisabled();
+  await tool.getByRole('button', { name: 'Refresh' }).click();
+  await expect(tool).toContainText('Ready to start');
+  await expect(tool.getByRole('button', { name: 'Start server' })).toBeEnabled();
+  await tool.getByRole('button', { name: 'Start server' }).click();
+  await expect(tool).toContainText('Running and ready');
+  await expect(tool.getByRole('link', { name: /Open Admin/ })).toHaveAttribute(
+    'href',
+    'http://127.0.0.1:8082/admin',
+  );
+  await tool.getByRole('button', { name: 'Stop server' }).click();
+  await expect(tool).toContainText('Ready to start');
+  expect(inspections).toBe(2);
+});
+
+test('has no automated accessibility violations in the configured console', async ({ page }) => {
+  await open(page);
+  const report = await new AxeBuilder({ page }).analyze();
+  expect(report.violations).toEqual([]);
 });

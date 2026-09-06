@@ -5,8 +5,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isDeepStrictEqual, promisify } from 'node:util';
+import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
+import {
+  validateWorkflowProviderOptions,
+  workflowProviderInnerArgs,
+  workflowProviderInvocation,
+} from './workflow-evidence-options.js';
+import { fixtureGitScopeProof, workflowFailureEvidence } from './workflow-evidence-proof.js';
+import { compareWorkflowChecks, fixturePlanScopeProof } from './workflow-plan-proof.js';
 
 const run = promisify(execFile);
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
@@ -130,45 +137,10 @@ async function writeFixture(root) {
   await writeFile(path.join(root, '.gitignore'), '.latchkit/\n');
 }
 
-function exactJson(left, right) {
-  return isDeepStrictEqual(left, right);
-}
-
-function reportBlockedWorkflow(record) {
-  console.error(
-    JSON.stringify({
-      kind: 'workflow-qualification-blocked',
-      phase: record.phase,
-      status: record.status,
-      lastOutcome: record.lastOutcome,
-      repairAttempts: record.repairAttempts,
-      actions: record.completedActions.map(({ phase, status }) => ({ phase, status })),
-    }),
-  );
-}
-
-function planFitsFixtureScope(value) {
-  const text = value.toLowerCase();
-  if (!text.includes('multiply') || !text.includes('src/calculator.js')) return false;
-  const protectedMutation =
-    /\b(?:modify|edit|change|rewrite|replace|delete|remove|create|add|install|update|commit)\b/;
-  const protectedTarget =
-    /requirements\.md|test\/calculator\.test\.js|package\.json|dependenc|\bgit\b|\bnpm\b|network/;
-  const negated =
-    /\b(?:do not|don't|never|without|avoid|unchanged|immutable|read-only|not modify|not edit|not change|no changes?)\b/;
-  return !text
-    .split(/(?<=[.!?])\s+|\n+/)
-    .some(
-      (sentence) =>
-        protectedMutation.test(sentence) &&
-        protectedTarget.test(sentence) &&
-        !negated.test(sentence),
-    );
-}
-
 async function inner(values) {
   const bundle = path.resolve(required(values.bundle, '--bundle'));
   const output = path.resolve(required(values.output, '--output'));
+  const attemptId = required(values['attempt-id'], '--attempt-id');
   const archiveSha256 = required(values['archive-sha256'], '--archive-sha256');
   const app = path.join(bundle, 'app');
   const privateNode = path.join(
@@ -196,12 +168,19 @@ async function inner(values) {
   const { createTask, inspectTask } = await import(moduleAt('dist/src/task-state/service.js'));
   const { runProviderProcess } = await import(moduleAt('dist/src/runtime/process-runner.js'));
   const { validateAcceptanceDocument } = await import(moduleAt('dist/src/acceptance/contracts.js'));
+  const { configureUsage, inspectUsage } = await import(moduleAt('dist/src/usage/service.js'));
 
   const base = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-workflow-inner-'));
   const root = path.join(base, 'fixture');
   const providerEvents = [];
+  const processStarts = { inference: 0, versionProbe: 0, acceptance: 0 };
+  const inferenceSessionIds = new Set();
   let controller;
   const startedAt = iso();
+  let stage = 'fixture-setup';
+  let workflow;
+  let planDiagnostics;
+  let failureCategory;
   try {
     await mkdir(root);
     await writeFixture(root);
@@ -210,6 +189,16 @@ async function inner(values) {
     await git(root, ['config', 'user.email', 'qualification@example.invalid']);
     await git(root, ['add', '-A']);
     await git(root, ['commit', '-m', 'fixture: accepted failing multiply requirement']);
+    const fixtureHead = (await git(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    if (values['collect-usage']) await configureUsage(root, { enabled: true, retentionDays: 30 });
+    const protectedPaths = (await git(root, ['ls-files', '-z'])).stdout
+      .split('\0')
+      .filter((name) => name && name !== 'src/calculator.js');
+    const protectedFiles = new Map(
+      await Promise.all(
+        protectedPaths.map(async (name) => [name, sha256(await readFile(path.join(root, name)))]),
+      ),
+    );
 
     const immutable = {
       requirements: sha256(await readFile(path.join(root, 'REQUIREMENTS.md'))),
@@ -245,17 +234,38 @@ async function inner(values) {
         },
       ],
     });
-    const launch = (options = {}) =>
-      runProviderProcess({
-        ...options,
+    const launch = async (options = {}) => {
+      const kind =
+        options.provider?.id !== 'codex'
+          ? 'acceptance'
+          : options.plan?.args?.length === 1 && options.plan.args[0] === '--version'
+            ? 'versionProbe'
+            : 'inference';
+      const result = await runProviderProcess({
+        ...workflowProviderInvocation(options, values),
         timeoutMs: Math.min(options.timeoutMs ?? 120_000, 120_000),
         outputLimitBytes: Math.min(options.outputLimitBytes ?? 1024 * 1024, 1024 * 1024),
         onEvent: (event) => {
           options.onEvent?.(event);
           providerEvents.push(event.type);
+          if (event.type === 'process-start') processStarts[kind] += 1;
         },
       });
+      if (kind === 'inference') {
+        for (const line of (result.stdout ?? '').split(/\r?\n/)) {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'thread.started' && typeof event.thread_id === 'string')
+              inferenceSessionIds.add(event.thread_id);
+          } catch {
+            /* Non-JSON provider output is not usage evidence. */
+          }
+        }
+      }
+      return result;
+    };
     controller = createWorkflowController({ root, launch });
+    stage = 'requirements-plan';
     const started = await controller.run({
       taskId: task.id,
       providerId: 'codex',
@@ -266,23 +276,25 @@ async function inner(values) {
         'Implement only multiply in src/calculator.js for the accepted immutable REQUIREMENTS.md and test/calculator.test.js. Do not change any other file, dependency, configuration, test, or requirement. The supplied acceptance document is the only permitted check. Requirements, plan, and handoff are read-only phases. Return the workflow JSON shape exactly in every reasoning phase.',
     });
     const proposed = await controller.wait(started.taskId);
+    workflow = proposed;
     if (proposed.status !== 'awaiting-approval' || !proposed.requirements || !proposed.plan) {
-      reportBlockedWorkflow(proposed);
       throw new Error(`Workflow did not reach exact-plan approval: ${proposed.status}.`);
     }
-    if (!exactJson(proposed.plan.checks, exactChecks)) {
-      console.error(
-        JSON.stringify({
-          kind: 'workflow-qualification-checks-changed',
-          expected: exactChecks,
-          proposed: proposed.plan.checks,
-        }),
-      );
+    stage = 'plan-scope';
+    planDiagnostics = {
+      checks: compareWorkflowChecks(exactChecks, proposed.plan.checks),
+      scope: fixturePlanScopeProof(proposed.plan.artifact),
+    };
+    if (!planDiagnostics.checks.equal) {
+      failureCategory = 'plan-checks-mismatch';
       throw new Error('Generated plan changed the narrow predeclared acceptance document.');
     }
-    if (!planFitsFixtureScope(proposed.plan.artifact))
+    if (!planDiagnostics.scope.fits) {
+      failureCategory = 'plan-artifact-scope-mismatch';
       throw new Error('Generated plan does not fit the narrow approved fixture scope.');
+    }
 
+    stage = 'implementation-verification';
     await controller.approve({
       taskId: proposed.taskId,
       expectedRevision: proposed.revision,
@@ -294,8 +306,8 @@ async function inner(values) {
       mutationId: `event_${randomUUID()}`,
     });
     const completed = await controller.wait(proposed.taskId);
+    workflow = completed;
     if (completed.status !== 'verified' || completed.phase !== 'handoff') {
-      reportBlockedWorkflow(completed);
       throw new Error(`Workflow did not reach verified handoff: ${completed.status}.`);
     }
     const packagedPolicyDigest = policy_artifact_digest([
@@ -310,12 +322,30 @@ async function inner(values) {
       throw new Error('Requirements changed during workflow execution.');
     if (sha256(await readFile(path.join(root, 'test', 'calculator.test.js'))) !== immutable.tests)
       throw new Error('Accepted tests changed during workflow execution.');
+    stage = 'final-acceptance';
     const finalCheck = await command(privateNode, ['--test'], {
       cwd: root,
       allowFailure: true,
       timeoutMs: 30_000,
     });
     if (finalCheck.exitCode !== 0) throw new Error('Final private-Node acceptance check failed.');
+    stage = 'final-git-scope';
+    // Read protected bytes independently of Git's assume-unchanged/index flags.
+    for (const [name, digest] of protectedFiles)
+      if (sha256(await readFile(path.join(root, name))) !== digest)
+        throw new Error('Protected fixture bytes changed outside the approved implementation.');
+    const paths = (result) => result.stdout.split('\0').filter(Boolean);
+    const gitScope = fixtureGitScopeProof({
+      beforeHead: fixtureHead,
+      afterHead: (await git(root, ['rev-parse', 'HEAD'])).stdout.trim(),
+      changedPaths: paths(await git(root, ['diff', '--name-only', '-z', fixtureHead, '--'])),
+      untrackedPaths: [
+        ...paths(await git(root, ['ls-files', '--others', '--exclude-standard', '-z'])),
+        ...paths(
+          await git(root, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z']),
+        ),
+      ],
+    });
 
     const phases = completed.completedActions.map((action) => ({
       kind: action.kind,
@@ -339,9 +369,37 @@ async function inner(values) {
     if (!review || !handoff?.artifact.trim())
       throw new Error('Independent review or handoff artifact is missing.');
 
+    stage = 'usage-observation';
+    let usageEvidence = null;
+    if (values['collect-usage']) {
+      const usage = await inspectUsage(root);
+      if (
+        !usage.settings.enabled ||
+        inferenceSessionIds.size !== processStarts.inference ||
+        [...inferenceSessionIds].some(
+          (id) => !usage.records.some((record) => record.sessionId === id),
+        ) ||
+        usage.records.length < processStarts.inference ||
+        usage.records.some((record) => record.taskId !== task.id) ||
+        usage.summary.unavailable > 0
+      )
+        throw new Error('Opted-in workflow usage did not cover every inference invocation.');
+      usageEvidence = {
+        enabled: true,
+        ...usage.summary,
+        billing: usage.billing,
+        providers: [...new Set(usage.records.map((record) => record.provider))],
+        providerVersions: [...new Set(usage.records.map((record) => record.providerVersion))],
+        sources: [...new Set(usage.records.map((record) => record.source))],
+        allRecordsBelongToTask: true,
+        everyInferenceSessionRecorded: true,
+      };
+    }
+
     const evidence = {
       schemaVersion: 1,
       kind: 'live-workflow-qualification',
+      attemptId,
       startedAt,
       finishedAt: iso(),
       candidate: {
@@ -355,7 +413,8 @@ async function inner(values) {
       provider: {
         id: 'codex',
         version: (await command('codex', ['--version'])).stdout.trim(),
-        modelOverride: null,
+        modelOverride: values.model ?? null,
+        reasoningEffortOverride: values['reasoning-effort'] ?? null,
         settingsPreserved: true,
       },
       bounds: {
@@ -363,7 +422,9 @@ async function inner(values) {
         totalTimeoutMs: 900_000,
         outputLimitBytes: 1024 * 1024,
         providerProcessStarts: providerEvents.filter((event) => event === 'process-start').length,
+        processStarts,
       },
+      usage: usageEvidence,
       workflow: {
         workflowId: completed.workflowId,
         taskId: completed.taskId,
@@ -392,10 +453,35 @@ async function inner(values) {
         independentReview: 'passed',
         handoff: 'present',
         taskState: inspected.task.state,
+        gitScope,
       },
     };
+    stage = 'write-evidence';
     await mkdir(path.dirname(output), { recursive: true });
     await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+  } catch (error) {
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(
+      output,
+      `${JSON.stringify(
+        workflowFailureEvidence({
+          attemptId,
+          startedAt,
+          finishedAt: iso(),
+          stage,
+          failureCategory,
+          planDiagnostics,
+          candidate: { ...manifest, archiveSha256 },
+          provider: values,
+          workflow,
+          providerProcessStarts: providerEvents.filter((event) => event === 'process-start').length,
+        }),
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    throw error;
   } finally {
     await controller?.shutdown().catch(() => {});
     await rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -411,11 +497,33 @@ async function outer(values) {
   const archiveSha256 = required(values['artifact-sha256'], '--artifact-sha256');
   if (!/^[a-f0-9]{64}$/.test(archiveSha256))
     throw new Error('--artifact-sha256 must be a lowercase SHA-256 digest.');
-  if (sha256(await readFile(archive)) !== archiveSha256)
-    throw new Error('The supplied archive does not match --artifact-sha256.');
   const output = path.resolve(required(values.output, '--output'));
-  const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-workflow-'));
+  if (output === archive) throw new Error('Evidence output must differ from the input archive.');
+  const attemptId = randomUUID();
+  const startedAt = iso();
+  let stage = 'archive-validation';
+  let scratch;
+  const failure = () =>
+    workflowFailureEvidence({
+      attemptId,
+      startedAt,
+      finishedAt: iso(),
+      stage,
+      candidate: { archiveSha256 },
+      provider: values,
+      providerProcessStarts: stage === 'archive-validation' ? 0 : null,
+    });
   try {
+    if (sha256(await readFile(archive)) !== archiveSha256)
+      throw new Error('The supplied archive does not match --artifact-sha256.');
+    stage = 'private-runtime';
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(
+      output,
+      `${JSON.stringify({ ...failure(), kind: 'live-workflow-qualification-attempt', status: 'running', finishedAt: null }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-workflow-'));
     const bundle = path.join(scratch, 'extracted-bundle');
     await extract(archive, bundle, scratch);
     const privateNode = path.join(
@@ -435,25 +543,55 @@ async function outer(values) {
         output,
         '--provider',
         'codex',
+        '--attempt-id',
+        attemptId,
+        ...workflowProviderInnerArgs(values),
       ],
       900_000,
     );
+  } catch (error) {
+    let existing;
+    try {
+      existing = JSON.parse(await readFile(output, 'utf8'));
+    } catch {
+      /* No completed inner failure evidence. */
+    }
+    if (
+      existing?.kind !== 'live-workflow-qualification-failure' ||
+      existing.attemptId !== attemptId
+    ) {
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(failure(), null, 2)}\n`, { mode: 0o600 });
+    }
+    throw error;
   } finally {
-    await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (scratch)
+      await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
-const { values } = parseArgs({
+const parsed = parseArgs({
   options: {
     authorized: { type: 'boolean' },
     provider: { type: 'string', default: 'codex' },
+    model: { type: 'string' },
+    'reasoning-effort': { type: 'string' },
+    'collect-usage': { type: 'boolean' },
     output: { type: 'string' },
     artifact: { type: 'string' },
     'artifact-sha256': { type: 'string' },
     inner: { type: 'boolean' },
     bundle: { type: 'string' },
     'archive-sha256': { type: 'string' },
+    'attempt-id': { type: 'string' },
   },
 });
 
-await (values.inner ? inner(values) : outer(values));
+const values = validateWorkflowProviderOptions(parsed.values);
+
+await (values.inner ? inner(values) : outer(values)).catch(() => {
+  console.error(
+    'Live workflow qualification failed. Inspect the sanitized evidence at the supplied output path.',
+  );
+  process.exitCode = 1;
+});

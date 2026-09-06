@@ -20,6 +20,8 @@ Migration validates again under the mutation lock, writes the exact prior config
 
 Pack upgrades are deliberate: change the selected pack source/version, review `sync --dry-run`, then sync. Checksums prove copied-byte integrity, not publisher identity. An edited managed destination blocks either upgrade or rollback and is preserved for manual review.
 
+For immutable Git packs, run `latchkit pack fetch --id <pack-id>` after changing the pinned commit and before the preview. The source cache records the repository, resolved commit, declared files, and exact hashes. Moving a branch or tag has no effect because Latchkit fetches the configured object ID only. Git sources must attest an original author and `MIT` license; Latchkit does not execute pack content, hooks, package installers, or pushes. A local edit to a managed pack resource is treated as a team customization: it remains in place and blocks the upgrade or rollback until the team reconciles it. Supporting resources below `skills/<skill-name>/` are owned and removed with the same rules as `SKILL.md`.
+
 ## Roll back configuration or the CLI
 
 Automatic downgrade is not supported. Stop Latchkit, preserve the newer configuration, restore a reviewed backup atomically to `.latchkit/config.json`, run `latchkit config`, and preview sync before applying it. To roll back the CLI, install a known package version and repeat the same preview:

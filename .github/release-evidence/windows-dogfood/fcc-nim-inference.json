@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "kind": "fcc-nim-inference-qualification",
+  "status": "passed",
+  "observedAt": "2026-09-06T17:05:28.127Z",
+  "platform": "win32",
+  "release": "10.0.26200",
+  "arch": "x64",
+  "node": "v24.20.0",
+  "fcc": {
+    "version": "5.22.8",
+    "sourceCommit": "c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a",
+    "origin": "http://127.0.0.1:8082",
+    "upstreamOrigin": "https://integrate.api.nvidia.com",
+    "namespace": "nvidia_nim",
+    "route": "/v1/messages"
+  },
+  "installedLatchkit": {
+    "version": "1.0.0-dogfood.20260906.3",
+    "commit": "d6ee85d8aff58c3159aaaca2b5aa7c83f8dcc509"
+  },
+  "priorCredentialGate": "fcc-nim-inference-attempt-0.json",
+  "configuration": {
+    "configuredPrivatelyThroughFccAdmin": true,
+    "nimKeyConfigured": true,
+    "model": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+    "originalInstalledModelRestored": true,
+    "fallbackModels": [],
+    "fallbackSettingProcessOwned": true,
+    "claudeTierOverrides": [],
+    "nimProxyConfigured": false,
+    "proxyAuthenticationEnabled": true,
+    "messagingEnabled": false,
+    "restartRequired": false,
+    "credentialValuesRetainedInEvidence": false
+  },
+  "bounds": {
+    "maxOutputTokensPerAttempt": 32,
+    "callerDeadlineMs": 60000,
+    "callerRetries": 0,
+    "modelFallbacks": 0,
+    "upstreamRetryPolicyAttempts": 5,
+    "cumulativeGeneratedTokensBound": null
+  },
+  "execution": {
+    "adminMutationsSubmitted": 2,
+    "logicalInferenceRequestsSubmitted": 2,
+    "clientRetries": 0,
+    "upstreamPhysicalRequests": null,
+    "note": "Admin Apply may start non-generating model discovery. FCC can retry same-model inference internally; physical upstream request counts were not captured."
+  },
+  "attempts": [
+    {
+      "observedAt": "2026-09-06T17:03:18.134Z",
+      "requestedModel": "nvidia_nim/meta/llama-3.1-8b-instruct",
+      "httpStatus": 410,
+      "latencyMs": 138.59,
+      "exactMarker": false,
+      "responseModel": null,
+      "stopReason": null,
+      "usage": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "source": "FCC Anthropic-compatible response; not independently observed upstream billing"
+      },
+      "status": "failed",
+      "failure": {
+        "code": "INFERENCE_HTTP_FAILED"
+      }
+    },
+    {
+      "observedAt": "2026-09-06T17:05:28.127Z",
+      "requestedModel": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+      "httpStatus": 200,
+      "latencyMs": 564.958,
+      "exactMarker": true,
+      "responseModel": "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 27,
+        "outputTokens": 8,
+        "cacheReadInputTokens": null,
+        "cacheCreationInputTokens": null,
+        "source": "FCC Anthropic-compatible response; not independently observed upstream billing"
+      },
+      "status": "passed"
+    }
+  ],
+  "finalUsage": {
+    "inputTokens": 27,
+    "outputTokens": 8,
+    "cacheReadInputTokens": null,
+    "cacheCreationInputTokens": null,
+    "source": "FCC Anthropic-compatible response; not independently observed upstream billing"
+  },
+  "finalLatencyMs": 564.958,
+  "billing": null,
+  "limitations": [
+    "HTTP 410 was observed for Llama 3.1 8B; the response body was not retained, so retirement or another cause is not asserted.",
+    "Admin Apply is configuration evidence, not credential authentication; the successful inference provides authentication evidence.",
+    "The 32-token request cap applies per physical attempt, not to aggregate retries or all subsequent sessions.",
+    "The 60-second caller deadline cannot establish immediate cancellation at the remote service.",
+    "Usage is reported by FCC; no independent NVIDIA billing or free-tier balance was observed.",
+    "This qualifies one model and a synthetic response on this Windows installation, not general model availability or autonomous coding."
+  ],
+  "claudeAgentEvidence": "fcc-nim-claude-read.json",
+  "sources": [
+    "https://docs.api.nvidia.com/nim/reference/llm-apis",
+    "https://docs.api.nvidia.com/nim/reference/meta-llama-3_1-8b-infer",
+    "https://github.com/Alishahryar1/free-claude-code/tree/c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a"
+  ]
+}

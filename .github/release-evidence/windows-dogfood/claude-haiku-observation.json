@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-06T13:38:54.3330769Z",
+  "sourceCommit": "336c7a929fce7b5c84db8d03efe4ff1f9a38084d",
+  "platform": "win32-x64",
+  "osVersion": "10.0.26200.0",
+  "installedRuntime": "v24.20.0",
+  "provider": "claude",
+  "providerVersion": "2.1.258",
+  "model": "claude-haiku-4-5-20251001",
+  "status": "exited",
+  "exitCode": 0,
+  "outcome": "Provider supplied a proposed fix; provider permissions refused file edits. Orchestrator implemented and tested the fix.",
+  "usage": {
+    "input_tokens": 172,
+    "cache_creation_input_tokens": 30653,
+    "cache_read_input_tokens": 787835,
+    "output_tokens": 7153,
+    "output_tokens_details": {
+      "thinking_tokens": 2701
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 30653,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 8,
+        "output_tokens": 507,
+        "cache_read_input_tokens": 47049,
+        "cache_creation_input_tokens": 1043,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 1043
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 1407,
+      "outputTokens": 7167,
+      "cacheReadInputTokens": 787835,
+      "cacheCreationInputTokens": 30653,
+      "webSearchRequests": 0,
+      "costUSD": 0.1773315,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "thinkingTokens": 2701,
+      "canonicalModel": "claude-haiku-4-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "reportedListPriceUsd": 0.1773315,
+  "billedCost": "unknown; Claude Max subscription",
+  "timeoutMs": 240000,
+  "configuredApiBudgetUsd": 1,
+  "actualProviderVerification": "Observed installed task-controller invocation and response only; full delivery workflow not qualified",
+  "archiveSha256": "4246492eb9b52c9900a9d9efd67a32f27dc163550784676d0c9b9c4ab55de955"
+}

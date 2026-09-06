@@ -7,6 +7,7 @@ import { readOptional, removeFile, safePath, statIfExists, writeAtomic } from '.
 export const JOURNAL_PATH = '.latchkit/transaction.json';
 const MANIFEST_PATH = '.latchkit/manifest.json';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RESOURCE_BATCH_SIZE = 16;
 
 export interface ResourceDescriptor {
   id: string;
@@ -140,6 +141,25 @@ function sameSnapshot(left: Snapshot, right: Snapshot): boolean {
       (left.bytes === (right as SnapshotPresent).bytes &&
         left.sha256 === (right as SnapshotPresent).sha256))
   );
+}
+
+async function mapInBatches<T, Result>(
+  values: readonly T[],
+  operation: (value: T) => Promise<Result>,
+): Promise<Result[]> {
+  const results: Result[] = [];
+  for (let start = 0; start < values.length; start += RESOURCE_BATCH_SIZE) {
+    const batch = values.slice(start, start + RESOURCE_BATCH_SIZE);
+    // Recovery must not race an operation that is still publishing a file.
+    // Drain the complete batch before propagating any failure to rollback.
+    const completed = await Promise.allSettled(batch.map(operation));
+    const failure = completed.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    for (const result of completed) {
+      if (result.status === 'fulfilled') results.push(result.value);
+    }
+  }
+  return results;
 }
 
 async function restoreSnapshot(root: string, relative: string, state: Snapshot): Promise<void> {
@@ -347,11 +367,12 @@ export async function recoverTransaction(
 
 export async function applyRegisteredTransaction(
   root: string,
-  { operation, registry, changes, manifest, faultBoundary = async () => {} }: TransactionInput,
+  { operation, registry, changes, manifest, faultBoundary }: TransactionInput,
 ): Promise<{ transactionId: string }> {
   if ((await readOptional(root, JOURNAL_PATH)) !== null)
     throw new Error('An interrupted transaction requires latchkit recover before mutation.');
-  const resources: JournalResource[] = [];
+  const pending: Array<{ descriptor: Readonly<ResourceDescriptor>; change: TransactionChange }> =
+    [];
   const seen = new Set<string>();
   for (const change of changes) {
     const descriptor = registry.get(change.resourceId);
@@ -359,15 +380,22 @@ export async function applyRegisteredTransaction(
     if (seen.has(change.resourceId))
       throw new Error(`Duplicate transaction resource: ${change.resourceId}.`);
     seen.add(change.resourceId);
-    const before = await snapshot(root, descriptor.path);
+    pending.push({ descriptor, change });
+  }
+  const beforeStates = await mapInBatches(pending, async ({ descriptor }) =>
+    snapshot(root, descriptor.path),
+  );
+  const resources: JournalResource[] = pending.map(({ descriptor, change }, index) => {
+    const before = beforeStates[index];
+    if (!before) throw new Error(`Missing transaction snapshot: ${descriptor.path}`);
     const mode = before.exists ? before.mode : (change.mode ?? 0o600);
-    resources.push({
+    return {
       resourceId: descriptor.id,
       path: descriptor.path,
       before,
       after: desiredSnapshot(change.bytes, mode),
-    });
-  }
+    };
+  });
   const manifestBefore = await snapshot(root, MANIFEST_PATH);
   const manifestAfter = desiredSnapshot(
     Buffer.from(manifest),
@@ -382,19 +410,28 @@ export async function applyRegisteredTransaction(
     resources,
   };
   await writeAtomic(root, JOURNAL_PATH, `${JSON.stringify(journal, null, 2)}\n`);
-  await faultBoundary('journal', journal);
+  await faultBoundary?.('journal', journal);
   try {
-    for (let index = 0; index < resources.length; index += 1) {
-      const entry = resources[index];
-      if (!entry) continue;
-      const actual = await snapshot(root, entry.path);
-      if (!sameSnapshot(actual, entry.before))
-        throw new Error(`File changed during transaction: ${entry.path}`);
-      await restoreSnapshot(root, entry.path, entry.after);
-      await faultBoundary(`resource:${index}`, journal);
+    if (faultBoundary) {
+      for (let index = 0; index < resources.length; index += 1) {
+        const entry = resources[index];
+        if (!entry) continue;
+        const actual = await snapshot(root, entry.path);
+        if (!sameSnapshot(actual, entry.before))
+          throw new Error(`File changed during transaction: ${entry.path}`);
+        await restoreSnapshot(root, entry.path, entry.after);
+        await faultBoundary(`resource:${index}`, journal);
+      }
+    } else {
+      await mapInBatches(resources, async (entry) => {
+        const actual = await snapshot(root, entry.path);
+        if (!sameSnapshot(actual, entry.before))
+          throw new Error(`File changed during transaction: ${entry.path}`);
+        await restoreSnapshot(root, entry.path, entry.after);
+      });
     }
     await restoreSnapshot(root, MANIFEST_PATH, manifestAfter);
-    await faultBoundary('manifest', journal);
+    await faultBoundary?.('manifest', journal);
     await removeFile(root, JOURNAL_PATH);
     return { transactionId: journal.transactionId };
   } catch (error) {

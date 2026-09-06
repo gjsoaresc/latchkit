@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProviderAdapter } from '../dist/src/providers/contracts.js';
+import { ANTIGRAVITY_ADAPTER } from '../dist/src/providers/antigravity.js';
 import { createTask } from '../dist/src/task-state/service.js';
 import { createTaskController, readTaskSessions } from '../dist/src/runtime/task-controller.js';
+import { configureUsage, inspectUsage } from '../dist/src/usage/service.js';
 
 const evidence = (state = 'supported') => ({
   state,
@@ -69,6 +71,33 @@ async function fixture(t) {
   return { root, task };
 }
 
+test('opt-in usage probes the installed version without counting the probe as inference', async (t) => {
+  const { root, task } = await fixture(t);
+  await configureUsage(root, { enabled: true });
+  let calls = 0;
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['claude', adapter('claude')]]),
+    launch: async ({ timeoutMs, onEvent }) => {
+      calls++;
+      if (timeoutMs === 5000)
+        return { status: 'exited', exitCode: 0, stdout: '2.1.258 (Claude Code)\n' };
+      onEvent({ type: 'process-start', pid: 1234 });
+      return {
+        status: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({ type: 'result', usage: { input_tokens: 12, output_tokens: 3 } }),
+      };
+    },
+  });
+  await controller.start({ taskId: task.id, providerId: 'claude', executionAuthorized: true });
+  const usage = await inspectUsage(root);
+  assert.equal(calls, 2);
+  assert.equal(usage.records.length, 1);
+  assert.equal(usage.records[0].providerVersion, '2.1.258');
+  assert.equal(usage.summary.tokens.input, 12);
+});
+
 test('controller starts one owned session, redacts results, and never treats exit as acceptance', async (t) => {
   const { root, task } = await fixture(t);
   const controller = createTaskController({
@@ -123,6 +152,168 @@ test('controller extracts the resumable Codex thread identity from JSONL output'
   });
   assert.equal(result.session.providerSessionId, 'thread-provider-session');
   assert.equal((await readTaskSessions(root))[0].providerSessionId, 'thread-provider-session');
+});
+
+test('controller records the Antigravity conversation ID and resumes it after a bounded version probe', async (t) => {
+  const { root, task } = await fixture(t);
+  const conversationId = '055a398f-db14-4c5f-abbb-1bf03f8120a7';
+  const plans = [];
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['antigravity', ANTIGRAVITY_ADAPTER]]),
+    launch: async ({ plan, timeoutMs, outputLimitBytes }) => {
+      plans.push(plan);
+      if (plan.args[0] === '--version') {
+        assert.equal(timeoutMs, 5000);
+        assert.equal(outputLimitBytes, 4096);
+        return { status: 'exited', exitCode: 0, stdout: 'Antigravity CLI 1.1.27\n' };
+      }
+      return {
+        status: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          conversation_id: conversationId,
+          status: 'SUCCESS',
+          response: 'Fixture only.',
+        }),
+      };
+    },
+  });
+  const started = await controller.start({
+    taskId: task.id,
+    providerId: 'antigravity',
+    executionAuthorized: true,
+  });
+  assert.equal(started.session.providerSessionId, conversationId);
+  assert.equal(started.task.state, 'blocked');
+  const resumed = await controller.resume({
+    taskId: task.id,
+    sessionId: started.session.id,
+    prompt: 'next',
+    executionAuthorized: true,
+  });
+  assert.equal(resumed.session.providerSessionId, conversationId);
+  assert.equal(resumed.task.state, 'blocked');
+  assert.equal(plans.length, 4);
+  assert.deepEqual(plans[3].args, [
+    '-p',
+    'next',
+    '--output-format',
+    'json',
+    '--conversation',
+    conversationId,
+  ]);
+});
+
+test('controller refuses Antigravity resume after a version change without running the prompt', async (t) => {
+  const { root, task } = await fixture(t);
+  let versionResult = { status: 'exited', exitCode: 0, stdout: '1.1.27' };
+  let turns = 0;
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['antigravity', ANTIGRAVITY_ADAPTER]]),
+    launch: async ({ plan }) => {
+      if (plan.args[0] === '--version') return versionResult;
+      turns += 1;
+      return {
+        status: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          conversation_id: '055a398f-db14-4c5f-abbb-1bf03f8120a7',
+          status: 'SUCCESS',
+          response: 'Fixture.',
+        }),
+      };
+    },
+  });
+  const started = await controller.start({
+    taskId: task.id,
+    providerId: 'antigravity',
+    executionAuthorized: true,
+  });
+  for (const probe of [
+    { status: 'exited', exitCode: 0, stdout: '1.1.28' },
+    { status: 'exited', exitCode: 1, stdout: '1.1.27' },
+    { status: 'output-limit', stdout: '1.1.27' },
+    { status: 'timed-out' },
+    { status: 'spawn-failed' },
+  ]) {
+    versionResult = probe;
+    await assert.rejects(
+      controller.resume({
+        taskId: task.id,
+        sessionId: started.session.id,
+        executionAuthorized: true,
+      }),
+      { code: 'CAPABILITY_UNAVAILABLE' },
+    );
+  }
+  assert.equal(turns, 1);
+  assert.equal((await controller.inspect(task.id)).task.revision, started.task.revision);
+  assert.equal((await readTaskSessions(root)).length, 1);
+});
+
+test('controller does not adopt an Antigravity identity from unknown, denied or incomplete output', async (t) => {
+  for (const [version, processResult] of [
+    ['1.1.28', { status: 'exited', exitCode: 0 }],
+    ['1.1.27', { status: 'output-limit', exitCode: 0 }],
+    ['1.1.27', { status: 'exited', exitCode: 1 }],
+    ['1.1.27', { status: 'cancelled', exitCode: 0 }],
+    ['1.1.27', { status: 'exited', exitCode: 0, stdout: '{"conversation_id":' }],
+    [
+      '1.1.27',
+      {
+        status: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          conversation_id: '055a398f-db14-4c5f-abbb-1bf03f8120a7',
+          status: 'SUCCESS',
+          response: 'Denied.',
+          denied_actions: ['command'],
+        }),
+      },
+    ],
+  ]) {
+    const { root, task } = await fixture(t);
+    const controller = createTaskController({
+      root,
+      adapters: new Map([['antigravity', ANTIGRAVITY_ADAPTER]]),
+      launch: async ({ plan }) =>
+        plan.args[0] === '--version'
+          ? { status: 'exited', exitCode: 0, stdout: version }
+          : {
+              stdout: JSON.stringify({
+                conversation_id: '055a398f-db14-4c5f-abbb-1bf03f8120a7',
+                status: 'SUCCESS',
+                response: 'Fixture.',
+              }),
+              sessionId: 'unvalidated-fallback',
+              ...processResult,
+            },
+    });
+    const started = await controller.start({
+      taskId: task.id,
+      providerId: 'antigravity',
+      executionAuthorized: true,
+    });
+    assert.equal(started.session.providerSessionId, null);
+    assert.notEqual(started.task.state, 'verified');
+  }
+});
+
+test('unauthorized Antigravity execution performs no version probe', async (t) => {
+  const { root, task } = await fixture(t);
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['antigravity', ANTIGRAVITY_ADAPTER]]),
+    launch: async () => assert.fail('Unauthorized requests must not launch even a version probe.'),
+  });
+  await assert.rejects(controller.start({ taskId: task.id, providerId: 'antigravity' }), {
+    code: 'EXECUTION_AUTHORIZATION_REQUIRED',
+  });
+  await assert.rejects(controller.resume({ taskId: task.id, sessionId: 'unknown' }), {
+    code: 'EXECUTION_AUTHORIZATION_REQUIRED',
+  });
 });
 
 test('controller cancellation reaches only its live child and late events cannot resurrect task', async (t) => {

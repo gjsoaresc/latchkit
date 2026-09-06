@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "archive": "latchkit-1.0.0-dogfood.20260906.3-win32-x64.zip",
+  "sha256": "12a057584630b30b8188c70280b3727d28a8bc96635c4d4f77a1a43dd83794c8",
+  "target": "win32-x64",
+  "node": "v24.20.0",
+  "qualificationOS": "Windows 11 Pro",
+  "qualificationVersion": "10.0.26200",
+  "runtime": "native",
+  "upgradeKind": "exact-prior-archive",
+  "prior": {
+    "archive": "latchkit-1.0.0-dogfood.20260906.1-win32-x64.zip",
+    "sha256": "76639da0cc748eefdba4db7e7ce03121fcc8427559258ddc9efac486fa1177a9",
+    "version": "1.0.0-dogfood.20260906.1"
+  },
+  "systemToolchains": "absent from PATH",
+  "stableHookDurations": [
+    {
+      "phase": "after-upgrade",
+      "version": "1.0.0-dogfood.20260906.3-win32-x64",
+      "durationMs": 338
+    },
+    {
+      "phase": "after-rollback",
+      "version": "1.0.0-dogfood.20260906.1-win32-x64",
+      "durationMs": 325
+    },
+    {
+      "phase": "after-restore",
+      "version": "1.0.0-dogfood.20260906.3-win32-x64",
+      "durationMs": 343
+    },
+    {
+      "phase": "after-uninstall",
+      "version": "1.0.0-dogfood.20260906.3-win32-x64",
+      "durationMs": 323
+    }
+  ],
+  "checks": [
+    "compiled workflow policy async exit",
+    "CLI",
+    "UI/API",
+    "hooks",
+    "stable hook dispatch before/after rollback/uninstall",
+    "spaces/Unicode",
+    "installation",
+    "failed-upgrade preservation",
+    "rollback selection",
+    "uninstall retention",
+    "local archive bootstrap",
+    "exact prior archive upgrade and rollback"
+  ]
+}

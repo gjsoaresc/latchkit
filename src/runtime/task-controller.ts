@@ -1,12 +1,16 @@
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { validateCommandPlan, validateLifecycleEnvelope } from '../providers/contracts.js';
 import type { LifecycleEnvelope, ProviderContract } from '../providers/contracts.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
 import { codexAdapter } from '../providers/codex.js';
-import { ANTIGRAVITY_ADAPTER } from '../providers/antigravity.js';
+import {
+  ANTIGRAVITY_ADAPTER,
+  parseAntigravitySessionIdentity,
+  parseAntigravityVersion,
+} from '../providers/antigravity.js';
 import { cursorIdeAdapter } from '../providers/cursor-ide.js';
 import { cursorCliAdapter } from '../providers/cursor-cli.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from './process-runner.js';
@@ -26,6 +30,9 @@ import {
 } from '../task-state/service.js';
 import { withTaskStateLock } from '../task-state/lock.js';
 import type { Task } from '../task-state/contracts.js';
+import { recordProviderUsage } from '../usage/service.js';
+import { readUsageState } from '../usage/store.js';
+import { writeAtomic } from '../storage.js';
 
 export const TASK_SESSION_PATH = '.latchkit/tasks/sessions-v1.json';
 const SESSION_SCHEMA_VERSION = 1;
@@ -148,15 +155,7 @@ async function readSessions(root: string): Promise<SessionDocument> {
 }
 
 async function writeSessions(root: string, document: SessionDocument): Promise<void> {
-  const destination = path.join(root, TASK_SESSION_PATH);
-  await mkdir(path.dirname(destination), { recursive: true });
-  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, destination);
-  } finally {
-    await unlink(temporary).catch(() => {});
-  }
+  await writeAtomic(root, TASK_SESSION_PATH, `${JSON.stringify(document, null, 2)}\n`, 0o600);
 }
 
 function resultSummary(result: ProcessRunResult) {
@@ -184,7 +183,16 @@ function jsonRecords(value: unknown): Array<Record<string, unknown>> {
   return records;
 }
 
-function providerSessionIdentity(providerId: string, result: ProcessRunResult): string | null {
+function providerSessionIdentity(
+  providerId: string,
+  result: ProcessRunResult,
+  providerVersion?: string | null,
+  expectedSessionId?: string | null,
+): string | null {
+  if (providerId === 'antigravity') {
+    if (result.status !== 'exited' || result.exitCode !== 0) return null;
+    return parseAntigravitySessionIdentity(result.stdout, { providerVersion, expectedSessionId });
+  }
   if (typeof result?.sessionId === 'string' && result.sessionId.trim()) return result.sessionId;
   const records = jsonRecords(result?.stdout);
   if (providerId === 'codex') {
@@ -199,7 +207,7 @@ function providerSessionIdentity(providerId: string, result: ProcessRunResult): 
     );
     return (completed?.session_id as string | undefined) ?? null;
   }
-  if (providerId === 'antigravity' || providerId === 'cursor-cli') {
+  if (providerId === 'cursor-cli') {
     const correlated = records.find((record) => typeof record.session_id === 'string');
     return (correlated?.session_id as string | undefined) ?? null;
   }
@@ -268,6 +276,32 @@ export function createTaskController({
     const before = await inspectTask(root, taskId);
     if (before.task.state === 'cancelled')
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');
+    // Version inspection is a bounded, model-free command only inside an
+    // explicitly authorized start/resume. Re-probe on resume after upgrades.
+    let providerVersion: string | null = null;
+    const usageEnabled =
+      ['claude', 'codex'].includes(providerId) &&
+      (await readUsageState(root)
+        .then((state) => state.settings.enabled)
+        .catch(() => false));
+    if (providerId === 'antigravity' || usageEnabled) {
+      const version = await launch({
+        provider,
+        plan: { executable: provider.command, args: ['--version'], cwd: root },
+        executionProfile,
+        timeoutMs: 5000,
+        outputLimitBytes: 4096,
+      });
+      if (version.status === 'exited' && version.exitCode === 0)
+        providerVersion =
+          providerId === 'antigravity'
+            ? parseAntigravityVersion(version.stdout)
+            : (version.stdout
+                ?.trim()
+                .match(
+                  /^(?:(?:codex(?:-cli)?|claude)\s+)?v?(\d+\.\d+\.\d+)(?:\s+\(Claude Code\))?$/i,
+                )?.[1] ?? null);
+    }
     const planResult = resumeSession
       ? adapter.operations.planResume({
           sessionId: resumeSession.providerSessionId,
@@ -275,6 +309,7 @@ export function createTaskController({
           cwd: root,
           sandbox,
           approvalPolicy,
+          ...(providerId === 'antigravity' ? { providerVersion } : {}),
         })
       : adapter.operations.planInvocation({
           prompt: prompt ?? before.task.title,
@@ -326,6 +361,8 @@ export function createTaskController({
       await save(session);
       const abort = new AbortController();
       ACTIVE.set(key(root, taskId), { abort, sessionId: session.id, runId });
+      let pendingEventWrite: Promise<void> = Promise.resolve();
+      let eventWriteFailure: { error: unknown } | undefined;
       try {
         const processResult = await launch({
           provider,
@@ -341,11 +378,36 @@ export function createTaskController({
               platform: process.platform,
             };
             session.updatedAt = now();
-            void save(session);
+            // Observe rejection immediately and retain the drain promise. A
+            // failed ownership write must stop this child, not escape globally.
+            pendingEventWrite = save(structuredClone(session)).then(
+              () => {},
+              (error: unknown) => {
+                eventWriteFailure ??= { error };
+                abort.abort();
+              },
+            );
           },
         });
+        await pendingEventWrite;
         session.providerSessionId =
-          providerSessionIdentity(providerId, processResult) ?? session.providerSessionId;
+          providerSessionIdentity(
+            providerId,
+            processResult,
+            providerVersion,
+            session.providerSessionId,
+          ) ?? session.providerSessionId;
+        // This is deliberately local and opt-in. The recorder parses only bounded
+        // documented result lines and never launches a provider or reads transcripts.
+        await recordProviderUsage(root, {
+          provider: providerId,
+          providerVersion,
+          sourceEventId: session.runId,
+          taskId,
+          sessionId: session.providerSessionId,
+          output: processResult.stdout ?? '',
+        }).catch(() => {});
+        if (eventWriteFailure) throw eventWriteFailure.error;
         session.state = processResult.status === 'cancelled' ? 'cancelled' : 'finished';
         session.result = resultSummary(processResult);
         session.updatedAt = now();
@@ -361,6 +423,7 @@ export function createTaskController({
         }
         return { task: (await inspectTask(root, taskId)).task, session, process: processResult };
       } finally {
+        await pendingEventWrite;
         ACTIVE.delete(key(root, taskId));
       }
     } finally {

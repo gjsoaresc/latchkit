@@ -22,6 +22,8 @@ test('operator documentation keeps executable CLI examples on the supported surf
   for (const command of ['init', 'doctor', 'config', 'sync', 'ui', 'remove']) {
     assert.match(text, new RegExp(`latchkit ${command}\\b`));
   }
-  assert.match(text, /npm install --global latchkit/);
+  assert.match(text, /install\.ps1/);
+  assert.match(text, /bundle includes private Node\.js/);
+  assert.doesNotMatch(text, /npm install --global latchkit/);
   assert.match(text, /Node\.js 22/);
 });

@@ -25,6 +25,7 @@ import { validateCommandPlan } from '../providers/contracts.js';
 import { createReviewOrchestrator } from '../reviews/orchestrator.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../runtime/process-runner.js';
 import type { ProcessRunResult } from '../runtime/process-runner.js';
+import { isUsageVersionProbe, observeProviderInvocation } from '../usage/observe.js';
 import {
   cancelTask,
   captureSource,
@@ -501,6 +502,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         reason: 'Reviewer provider identity is missing.',
       };
     try {
+      if (isUsageVersionProbe(input)) return launch(input);
       return launch({ ...input, plan: enforceReadOnlyPlan(providerId, input.plan) });
     } catch (error) {
       return {
@@ -716,11 +718,19 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
     const pending = await journal(record, action, ownerId, actionContext);
     try {
       const plan = invocationPlan(adapter, action.phase, action.prompt, root);
-      const result = await launch({
-        provider: adapter.contract,
-        plan,
-        executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
-        signal: abort.signal,
+      const result = await observeProviderInvocation({
+        root,
+        providerId: record.providerId,
+        taskId: record.taskId,
+        invocationId: pending.actionId,
+        launch,
+        clock,
+        input: {
+          provider: adapter.contract,
+          plan,
+          executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
+          signal: abort.signal,
+        },
       });
       if (result.status !== 'exited' || result.exitCode !== 0)
         throw new WorkflowError(

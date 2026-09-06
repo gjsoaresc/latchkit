@@ -1225,3 +1225,343 @@ footer {
     transition: none !important;
   }
 }
+
+/* React/shadcn console tokens. The existing editorial layout deliberately remains the foundation. */
+:root {
+  --background: #f6f5f0;
+  --foreground: #172b38;
+  --card: #fcfcf8;
+  --card-foreground: #172b38;
+  --popover: #fcfcf8;
+  --popover-foreground: #172b38;
+  --primary: #172b38;
+  --primary-foreground: #fff;
+  --accent: #e6eadd;
+  --accent-foreground: #26644e;
+  --border: #e0e3dc;
+  --input: #d3dac9;
+  --destructive: #a84a34;
+  --destructive-foreground: #fff;
+}
+
+html.dark {
+  color-scheme: dark;
+  --ink: #edf2ee;
+  --muted: #a8b6b1;
+  --line: #2d3c3e;
+  --green: #a9d2a9;
+  --mint: #233432;
+  --paper: #172224;
+  --background: #101718;
+  --foreground: #edf2ee;
+  --card: #172224;
+  --card-foreground: #edf2ee;
+  --popover: #1c292b;
+  --popover-foreground: #edf2ee;
+  --primary: #dcebd4;
+  --primary-foreground: #172224;
+  --accent: #263939;
+  --accent-foreground: #e0f0db;
+  --border: #314345;
+  --input: #496062;
+  --destructive: #dc846d;
+  --destructive-foreground: #1b1614;
+  background: var(--background);
+}
+
+html.dark body,
+html.dark .workspace-card,
+html.dark .summary-card,
+html.dark .provider-card,
+html.dark .skill-card,
+html.dark .sync-toolbar,
+html.dark .plan-panel,
+html.dark .task-card,
+html.dark .memory-card,
+html.dark .evidence-row {
+  background: var(--card);
+  color: var(--foreground);
+}
+
+html.dark .provider-card:hover,
+html.dark .skill-card:hover,
+html.dark .nav-item:hover,
+html.dark .button-secondary:hover:not(:disabled),
+html.dark [data-slot='dropdown-menu-radio-item']:focus {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+html.dark .provider-card:has(input:checked),
+html.dark .skill-card:has(input:checked),
+html.dark .nav-item.active {
+  background: #263d37;
+  border-color: #517b68;
+}
+
+html.dark .button-primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+html.dark .button-primary:hover:not(:disabled) {
+  background: #bfd5b7;
+}
+
+html.dark .button-secondary,
+html.dark .memory-form input,
+html.dark .memory-form select,
+html.dark .memory-form textarea,
+html.dark [data-slot='input'],
+html.dark [data-slot='native-select'],
+html.dark [data-slot='textarea'] {
+  background: #142022;
+  color: var(--foreground);
+  border-color: var(--input);
+}
+
+html.dark .notice {
+  background: #183128;
+  color: #cce7d2;
+  border-color: #477c5b;
+}
+
+html.dark .notice-error,
+html.dark .conflicts {
+  background: #3a241f;
+  color: #ffd6c9;
+  border-color: #8b5142;
+}
+
+html.dark .section-note,
+html.dark .provider-card code,
+html.dark .skill-directory,
+html.dark .workspace-card code,
+html.dark .topbar,
+html.dark footer {
+  color: var(--muted);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+[data-slot='button'] svg {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+[data-slot='input'],
+[data-slot='native-select'],
+[data-slot='textarea'] {
+  font: inherit;
+}
+
+[data-slot='dropdown-menu-content'] {
+  z-index: 50;
+  min-width: 10rem;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 20%);
+}
+
+[data-slot='dropdown-menu-radio-item'] {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 12px 7px 30px;
+  position: relative;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+[data-slot='dropdown-menu-radio-item']:focus {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.startup {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  gap: 8px;
+  padding: 24px;
+}
+
+.startup h1,
+.startup p {
+  margin: 0;
+}
+
+/* Keep compact metadata legible at the small sizes used by the original console. */
+:root {
+  --muted: #506066;
+}
+
+.sidebar-caption,
+.version,
+.topbar,
+.slash,
+.eyebrow,
+.mini-label,
+.summary-card > div > span,
+.section-heading .eyebrow,
+.subtle-tag,
+.detection,
+.skill-directory,
+.section-note,
+.skill-description,
+.sync-toolbar > p {
+  color: #506066;
+}
+
+.workspace-card > code,
+.workspace-meta,
+.button-secondary {
+  color: #405c50;
+}
+
+.provider-symbol {
+  color: #34484a;
+}
+
+.provider-claude .provider-symbol {
+  color: #7a422f;
+}
+
+.provider-antigravity .provider-symbol {
+  color: #435c9a;
+}
+
+.detection.is-detected {
+  color: #21643f;
+}
+
+.nav-item,
+footer,
+.footer-brand,
+.footer-right {
+  color: #506066;
+}
+
+html.dark .sidebar-caption,
+html.dark .version,
+html.dark .topbar,
+html.dark .slash,
+html.dark .eyebrow,
+html.dark .mini-label,
+html.dark .summary-card > div > span,
+html.dark .section-heading .eyebrow,
+html.dark .subtle-tag,
+html.dark .detection,
+html.dark .skill-directory,
+html.dark .section-note,
+html.dark .skill-description,
+html.dark .sync-toolbar > p,
+html.dark .workspace-card > code,
+html.dark .workspace-meta,
+html.dark .button-secondary {
+  color: var(--muted);
+}
+
+html.dark .nav-item,
+html.dark footer,
+html.dark .footer-brand,
+html.dark .footer-right {
+  color: var(--muted);
+}
+
+.fcc-card {
+  padding: 20px;
+}
+
+.fcc-status,
+.fcc-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fcc-status {
+  justify-content: space-between;
+}
+
+.fcc-status strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+}
+
+.fcc-state {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.fcc-state.is-running {
+  border-color: #5c9a73;
+  color: #21643f;
+}
+
+.fcc-card > .section-note {
+  margin: 15px 0 0;
+}
+
+.fcc-error {
+  margin: 14px 0 0;
+  color: var(--destructive);
+  font-size: 13px;
+}
+
+.fcc-actions {
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.fcc-guide {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #405c50;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fcc-guide svg {
+  width: 13px;
+}
+
+html.dark .fcc-guide {
+  color: var(--accent-foreground);
+}
+
+html.dark .fcc-state.is-running {
+  border-color: #6baf7d;
+  color: #a9d2a9;
+}
+
+@media (max-width: 600px) {
+  .fcc-card {
+    padding: 16px;
+  }
+
+  .fcc-actions {
+    align-items: stretch;
+  }
+
+  .fcc-actions [data-slot='button'] {
+    flex: 1 1 140px;
+  }
+}

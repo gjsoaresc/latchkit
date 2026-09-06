@@ -49,6 +49,51 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.headers.get('cache-control'), 'no-store');
 });
 
+test('usage API is authenticated, opt-in, and returns only normalized local records', async (t) => {
+  const { origin, headers } = await fixture(t);
+  assert.equal((await fetch(`${origin}/api/usage`)).status, 401);
+  const disabled = await fetch(`${origin}/api/usage/import`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      provider: 'claude',
+      output: {
+        provider: 'claude',
+        providerVersion: '2.1.258',
+        model: 'claude-haiku-4-5',
+        observedAt: '2026-09-06T13:38:54.333Z',
+        usage: { input_tokens: 172, output_tokens: 7 },
+      },
+    }),
+  });
+  assert.equal((await disabled.json()).status, 'disabled');
+  const enabled = await fetch(`${origin}/api/usage/settings`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal((await enabled.json()).settings.enabled, true);
+  const imported = await fetch(`${origin}/api/usage/import`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      provider: 'claude',
+      output: {
+        provider: 'claude',
+        providerVersion: '2.1.258',
+        model: 'claude-haiku-4-5',
+        observedAt: '2026-09-06T13:38:54.333Z',
+        usage: { input_tokens: 172, output_tokens: 7 },
+      },
+    }),
+  });
+  assert.equal((await imported.json()).records[0].status, 'partial');
+  const usage = await (await fetch(`${origin}/api/usage`, { headers })).json();
+  assert.equal(usage.records[0].tokens.input, 172);
+  assert.equal(Object.hasOwn(usage.records[0], 'output'), false);
+  assert.equal((await fetch(`${origin}/api/usage/export`, { headers })).status, 200);
+});
+
 test('workflow endpoints require authentication, execution authorization, and current revisions', async (t) => {
   const { origin, headers } = await fixture(t);
   assert.equal((await fetch(`${origin}/api/workflows`)).status, 401);

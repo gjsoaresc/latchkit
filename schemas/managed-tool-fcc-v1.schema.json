@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/managed-tool-fcc-v1.schema.json",
+  "title": "Latchkit managed FCC ownership v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "tool",
+    "version",
+    "commit",
+    "installedAt",
+    "installId",
+    "sourceArchiveSha256",
+    "python",
+    "runtimeDirectory",
+    "ownsFccHome"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "tool": { "const": "fcc" },
+    "version": { "const": "5.22.8" },
+    "commit": { "const": "c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a" },
+    "installedAt": { "type": "string", "format": "date-time" },
+    "installId": { "type": "string", "format": "uuid" },
+    "sourceArchiveSha256": {
+      "const": "7de379974935a29a59419b96665464205ea847f010cbb5684d098edf139686df"
+    },
+    "python": { "type": "string", "minLength": 1 },
+    "runtimeDirectory": { "type": "string", "pattern": "^runtime-[a-f0-9]{40}$" },
+    "ownsFccHome": { "const": false },
+    "previousRuntime": { "type": "string", "pattern": "^runtime-[a-f0-9]{40}$" }
+  }
+}

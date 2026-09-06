@@ -1,10 +1,8 @@
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { parseTaskState, TASK_STATE_SCHEMA_VERSION, validateTaskState } from './contracts.js';
 import type { TaskState } from './contracts.js';
-import { errorCode } from '../types.js';
-import { readOptional, removeFile, safePath, statIfExists } from '../storage.js';
+import { readOptional, removeFile, safePath, statIfExists, writeAtomic } from '../storage.js';
 
 export const TASK_STATE_PATH = '.latchkit/tasks/state-v1.json';
 
@@ -43,53 +41,13 @@ export async function readTaskState(
   return parseTaskState(raw);
 }
 
-async function syncDirectory(directory: string) {
-  let handle;
-  try {
-    handle = await open(directory, 'r');
-    await handle.sync();
-  } catch (error) {
-    if (!['EINVAL', 'EISDIR', 'EPERM', 'EACCES', 'ENOTSUP'].includes(errorCode(error) ?? ''))
-      throw error;
-  } finally {
-    await handle?.close();
-  }
-}
-
 export async function writeTaskState(
   root: string,
   state: TaskState,
-  { faultBoundary = async () => {} }: StateWriteOptions = {},
+  options: StateWriteOptions = {},
 ) {
   validateTaskState(state);
-  const target = await safePath(root, TASK_STATE_PATH);
-  const directory = path.dirname(target);
-  await mkdir(directory, { recursive: true });
-  await safePath(root, TASK_STATE_PATH);
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  let renamed = false;
-  try {
-    const handle = await open(temporary, 'wx', 0o600);
-    try {
-      await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await faultBoundary('prepared', { temporary, target });
-    await rename(temporary, target);
-    renamed = true;
-    await faultBoundary('committed', { target });
-    await syncDirectory(directory);
-  } finally {
-    if (!renamed) {
-      try {
-        await unlink(temporary);
-      } catch (error) {
-        if (errorCode(error) !== 'ENOENT') throw error;
-      }
-    }
-  }
+  await writeAtomic(root, TASK_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, 0o600, options);
 }
 
 export async function cleanupTaskStateTemps(root: string) {

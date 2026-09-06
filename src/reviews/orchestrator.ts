@@ -13,6 +13,7 @@ import type { ProcessRunResult, RunProviderProcessOptions } from '../runtime/pro
 import type { ProviderContract } from '../providers/contracts.js';
 import type { SourceSnapshot } from '../task-state/contracts.js';
 import { errorCode, errorMessage, isRecord } from '../types.js';
+import { observeProviderInvocation } from '../usage/observe.js';
 
 export const REVIEW_SCHEMA_VERSION = 1;
 export const REVIEW_STATE_PATH = '.latchkit/reviews/state-v1.json';
@@ -387,7 +388,11 @@ export function createReviewOrchestrator({
       independent: true,
       sourceSnapshot: snapshot,
       limits: budget,
-      usage: { state: 'unknown', reason: 'Provider usage is not exposed by the review contract.' },
+      usage: {
+        state: 'unknown',
+        reason:
+          'Opted-in token observations are in the source project usage ledger; provider billing remains unknown.',
+      },
       reviewers: [],
       createdAt: clock().toISOString(),
       updatedAt: clock().toISOString(),
@@ -470,12 +475,20 @@ export function createReviewOrchestrator({
               'Review was cancelled before launch.',
               'REVIEW_CANCELLED',
             );
-          const processResult = await launch({
-            provider: adapter.contract,
-            plan,
-            executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
-            timeoutMs: budget.timeoutMs,
-            signal: abort.signal,
+          const processResult = await observeProviderInvocation({
+            root: projectRoot,
+            providerId: item.providerId,
+            taskId: task,
+            invocationId: item.id,
+            launch,
+            clock,
+            input: {
+              provider: adapter.contract,
+              plan,
+              executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
+              timeoutMs: budget.timeoutMs,
+              signal: abort.signal,
+            },
           });
           item.process = redact(processResult);
           item.state =

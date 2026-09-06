@@ -6,6 +6,7 @@ import {
   doctor,
   initProject,
   inspectRecovery,
+  materializePackSource,
   migrateConfig,
   planConfigMigration,
   planSync,
@@ -46,6 +47,26 @@ import {
 } from './project-memory/service.js';
 import { readFile } from 'node:fs/promises';
 import { providerById } from './providers/registry.js';
+import {
+  configureUsage,
+  deleteUsage,
+  enforceUsageRetention,
+  exportUsage,
+  inspectUsage,
+  recordProviderUsage,
+} from './usage/service.js';
+import {
+  cancelScheduleRun,
+  createForegroundScheduler,
+  createSchedule,
+  editSchedule,
+  exportSchedules,
+  inspectSchedule,
+  listSchedules,
+  pauseSchedule,
+  removeSchedule,
+  resumeSchedule,
+} from './scheduler/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -64,6 +85,7 @@ Usage: latchkit <command> [options]
   migrate    Upgrade configuration; use --dry-run to preview
   recover    Inspect or recover an interrupted mutation
   sync       Install selected skills; use --dry-run to preview
+  pack fetch Materialize selected immutable Git pack sources locally
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
@@ -72,8 +94,12 @@ Usage: latchkit <command> [options]
   review     Run bounded independent reviews
   diff       Inspect a revision-bound Git diff or record review feedback
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
+  tool       Inspect or explicitly manage an optional local tool
   workspace  Inspect, create, cancel, or clean a task-owned Git worktree
   memory     Inspect, search, add, update, delete, export, import, or recover local project memory
+  usage      Enable, inspect, import, export, retain, or delete local usage records
+  schedule   Create and operate an explicit foreground local scheduler
+  mcp        Preview, apply, remove, inspect, recover, or health-check optional MCP configuration
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -101,6 +127,9 @@ Options:
   --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
   --file <path>       memory import or acceptance verify: versioned JSON file
   --budget <n>        memory recover: maximum context characters
+  --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
+  --provider-version <version> usage import: documented provider version for the event
+  --authorized        mcp apply: explicitly authorize the exact enabled definitions in --file
   --provider <id>     memory recover: provider contract to evaluate
   --path <path>       diff annotation: project-relative file path
   --line <number>     diff annotation: one-based line
@@ -117,9 +146,17 @@ Options:
   --resolution <decision> workflow resume: observed, abandon, or retry an interrupted action
   --action-id <id>    workflow resume: interrupted action being resolved
   --file <path>       workflow run: versioned acceptance checks
+  --timezone <iana>   schedule create/edit: IANA timezone
+  --every-minutes <n> schedule create/edit: recurrence interval
+  --scope <text>      schedule create: authorized task scope
+  --reference <text>  schedule create: authorization reference
   --install-root <path> self: user-local installation directory
   --to <version>      self upgrade/rollback: exact release version
   --bundle <path>     self install/upgrade: extracted local bundle
+  --archive <path>    tool fcc preview/install: pinned local FCC archive
+  --tool-root <path>  tool fcc: recorded user-local FCC tool directory
+  --python <path>     tool fcc install: explicit Python 3.14+ runtime
+  --uv <path>         tool fcc install: explicit uv 0.11.16+ lock installer
   --help             Show this help
   --version          Show version
 
@@ -180,6 +217,19 @@ try {
       'action-id': { type: 'string' },
       'install-root': { type: 'string' },
       bundle: { type: 'string' },
+      'retention-days': { type: 'string' },
+      'provider-version': { type: 'string' },
+      timezone: { type: 'string' },
+      'every-minutes': { type: 'string' },
+      scope: { type: 'string' },
+      reference: { type: 'string' },
+      'timeout-ms': { type: 'string' },
+      'output-limit-bytes': { type: 'string' },
+      'max-runs': { type: 'string' },
+      archive: { type: 'string' },
+      'tool-root': { type: 'string' },
+      python: { type: 'string' },
+      uv: { type: 'string' },
     },
   });
   cliValues = values;
@@ -189,9 +239,21 @@ try {
     const [command, ...extra] = positionals;
     if (!command) throw new Error('A command is required.');
     if (
-      !['task', 'workflow', 'self', 'workspace', 'review', 'memory', 'acceptance', 'diff'].includes(
-        command,
-      ) &&
+      ![
+        'task',
+        'workflow',
+        'self',
+        'workspace',
+        'review',
+        'memory',
+        'usage',
+        'mcp',
+        'acceptance',
+        'diff',
+        'pack',
+        'schedule',
+        'tool',
+      ].includes(command) &&
       extra.length
     )
       throw new Error('Only one command is supported at a time.');
@@ -206,6 +268,7 @@ try {
       ui: ['project', 'port'],
       diagnostics: ['project', 'export', 'clear'],
       self: ['install-root', 'to', 'bundle'],
+      tool: ['archive', 'tool-root', 'python', 'uv'],
       workflow: [
         'project',
         'task',
@@ -269,6 +332,32 @@ try {
         'provider',
         'expected-revision',
       ],
+      usage: [
+        'project',
+        'provider',
+        'provider-version',
+        'file',
+        'task',
+        'session',
+        'retention-days',
+      ],
+      pack: ['project', 'id'],
+      schedule: [
+        'project',
+        'id',
+        'provider',
+        'prompt',
+        'timezone',
+        'every-minutes',
+        'scope',
+        'reference',
+        'host-local-authorized',
+        'timeout-ms',
+        'output-limit-bytes',
+        'max-runs',
+        'expected-revision',
+      ],
+      mcp: ['project', 'file', 'authorized', 'dry-run', 'id'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -276,7 +365,41 @@ try {
       if (!allowed.includes(option)) throw new Error(`--${option} is not valid for ${command}.`);
     const root = path.resolve(values.project ?? process.cwd());
     const print = (value: unknown) => console.log(JSON.stringify(value, null, 2));
-    if (command === 'self') {
+    if (command === 'tool') {
+      if (
+        extra.length !== 2 ||
+        extra[0] !== 'fcc' ||
+        !['inspect', 'preview', 'install', 'start', 'stop', 'remove', 'recover'].includes(
+          extra[1] ?? '',
+        )
+      )
+        throw new Error(
+          'Usage: latchkit tool fcc <inspect|preview|install|start|stop|remove|recover> [--archive <path>] [--python <path>] [--uv <path>] [--tool-root <path>].',
+        );
+      const fcc = await import('./managed-tools/fcc.js');
+      const options = {
+        ...(values.archive ? { archive: path.resolve(values.archive) } : {}),
+        ...(values.python ? { python: path.resolve(values.python) } : {}),
+        ...(values.uv ? { uv: path.resolve(values.uv) } : {}),
+        ...(values['tool-root'] ? { root: path.resolve(values['tool-root']) } : {}),
+      };
+      const action = extra[1];
+      print(
+        action === 'inspect'
+          ? await fcc.inspectFcc(options)
+          : action === 'preview'
+            ? await fcc.previewFccInstall(options)
+            : action === 'install'
+              ? await fcc.installFcc(options)
+              : action === 'start'
+                ? await fcc.startFcc(options)
+                : action === 'stop'
+                  ? await fcc.stopFcc(options)
+                  : action === 'recover'
+                    ? await fcc.recoverFcc(options)
+                    : await fcc.removeFcc(options),
+      );
+    } else if (command === 'self') {
       const action = extra[0];
       if (
         extra.length !== 1 ||
@@ -323,6 +446,10 @@ try {
       const result = await (values['dry-run'] ? planSync(root) : syncProject(root));
       print(result);
       if (result.conflicts.length) process.exitCode = 1;
+    } else if (command === 'pack') {
+      if (extra.length !== 1 || extra[0] !== 'fetch')
+        throw new Error('Usage: latchkit pack fetch [--project <path>] [--id <pack-id>].');
+      print(await materializePackSource(root, { ...(values.id ? { id: values.id } : {}) }));
     } else if (command === 'remove') print(await removeProjectSkills(root));
     else if (command === 'diagnostics') {
       if (values.clear) {
@@ -693,6 +820,232 @@ try {
         const provider = values.provider ? providerById(values.provider) : undefined;
         const budget = values.budget === undefined ? undefined : Number(values.budget);
         print(await recoverProjectContext(root, { query: values.text, budget, provider }));
+      }
+    } else if (command === 'usage') {
+      if (
+        !['enable', 'disable', 'inspect', 'import', 'export', 'retain', 'delete'].includes(
+          extra[0] ?? '',
+        ) ||
+        extra.length !== 1
+      )
+        throw new Error(
+          'Usage: latchkit usage <enable|disable|inspect|import|export|retain|delete> [options].',
+        );
+      const action = extra[0];
+      const retentionDays =
+        values['retention-days'] === undefined ? undefined : Number(values['retention-days']);
+      if (
+        retentionDays !== undefined &&
+        (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365)
+      )
+        throw new Error('--retention-days must be an integer between 1 and 365.');
+      if (action === 'enable')
+        print(
+          await configureUsage(root, {
+            enabled: true,
+            ...(retentionDays === undefined ? {} : { retentionDays }),
+          }),
+        );
+      else if (action === 'disable') print(await configureUsage(root, { enabled: false }));
+      else if (action === 'inspect') print(await inspectUsage(root));
+      else if (action === 'export') print(await exportUsage(root));
+      else if (action === 'delete') print(await deleteUsage(root));
+      else if (action === 'retain')
+        print(
+          await (retentionDays === undefined
+            ? enforceUsageRetention(root)
+            : configureUsage(root, { retentionDays })),
+        );
+      else {
+        if (!values.provider || !values.file)
+          throw new Error('usage import requires --provider and --file.');
+        const input = await readFile(path.resolve(values.file), 'utf8');
+        if (Buffer.byteLength(input, 'utf8') > 1024 * 1024)
+          throw new Error('Usage input exceeds the 1 MiB limit.');
+        let output: unknown = input;
+        try {
+          output = JSON.parse(input);
+        } catch {
+          /* Documented JSONL is parsed by the usage service. */
+        }
+        print(
+          await recordProviderUsage(root, {
+            provider: values.provider,
+            providerVersion: values['provider-version'],
+            taskId: values.task,
+            sessionId: values.session,
+            output,
+          }),
+        );
+      }
+    } else if (command === 'schedule') {
+      if (
+        ![
+          'create',
+          'list',
+          'inspect',
+          'edit',
+          'pause',
+          'resume',
+          'remove',
+          'cancel',
+          'export',
+          'start',
+        ].includes(extra[0] ?? '') ||
+        extra.length !== 1
+      )
+        throw new Error(
+          'Usage: latchkit schedule <create|list|inspect|edit|pause|resume|remove|cancel|export|start> [options].',
+        );
+      const action = extra[0];
+      const number = (name: 'every-minutes' | 'timeout-ms' | 'output-limit-bytes' | 'max-runs') =>
+        values[name] === undefined ? undefined : Number(values[name]);
+      const limits = {
+        ...(number('timeout-ms') === undefined ? {} : { timeoutMs: number('timeout-ms')! }),
+        ...(number('output-limit-bytes') === undefined
+          ? {}
+          : { outputLimitBytes: number('output-limit-bytes')! }),
+        ...(number('max-runs') === undefined ? {} : { maxRuns: number('max-runs')! }),
+      };
+      if (action === 'list') print(await listSchedules(root));
+      else if (action === 'export') print(await exportSchedules(root));
+      else if (action === 'inspect')
+        print(await inspectSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'create')
+        print(
+          await createSchedule(root, {
+            timezone: values.timezone,
+            everyMinutes: number('every-minutes')!,
+            providerId: requiredOption(values.provider, 'provider'),
+            instructions: requiredOption(values.prompt, 'prompt'),
+            authorization: {
+              scope: requiredOption(values.scope, 'scope'),
+              reference: requiredOption(values.reference, 'reference'),
+              executionAuthorized: values['host-local-authorized'] === true,
+            },
+            limits,
+          }),
+        );
+      else if (action === 'edit')
+        print(
+          await editSchedule(root, requiredOption(values.id, 'id'), {
+            ...(values.timezone === undefined ? {} : { timezone: values.timezone }),
+            ...(number('every-minutes') === undefined
+              ? {}
+              : { everyMinutes: number('every-minutes')! }),
+            ...(values.provider === undefined ? {} : { providerId: values.provider }),
+            ...(values.prompt === undefined ? {} : { instructions: values.prompt }),
+            ...(values.scope === undefined &&
+            values.reference === undefined &&
+            values['host-local-authorized'] !== true
+              ? {}
+              : {
+                  authorization: {
+                    scope: requiredOption(values.scope, 'scope'),
+                    reference: requiredOption(values.reference, 'reference'),
+                    executionAuthorized: values['host-local-authorized'] === true,
+                  },
+                }),
+            ...(Object.keys(limits).length ? { limits } : {}),
+            ...(values['expected-revision'] === undefined
+              ? {}
+              : { expectedRevision: Number(values['expected-revision']) }),
+          }),
+        );
+      else if (action === 'pause')
+        print(await pauseSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'resume')
+        print(await resumeSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'remove')
+        print(await removeSchedule(root, requiredOption(values.id, 'id')));
+      else if (action === 'cancel')
+        print(await cancelScheduleRun(root, requiredOption(values.id, 'id')));
+      else {
+        const scheduler = createForegroundScheduler({ root });
+        await scheduler.start();
+        console.log('Foreground scheduler running. Ctrl+C to stop.');
+        const stop = () => {
+          void scheduler.stop().catch(() => {});
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+        try {
+          const result = await scheduler.closed;
+          if (result.error) throw result.error;
+        } finally {
+          process.off('SIGINT', stop);
+          process.off('SIGTERM', stop);
+        }
+      }
+    } else if (command === 'mcp') {
+      const action = extra[0];
+      if (
+        extra.length !== 1 ||
+        !action ||
+        !['preview', 'apply', 'remove', 'inspect', 'recover', 'health'].includes(action)
+      )
+        throw new Error(
+          'Usage: latchkit mcp <preview|apply|remove|inspect|recover|health> [options].',
+        );
+      const actionOptions: Record<string, string[]> = {
+        preview: ['file'],
+        apply: ['file', 'authorized', 'dry-run'],
+        remove: ['dry-run'],
+        inspect: [],
+        recover: ['dry-run'],
+        health: ['id'],
+      };
+      for (const option of Object.keys(values))
+        if (option !== 'project' && !actionOptions[action]!.includes(option))
+          throw new Error(`--${option} is not valid for mcp ${action}.`);
+      const managed = await import('./integrations/mcp/managed.js');
+      if (action === 'inspect') print(await managed.inspectManagedMcp(root));
+      else if (action === 'recover')
+        print(
+          await (values['dry-run']
+            ? managed.inspectManagedMcpRecovery(root)
+            : managed.recoverManagedMcp(root)),
+        );
+      else if (action === 'health') {
+        const { checkManagedMcpHealth } = await import('./integrations/mcp/health.js');
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        process.once('SIGINT', abort);
+        process.once('SIGTERM', abort);
+        try {
+          print(
+            await checkManagedMcpHealth(root, requiredOption(values.id, 'id'), {
+              signal: controller.signal,
+            }),
+          );
+        } finally {
+          process.removeListener('SIGINT', abort);
+          process.removeListener('SIGTERM', abort);
+        }
+      } else {
+        let definitions: unknown[] = [];
+        if (action !== 'remove') {
+          const bytes = await readFile(path.resolve(requiredOption(values.file, 'file')));
+          if (bytes.byteLength > 64 * 1024) throw new Error('MCP definition input exceeds 64 KiB.');
+          let input: unknown;
+          try {
+            input = JSON.parse(bytes.toString('utf8'));
+          } catch {
+            throw new Error('MCP input must be valid JSON.');
+          }
+          definitions = Array.isArray(input) ? input : [input];
+          if (definitions.length > 64) throw new Error('MCP input exceeds 64 definitions.');
+        }
+        const grants = managed.authorizeManagedMcp(
+          definitions,
+          action === 'apply' && values.authorized === true,
+        );
+        const result =
+          action === 'preview' || values['dry-run']
+            ? await managed.planManagedMcp(root, definitions, grants)
+            : await managed.applyManagedMcp(root, definitions, grants);
+        print(result);
+        if (result.diagnostics.length) process.exitCode = 1;
       }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);

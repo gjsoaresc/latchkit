@@ -10,10 +10,12 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "isolatedModules": true,
+    "jsx": "react-jsx",
+    "paths": { "@/*": ["./web/*"] },
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.cts", "web/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.cts", "web/**/*.ts", "web/**/*.tsx"],
   "exclude": ["dist", "node_modules"]
 }

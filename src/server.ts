@@ -19,6 +19,15 @@ import { appendEvent, clearDiagnostics } from './diagnostics/logger.js';
 import { operationalError, statusForError } from './diagnostics/errors.js';
 import { redactString } from './diagnostics/redact.js';
 import { createTaskController } from './runtime/task-controller.js';
+import {
+  inspectFcc,
+  installFcc,
+  previewFccInstall,
+  recoverFcc,
+  removeFcc,
+  startFcc,
+  stopFcc,
+} from './managed-tools/fcc.js';
 import { createReviewOrchestrator } from './reviews/orchestrator.js';
 import {
   createDiffAnnotation,
@@ -40,6 +49,13 @@ import {
   updateProjectMemory,
 } from './project-memory/service.js';
 import { providerById } from './providers/registry.js';
+import {
+  configureUsage,
+  deleteUsage,
+  exportUsage,
+  inspectUsage,
+  recordProviderUsage,
+} from './usage/service.js';
 import { errorCode, errorRecord, isRecord } from './types.js';
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -49,8 +65,8 @@ const ASSETS = new Map<string, [string, string]>([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
-  ['/workflows.js', ['workflows.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
+  ['/docs/managed-fcc.md', ['../../docs/managed-fcc.md', 'text/plain; charset=utf-8']],
 ]);
 
 function fail(status: number, message: string) {
@@ -251,7 +267,17 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
     return result;
   };
 
-  const server = http.createServer({ maxHeaderSize: 16 * 1024 }, async (req, res) => {
+  const activeRequests = new Set<Promise<void>>();
+  const server = http.createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
+    const request = handleRequest(req, res);
+    activeRequests.add(request);
+    void request.then(
+      () => activeRequests.delete(request),
+      () => activeRequests.delete(request),
+    );
+  });
+
+  async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
@@ -324,6 +350,27 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
           respond(res, 200, await serialize(() => exportSupportBundle(root)));
         } else if (pathname === '/api/diagnostics' && req.method === 'DELETE') {
           respond(res, 200, await serialize(() => clearDiagnostics(root)));
+        } else if (pathname === '/api/tools/fcc' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectFcc());
+        } else if (pathname === '/api/tools/fcc/preview' && req.method === 'POST') {
+          const body = await readJson<{ archive?: string; python?: string; root?: string }>(req);
+          respond(res, 200, await previewFccInstall(body));
+        } else if (pathname === '/api/tools/fcc/install' && req.method === 'POST') {
+          const body = await readJson<{ archive?: string; python?: string; root?: string }>(req);
+          respond(res, 200, await serialize(() => installFcc(body)));
+        } else if (pathname === '/api/tools/fcc/start' && req.method === 'POST') {
+          const body = await readJson<{ root?: string }>(req);
+          respond(res, 200, await serialize(() => startFcc(body)));
+        } else if (pathname === '/api/tools/fcc/recover' && req.method === 'POST') {
+          const body = await readJson<{ root?: string; archive?: string }>(req);
+          respond(res, 200, await serialize(() => recoverFcc(body)));
+        } else if (pathname === '/api/tools/fcc/stop' && req.method === 'POST') {
+          const body = await readJson<{ root?: string }>(req);
+          respond(res, 200, await serialize(() => stopFcc(body)));
+        } else if (pathname === '/api/tools/fcc' && req.method === 'DELETE') {
+          const body = await readJson<{ root?: string }>(req);
+          respond(res, 200, await serialize(() => removeFcc(body)));
         } else if (pathname === '/api/workflows' && req.method === 'GET') {
           const taskId = requestUrl.searchParams.get('task');
           respond(
@@ -413,6 +460,20 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
             const body = await readJson<Parameters<typeof deleteProjectMemory>[2]>(req);
             respond(res, 200, await serialize(() => deleteProjectMemory(root, id, body)));
           } else throw fail(405, 'Method not allowed.');
+        } else if (pathname === '/api/usage' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await inspectUsage(root));
+        } else if (pathname === '/api/usage/settings' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof configureUsage>[1]>(req);
+          respond(res, 200, await serialize(() => configureUsage(root, body)));
+        } else if (pathname === '/api/usage/import' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof recordProviderUsage>[1]>(req);
+          respond(res, 200, await serialize(() => recordProviderUsage(root, body)));
+        } else if (pathname === '/api/usage/export' && req.method === 'GET') {
+          await pendingMutation;
+          respond(res, 200, await exportUsage(root));
+        } else if (pathname === '/api/usage' && req.method === 'DELETE') {
+          respond(res, 200, await serialize(() => deleteUsage(root)));
         } else if (pathname === '/api/tasks/artifact' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('taskId');
@@ -520,12 +581,35 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         ...(details.configRevision ? { configRevision: details.configRevision } : {}),
       });
     }
-  });
+  }
   server.requestTimeout = 30_000;
   server.headersTimeout = 15_000;
+  let shutdown: Promise<void> | undefined;
+  const drain = () =>
+    (shutdown ??= (async () => {
+      // A disconnected socket does not stop its asynchronous handler. Finish
+      // admitted requests before stopping workflows they may still schedule.
+      await Promise.allSettled([...activeRequests]);
+      await workflowController.shutdown();
+    })());
   server.once('close', () => {
-    void workflowController.shutdown();
+    void drain().catch(() => {});
   });
+  const closeTransport = server.close;
+  server.close = function (callback) {
+    return closeTransport.call(this, function (this: http.Server | undefined, error) {
+      // Preserve the native close event and return value; the callback also
+      // guarantees that this server's requests and workflows have drained.
+      void drain().then(
+        () => callback?.call(this, error),
+        (failure: unknown) =>
+          callback?.call(
+            this,
+            error ?? (failure instanceof Error ? failure : new Error('Server shutdown failed.')),
+          ),
+      );
+    });
+  };
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => {

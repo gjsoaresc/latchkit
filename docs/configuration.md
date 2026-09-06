@@ -8,7 +8,9 @@ Version 1 contains `schemaVersion`, `providers`, and `skills`. Existing valid v1
 
 Version 2 adds the required `providerSettings` object. Its keys must be registered provider IDs, but each value is an opaque JSON object owned by that provider's future adapter contract. Settings remain present when a provider is deselected so that selection changes do not erase user preferences. Credentials, workflow state, source-pack metadata, and global provider permission policy do not belong in this file.
 
-Both versions reject unknown top-level fields, unknown provider or skill IDs, duplicate selections, missing fields, and incorrect types. Validation errors use a stable code and a JSON-style field path. Future schema versions are refused until the running Latchkit version explicitly supports them.
+Version 3 pack selections can also use an immutable Git source. A Git source names its `repository`, lowercase 40- or 64-character `commit`, and optional portable pack `path`; `pinned` must be `true`. It is not a branch or tag reference. Fetch it explicitly with `latchkit pack fetch --id <pack-id>`, which validates the exact commit, its MIT author/license attestation, the pack manifest, regular Git blob modes, and every declared SHA-256 before recording an inspectable project-local cache under `.latchkit/packs/git/`. Reads, previews, and `sync` use that cache only and never contact Git. If a source is unavailable before its first fetch, they return an actionable error and leave installed resources untouched.
+
+All supported versions reject unknown top-level fields, unknown provider or skill IDs, duplicate selections, missing fields, and incorrect types. Validation errors use a stable code and a JSON-style field path. Future schema versions are refused until the running Latchkit version explicitly supports them.
 
 ## Explicit migration and recovery
 

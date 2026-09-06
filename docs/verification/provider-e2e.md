@@ -40,12 +40,31 @@ not evidence for another provider or operating system.
 The full delivery controller has its own exact-archive harness:
 
 ```sh
-npm run verify:workflow -- --authorized --provider codex --artifact <standalone.zip> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/workflow-codex-windows.evidence.json
+npm run verify:workflow -- --authorized --provider codex --model gpt-5.6-luna --reasoning-effort medium --artifact <standalone.zip> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/workflow-codex-windows.evidence.json
 ```
 
 Use `node scripts/live-provider-adapter-evidence.js` with the same authorization,
 archive, digest, provider, and output arguments for a bounded read-only Codex or
-Claude adapter probe. All three harnesses use the coding tool's configured model.
+Claude adapter probe. The harnesses use the coding tool's configured model by default.
+The workflow harness accepts `--model <model-id>` and `--reasoning-effort <effort>`
+for bounded qualification. Effort accepts `low`, `medium`, `high`, `xhigh`, `max`,
+or `ultra`; the selected model must support the chosen effort, otherwise the
+provider's error remains a failed qualification. Explicit model selection defaults
+to `medium` if effort is omitted, so a small model does not inherit an incompatible
+`ultra` user setting. Without either override, the configured model and effort are
+preserved. Overrides apply only to child Codex invocations and are recorded in
+evidence; saved provider settings, sandbox flags, and approval policies remain
+unchanged. The small calculator fixture can use `gpt-5.6-luna` with `medium` where
+that model is available. Model availability and actual usage remain provider-owned.
+
+The workflow harness rejects final Git changes outside `src/calculator.js`, including
+new ignored files outside internal `.latchkit/` state, changed package/configuration
+files, and provider-created commits. Failures replace the supplied output with a
+sanitized failure record before temporary fixture cleanup. That record includes
+archive/model/effort bindings, fixed failure stages, and bounded workflow phase
+metadata; it omits prompts, raw provider output, outcomes, credentials, and error
+text. A running-attempt marker prevents an old success file from surviving a new
+attempt unnoticed. Failure records cannot satisfy the release evidence gate.
 
 ## Current qualification scope
 
@@ -55,7 +74,8 @@ checks, independent review, and handoff. Provider exit status alone is insuffici
 
 Claude Code, Cursor CLI, and Cursor IDE retain their implemented adapters and offline
 contract coverage. Their live sessions are not part of this candidate's release gate.
-Antigravity retains its documented limited print-mode capabilities. WSL, Linux, and
+Antigravity has credential-free fixtures for exact-version print-mode resume;
+live resume and hook integration remain unverified (see its [adapter notes](../providers/antigravity.md)). WSL, Linux, and
 macOS qualification is deferred. Historical evidence for a different archive or host
 does not establish current support.
 

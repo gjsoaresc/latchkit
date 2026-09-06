@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import filesystem from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { execFile, fork } from 'node:child_process';
 import { promisify } from 'node:util';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
@@ -38,6 +40,60 @@ const resourceCrashHelper = path.join(
 );
 const cli = path.join(repositoryRoot, 'dist', 'src', 'cli.js');
 const execFileAsync = promisify(execFile);
+
+test('a failed concurrent resource waits for in-flight writes before rollback', async (t) => {
+  const root = await temporaryProject(t);
+  await fs.writeFile(path.join(root, 'slow.txt'), 'before slow');
+  await fs.writeFile(path.join(root, 'failed.txt'), 'before failed');
+  const registry = createResourceRegistry([
+    { id: 'slow', path: 'slow.txt' },
+    { id: 'failed', path: 'failed.txt' },
+  ]);
+  const rename = filesystem.rename;
+  const failure = Object.assign(new Error('Injected concurrent write failure'), { code: 'EIO' });
+  let delayed = false;
+  let failed = false;
+  let finishSlow;
+  const slowFinished = new Promise((resolve) => {
+    finishSlow = resolve;
+  });
+  t.mock.method(filesystem, 'rename', async (from, to) => {
+    if (to === path.join(root, 'slow.txt') && !delayed) {
+      delayed = true;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await rename(from, to);
+      finishSlow();
+      return;
+    }
+    if (to === path.join(root, 'failed.txt') && !failed) {
+      failed = true;
+      throw failure;
+    }
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  await assert.rejects(
+    () =>
+      applyRegisteredTransaction(root, {
+        operation: 'concurrent-regression',
+        registry,
+        changes: [
+          { resourceId: 'slow', bytes: 'after slow' },
+          { resourceId: 'failed', bytes: 'after failed' },
+        ],
+        manifest: '{}\n',
+      }),
+    (error) => error === failure,
+  );
+  await slowFinished;
+  assert.equal(await fs.readFile(path.join(root, 'slow.txt'), 'utf8'), 'before slow');
+  assert.equal(await fs.readFile(path.join(root, 'failed.txt'), 'utf8'), 'before failed');
+  assert.equal(await exists(path.join(root, '.latchkit/transaction.json')), false);
+});
 
 async function temporaryProject(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-recovery-'));
@@ -312,6 +368,38 @@ test('registered provider configuration uses the same bounded recovery engine', 
     }),
   );
   assert.equal(await fs.readFile(absolute, 'utf8'), next);
+  assert.equal((await inspectTransaction(root, registry)).state, 'none');
+});
+
+test('a multi-resource transaction commits every durable resource without a diagnostic boundary', async (t) => {
+  const root = await temporaryProject(t);
+  const changes = Array.from({ length: 33 }, (_, index) => ({
+    resourceId: `provider:batch-${index}`,
+    bytes: `batch ${index}\n`,
+  }));
+  const registry = createResourceRegistry(
+    changes.map((change, index) => ({
+      id: change.resourceId,
+      path: `.provider/batch/${index}.txt`,
+    })),
+  );
+
+  await withProjectLock(root, () =>
+    applyRegisteredTransaction(root, {
+      operation: 'batch-fixture',
+      registry,
+      changes,
+      manifest: '{"batch-fixture":"after"}\n',
+    }),
+  );
+
+  await Promise.all(
+    changes.map((change, index) =>
+      fs
+        .readFile(path.join(root, '.provider', 'batch', `${index}.txt`), 'utf8')
+        .then((content) => assert.equal(content, change.bytes)),
+    ),
+  );
   assert.equal((await inspectTransaction(root, registry)).state, 'none');
 });
 

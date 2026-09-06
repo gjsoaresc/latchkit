@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/managed-tool-fcc-v2.schema.json",
+  "title": "Latchkit managed FCC ownership v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tool", "version", "commit", "installedAt", "installId", "sourceArchiveSha256", "python", "pythonVersion", "uvVersion", "runtimeDirectory", "profileDirectory", "ownsFccHome"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "tool": { "const": "fcc" },
+    "version": { "const": "5.22.8" },
+    "commit": { "const": "c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a" },
+    "installedAt": { "type": "string", "format": "date-time" },
+    "installId": { "type": "string", "format": "uuid" },
+    "sourceArchiveSha256": { "const": "7de379974935a29a59419b96665464205ea847f010cbb5684d098edf139686df" },
+    "python": { "type": "string", "minLength": 1 },
+    "pythonVersion": { "type": "string", "pattern": "^3\\.[0-9]+\\.[0-9]+$" },
+    "uvVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "runtimeDirectory": { "type": "string", "pattern": "^runtime-c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a-[0-9a-f-]{36}$" },
+    "profileDirectory": { "const": "profile" },
+    "ownsFccHome": { "const": false }
+  }
+}

@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { configureUsage, inspectUsage } from '../dist/src/usage/service.js';
 import {
   createReviewOrchestrator,
   validateReviewResult,
@@ -28,16 +29,68 @@ async function fixture(t) {
   return root;
 }
 
+test('review usage records each invocation including failure in the source project, not its workspace', async (t) => {
+  const root = await fixture(t);
+  const workspaceRoot = await fixture(t);
+  await configureUsage(root, { enabled: true });
+  let calls = 0;
+  let invocations = 0;
+  const orchestrator = createReviewOrchestrator({
+    root,
+    reviewerAdapters: new Map([['codex', adapter()]]),
+    source: async () => ({ revision: 'abc', dirtyFingerprint: 'fixture' }),
+    workspace: async () => ({ path: workspaceRoot, snapshotDigest: 'fixture' }),
+    launch: async (input) => {
+      calls += 1;
+      assert.equal(input.plan.cwd, workspaceRoot);
+      if (input.plan.args.length === 1)
+        return { status: 'exited', exitCode: 0, stdout: 'codex-cli 0.99.0' };
+      invocations += 1;
+      return {
+        status: 'exited',
+        exitCode: 1,
+        stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'fixture-common-thread' }),
+          JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 50, output_tokens: 7 } }),
+        ].join('\n'),
+      };
+    },
+  });
+  const result = await orchestrator.run({
+    taskId: 'task_parent',
+    reviewers: [{ providerId: 'codex' }, { providerId: 'codex' }],
+    executionAuthorized: true,
+    sandbox: 'read-only',
+  });
+  assert.equal(result.state, 'failed');
+  const usage = await inspectUsage(root);
+  assert.equal(usage.records.length, 2);
+  assert.equal(usage.summary.tokens.input, 100);
+  assert.ok(
+    usage.records.every(
+      (item) =>
+        item.taskId === 'task_parent' &&
+        item.providerVersion === '0.99.0' &&
+        item.sessionId === 'fixture-common-thread',
+    ),
+  );
+  assert.equal((await inspectUsage(workspaceRoot)).records.length, 0);
+  assert.equal(calls, 4);
+  assert.equal(invocations, 2);
+});
+
 test('review results are strict, independent, and deduplicated', async (t) => {
   const root = await fixture(t);
   let active = 0;
   let peak = 0;
+  let launches = 0;
   const orchestrator = createReviewOrchestrator({
     root,
     reviewerAdapters: new Map([['codex', adapter()]]),
     source: async () => ({ revision: 'abc', dirtyFingerprint: 'dirty-1' }),
     workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
     launch: async () => {
+      launches += 1;
       active += 1;
       peak = Math.max(peak, active);
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -70,6 +123,10 @@ test('review results are strict, independent, and deduplicated', async (t) => {
   assert.equal(result.findings.length, 1);
   assert.equal(result.reviewers[0].sourceSnapshot.dirtyFingerprint, 'dirty-1');
   assert.equal(result.reviewers[0].result.findings[0].detail, 'token=[REDACTED]');
+  assert.equal(launches, 3);
+  await assert.rejects(readFile(path.join(root, '.latchkit/usage/state-v1.json')), {
+    code: 'ENOENT',
+  });
 });
 
 test('real Codex JSONL and Claude JSON envelopes yield strict review results', async (t) => {

@@ -25,6 +25,8 @@ export interface PackManifest {
   schemaVersion: 1;
   id: string;
   version: string;
+  author?: string;
+  license?: 'MIT';
   provenance: string;
   compatibility: PackCompatibility;
   files: PackFile[];
@@ -71,12 +73,14 @@ export function validatePackPath(relative: unknown): string {
   return relative;
 }
 
-function validateManifest(value: unknown): PackManifest {
+export function parsePackManifest(value: unknown): PackManifest {
   if (!isRecord(value)) throw new PackContractError('Pack manifest must be an object.');
   const expected = new Set([
     'schemaVersion',
     'id',
     'version',
+    'author',
+    'license',
     'provenance',
     'compatibility',
     'files',
@@ -95,6 +99,13 @@ function validateManifest(value: unknown): PackManifest {
     );
   if (typeof value.provenance !== 'string' || !value.provenance.trim())
     throw new PackContractError('Pack manifest requires provenance text.');
+  if (value.author !== undefined && (typeof value.author !== 'string' || !value.author.trim()))
+    throw new PackContractError('Pack author must be non-empty text when declared.');
+  if (value.license !== undefined && value.license !== 'MIT')
+    throw new PackContractError(
+      'Only original or MIT-compatible packs may declare license MIT.',
+      'PACK_LICENSE_INVALID',
+    );
   if (!isRecord(value.compatibility))
     throw new PackContractError('Pack manifest requires a compatibility object.');
   const { configSchemaVersions, providers } = value.compatibility;
@@ -130,6 +141,8 @@ function validateManifest(value: unknown): PackManifest {
     schemaVersion: 1,
     id: value.id,
     version: value.version,
+    ...(value.author === undefined ? {} : { author: value.author }),
+    ...(value.license === undefined ? {} : { license: value.license }),
     provenance: value.provenance,
     compatibility: { configSchemaVersions: [...configSchemaVersions], providers: [...providers] },
     files,
@@ -157,7 +170,7 @@ export async function loadLocalPack(source: string): Promise<LoadedPack> {
   await regularFile(manifestFile);
   let manifest: PackManifest;
   try {
-    manifest = validateManifest(JSON.parse(await readFile(manifestFile, 'utf8')) as unknown);
+    manifest = parsePackManifest(JSON.parse(await readFile(manifestFile, 'utf8')) as unknown);
   } catch (error) {
     if (error instanceof PackContractError) throw error;
     throw new PackContractError(`Invalid pack manifest JSON: ${errorMessage(error)}`);
@@ -200,5 +213,10 @@ export async function loadBundledPack(): Promise<LoadedPack> {
 
 export async function loadPack(selection: PackSelection): Promise<LoadedPack> {
   if (selection.source.type === 'bundled') return loadBundledPack();
+  if (selection.source.type === 'git')
+    throw new PackContractError(
+      `Git pack ${selection.id}@${selection.version} is not materialized. Run latchkit pack fetch --id ${selection.id}.`,
+      'PACK_SOURCE_UNAVAILABLE',
+    );
   return loadLocalPack(selection.source.path);
 }

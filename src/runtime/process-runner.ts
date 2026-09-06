@@ -28,6 +28,8 @@ export type RunProviderProcessOptions = {
   provider?: unknown;
   plan?: unknown;
   executionProfile?: string;
+  /** Code-only launch policy. Replacement requires a complete explicit plan environment. */
+  environmentMode?: 'inherit' | 'replace';
   input?: string | Buffer;
   timeoutMs?: number;
   outputLimitBytes?: number;
@@ -76,12 +78,14 @@ export function quoteWindowsCommandArgument(value: string) {
   return `"${value.replace(/%/g, '^%').replace(/"/g, '^"')}"`;
 }
 
-function spawnArguments(plan: CommandPlan) {
+function spawnArguments(plan: CommandPlan, environment: NodeJS.ProcessEnv) {
   if (process.platform !== 'win32' || !isWindowsShim(plan.executable))
     return { executable: plan.executable, args: plan.args };
   const command = `"${[plan.executable, ...plan.args].map(quoteWindowsCommandArgument).join(' ')}"`;
   return {
-    executable: process.env.ComSpec || 'cmd.exe',
+    executable:
+      Object.entries(environment).find(([name]) => name.toLowerCase() === 'comspec')?.[1] ||
+      'cmd.exe',
     args: ['/d', '/v:off', '/s', '/c', command],
   };
 }
@@ -132,6 +136,7 @@ export async function runProviderProcess({
   provider,
   plan,
   executionProfile,
+  environmentMode = 'inherit',
   input,
   timeoutMs,
   outputLimitBytes = DEFAULT_OUTPUT_LIMIT_BYTES,
@@ -148,6 +153,22 @@ export async function runProviderProcess({
     throw new TypeError('Expected stdin input to be a string or Buffer.');
   if (onEvent !== undefined && typeof onEvent !== 'function')
     throw new TypeError('Expected onEvent to be a function.');
+  if (!['inherit', 'replace'].includes(environmentMode))
+    throw new TypeError('Expected environmentMode to be inherit or replace.');
+  if (environmentMode === 'replace' && command.environment === undefined)
+    throw new TypeError('Replacement requires an explicit command environment.');
+  if (
+    command.environment &&
+    Object.entries(command.environment).some(
+      ([name, value]) =>
+        !name || /[=\0]/.test(name) || typeof value !== 'string' || value.includes('\0'),
+    )
+  )
+    throw new TypeError('Expected valid environment names and string values.');
+  const environment =
+    environmentMode === 'replace'
+      ? { ...command.environment }
+      : { ...process.env, ...command.environment };
 
   if (executionProfile !== HOST_LOCAL_EXECUTION_PROFILE)
     return result('refused', {
@@ -160,12 +181,26 @@ export async function runProviderProcess({
       reason: contract.capabilities.invocation.reason,
     });
 
-  const launched = spawnArguments(command);
+  try {
+    if (contract.id === 'claude') {
+      // Load only at execution time: provider contracts themselves import the runner.
+      const { assertManagedMcpRuntime } = await import('../integrations/mcp/managed.js');
+      await assertManagedMcpRuntime(command.cwd ?? process.cwd(), contract, environment);
+    }
+  } catch {
+    return result('refused', {
+      code: 'MCP_RUNTIME_DENIED',
+      reason:
+        'Managed MCP authorization, configuration, or environment requires review. Run mcp inspect or mcp remove.',
+    });
+  }
+
+  const launched = spawnArguments(command, environment);
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawn(launched.executable, launched.args, {
       cwd: command.cwd,
-      env: command.environment ? { ...process.env, ...command.environment } : process.env,
+      env: environment,
       detached: process.platform !== 'win32',
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
