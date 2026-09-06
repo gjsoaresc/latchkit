@@ -1,9 +1,12 @@
-import { errorMessage } from '../types.js';
+import { createHash } from 'node:crypto';
 
 export const SCHEDULE_PATH = '.latchkit/schedules/state-v1.json';
 export const SCHEDULE_SCHEMA_VERSION = 1;
+export const MAX_SCHEDULE_BYTES = 4 * 1024 * 1024;
 export type ScheduleRun = {
   id: string;
+  taskId: string | null;
+  cancelRequestedAt: string | null;
   state:
     | 'running'
     | 'completed'
@@ -29,6 +32,7 @@ export type Schedule = {
   providerId: string;
   instructions: string;
   authorization: { scope: string; reference: string; executionAuthorized: boolean };
+  authorizedDefinitionSha256: string;
   limits: { timeoutMs: number; outputLimitBytes: number; maxRuns: number };
   overlap: 'skip';
   missedRun: 'skip';
@@ -57,11 +61,24 @@ export class SchedulerError extends Error {
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const iso = (value: unknown, path: string) => {
-  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)))
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(value).toISOString() !== value
+  )
     throw new SchedulerError('Expected an ISO date-time.', 'SCHEDULER_INVALID', path);
 };
 const text = (value: unknown, path: string) => {
-  if (typeof value !== 'string' || !value.trim())
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.length > 16 * 1024 ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 && ![9, 10, 13].includes(code);
+    })
+  )
     throw new SchedulerError('Expected a non-empty string.', 'SCHEDULER_INVALID', path);
 };
 const secret = /(?:authorization|bearer|token|secret|password|api[_-]?key)\s*[=:]/i;
@@ -75,12 +92,20 @@ function fields(value: unknown, names: string[], path: string) {
       throw new SchedulerError('Required field is missing.', 'SCHEDULER_INVALID', `${path}.${key}`);
 }
 function positive(value: unknown, path: string) {
-  if (!Number.isInteger(value) || (value as number) < 1)
+  if (!Number.isSafeInteger(value) || (value as number) < 1)
     throw new SchedulerError('Expected a positive integer.', 'SCHEDULER_INVALID', path);
 }
 function validateRun(run: ScheduleRun, path: string) {
-  fields(run, ['id', 'state', 'startedAt', 'endedAt', 'reason', 'result'], path);
+  fields(
+    run,
+    ['id', 'taskId', 'cancelRequestedAt', 'state', 'startedAt', 'endedAt', 'reason', 'result'],
+    path,
+  );
   text(run.id, `${path}.id`);
+  if (!/^schedule_run_[0-9a-f-]{36}$/.test(run.id)) throw new SchedulerError('Invalid run ID.');
+  if (run.taskId !== null && !/^task_[0-9a-f-]{36}$/.test(run.taskId))
+    throw new SchedulerError('Invalid task ID.');
+  if (run.cancelRequestedAt !== null) iso(run.cancelRequestedAt, `${path}.cancelRequestedAt`);
   if (
     ![
       'running',
@@ -95,18 +120,20 @@ function validateRun(run: ScheduleRun, path: string) {
   )
     throw new SchedulerError('Unknown run state.', 'SCHEDULER_INVALID', `${path}.state`);
   iso(run.startedAt, `${path}.startedAt`);
+  if ((run.state === 'running') !== (run.endedAt === null))
+    throw new SchedulerError('Run terminal timestamp does not match its state.');
   if (run.endedAt !== null) iso(run.endedAt, `${path}.endedAt`);
   if (run.reason !== null) text(run.reason, `${path}.reason`);
   if (run.result !== null) {
     fields(run.result, ['status', 'exitCode', 'outputBytes'], `${path}.result`);
     text(run.result.status, `${path}.result.status`);
-    if (run.result.exitCode !== null && !Number.isInteger(run.result.exitCode))
+    if (run.result.exitCode !== null && !Number.isSafeInteger(run.result.exitCode))
       throw new SchedulerError(
         'Expected exit code or null.',
         'SCHEDULER_INVALID',
         `${path}.result.exitCode`,
       );
-    if (!Number.isInteger(run.result.outputBytes) || run.result.outputBytes < 0)
+    if (!Number.isSafeInteger(run.result.outputBytes) || run.result.outputBytes < 0)
       throw new SchedulerError(
         'Expected output byte count.',
         'SCHEDULER_INVALID',
@@ -126,6 +153,7 @@ function validateSchedule(schedule: Schedule, path: string) {
     'providerId',
     'instructions',
     'authorization',
+    'authorizedDefinitionSha256',
     'limits',
     'overlap',
     'missedRun',
@@ -135,6 +163,8 @@ function validateSchedule(schedule: Schedule, path: string) {
   ];
   fields(schedule, names, path);
   text(schedule.id, `${path}.id`);
+  if (!/^schedule_[0-9a-f-]{36}$/.test(schedule.id))
+    throw new SchedulerError('Invalid schedule ID.');
   positive(schedule.revision, `${path}.revision`);
   if (typeof schedule.enabled !== 'boolean')
     throw new SchedulerError('Expected boolean.', 'SCHEDULER_INVALID', `${path}.enabled`);
@@ -190,6 +220,21 @@ function validateSchedule(schedule: Schedule, path: string) {
   positive(schedule.limits.timeoutMs, `${path}.limits.timeoutMs`);
   positive(schedule.limits.outputLimitBytes, `${path}.limits.outputLimitBytes`);
   positive(schedule.limits.maxRuns, `${path}.limits.maxRuns`);
+  if (
+    schedule.limits.timeoutMs > 86_400_000 ||
+    schedule.limits.outputLimitBytes > 16 * 1024 * 1024 ||
+    schedule.limits.maxRuns > 100
+  )
+    throw new SchedulerError(
+      'Limits exceed 24 hours, 16 MiB output, or 100 retained runs.',
+      'SCHEDULER_INVALID',
+      `${path}.limits`,
+    );
+  if (schedule.authorizedDefinitionSha256 !== scheduleDefinitionDigest(schedule))
+    throw new SchedulerError(
+      'Execution definition no longer matches its explicit authorization record. Restore the inspected record before changing it through an explicit schedule edit.',
+      'SCHEDULE_SCOPE_CHANGED',
+    );
   if (schedule.overlap !== 'skip' || schedule.missedRun !== 'skip')
     throw new SchedulerError(
       'Only skip overlap and missed-run policies are supported.',
@@ -199,8 +244,32 @@ function validateSchedule(schedule: Schedule, path: string) {
   if (!Array.isArray(schedule.runs) || schedule.runs.length > 100)
     throw new SchedulerError('Expected at most 100 runs.', 'SCHEDULER_INVALID', `${path}.runs`);
   schedule.runs.forEach((run, index) => validateRun(run, `${path}.runs[${index}]`));
+  if (
+    new Set(schedule.runs.map((run) => run.id)).size !== schedule.runs.length ||
+    schedule.runs.filter((run) => run.state === 'running').length > 1
+  )
+    throw new SchedulerError('Duplicate run identity or overlapping persisted runs.');
   iso(schedule.createdAt, `${path}.createdAt`);
   iso(schedule.updatedAt, `${path}.updatedAt`);
+}
+export function scheduleDefinitionDigest(schedule: Schedule): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        schedule.targetProject,
+        schedule.providerId,
+        schedule.timezone,
+        schedule.everyMinutes,
+        schedule.instructions,
+        schedule.authorization.scope,
+        schedule.authorization.reference,
+        schedule.authorization.executionAuthorized,
+        schedule.limits.timeoutMs,
+        schedule.limits.outputLimitBytes,
+        schedule.limits.maxRuns,
+      ]),
+    )
+    .digest('hex');
 }
 export function validateSchedulerState(input: unknown): SchedulerState {
   const state = input as SchedulerState;
@@ -217,9 +286,9 @@ export function validateSchedulerState(input: unknown): SchedulerState {
     );
   fields(state.project, ['id'], '$.project');
   text(state.project.id, '$.project.id');
-  if (!Number.isInteger(state.revision) || state.revision < 0)
+  if (!Number.isSafeInteger(state.revision) || state.revision < 0)
     throw new SchedulerError('Expected non-negative revision.', 'SCHEDULER_INVALID', '$.revision');
-  if (!Array.isArray(state.schedules))
+  if (!Array.isArray(state.schedules) || state.schedules.length > 100)
     throw new SchedulerError('Expected schedules.', 'SCHEDULER_INVALID', '$.schedules');
   const ids = new Set<string>();
   state.schedules.forEach((schedule, index) => {
@@ -238,9 +307,11 @@ export function validateSchedulerState(input: unknown): SchedulerState {
 }
 export function parseSchedulerState(raw: string) {
   try {
+    if (Buffer.byteLength(raw) > MAX_SCHEDULE_BYTES)
+      throw new SchedulerError('Schedule state exceeds 4 MiB.');
     return validateSchedulerState(JSON.parse(raw));
   } catch (error) {
     if (error instanceof SchedulerError) throw error;
-    throw new SchedulerError(`Invalid JSON (${errorMessage(error)}).`, 'SCHEDULER_INVALID_JSON');
+    throw new SchedulerError('Schedule state is invalid JSON.', 'SCHEDULER_INVALID_JSON');
   }
 }

@@ -886,6 +886,17 @@ try {
               : { everyMinutes: number('every-minutes')! }),
             ...(values.provider === undefined ? {} : { providerId: values.provider }),
             ...(values.prompt === undefined ? {} : { instructions: values.prompt }),
+            ...(values.scope === undefined &&
+            values.reference === undefined &&
+            values['host-local-authorized'] !== true
+              ? {}
+              : {
+                  authorization: {
+                    scope: requiredOption(values.scope, 'scope'),
+                    reference: requiredOption(values.reference, 'reference'),
+                    executionAuthorized: values['host-local-authorized'] === true,
+                  },
+                }),
             ...(Object.keys(limits).length ? { limits } : {}),
             ...(values['expected-revision'] === undefined
               ? {}
@@ -902,16 +913,20 @@ try {
         print(await cancelScheduleRun(root, requiredOption(values.id, 'id')));
       else {
         const scheduler = createForegroundScheduler({ root });
-        await scheduler.recover();
-        scheduler.start();
+        await scheduler.start();
         console.log('Foreground scheduler running. Ctrl+C to stop.');
-        await new Promise<void>((resolve) => {
-          const stop = () => {
-            void scheduler.stop().finally(resolve);
-          };
-          process.once('SIGINT', stop);
-          process.once('SIGTERM', stop);
-        });
+        const stop = () => {
+          void scheduler.stop().catch(() => {});
+        };
+        process.once('SIGINT', stop);
+        process.once('SIGTERM', stop);
+        try {
+          const result = await scheduler.closed;
+          if (result.error) throw result.error;
+        } finally {
+          process.off('SIGINT', stop);
+          process.off('SIGTERM', stop);
+        }
       }
     } else if (command === 'ui') {
       const port = values.port === undefined ? 0 : Number(values.port);

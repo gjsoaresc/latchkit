@@ -1,15 +1,19 @@
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { withTaskStateLock } from '../task-state/lock.js';
+import { mkdir } from 'node:fs/promises';
+import {
+  acquireTaskStateLock,
+  inspectTaskStateLock,
+  withTaskStateLock,
+} from '../task-state/lock.js';
 import { providerById } from '../providers/registry.js';
-import { CLAUDE_ADAPTER } from '../providers/claude.js';
-import { codexAdapter } from '../providers/codex.js';
-import { ANTIGRAVITY_ADAPTER } from '../providers/antigravity.js';
-import { cursorIdeAdapter } from '../providers/cursor-ide.js';
-import { cursorCliAdapter } from '../providers/cursor-cli.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../runtime/process-runner.js';
 import type { ProcessRunResult } from '../runtime/process-runner.js';
-import { SchedulerError, validateSchedulerState } from './contracts.js';
+import { createTaskController } from '../runtime/task-controller.js';
+import { createTask } from '../task-state/service.js';
+import { resolveProjectRoot, safePath } from '../storage.js';
+import { SchedulerError, scheduleDefinitionDigest, validateSchedulerState } from './contracts.js';
 import type { Schedule, ScheduleRun, SchedulerState } from './contracts.js';
 import { readSchedulerState, writeSchedulerState } from './store.js';
 
@@ -21,20 +25,7 @@ type Input = {
   authorization: { scope: string; reference: string; executionAuthorized: boolean };
   limits?: Partial<Schedule['limits']>;
 };
-type Adapter = {
-  contract: unknown;
-  operations: { planInvocation(options: Record<string, unknown>): unknown };
-};
-const adapters = new Map<string, Adapter>([
-  ['claude', CLAUDE_ADAPTER as unknown as Adapter],
-  ['codex', codexAdapter as unknown as Adapter],
-  ['antigravity', ANTIGRAVITY_ADAPTER as unknown as Adapter],
-  ['cursor', cursorIdeAdapter as unknown as Adapter],
-  ['cursor-cli', cursorCliAdapter as unknown as Adapter],
-]);
-const active = new Map<string, AbortController>();
 const now = (clock: () => Date) => clock().toISOString();
-const key = (root: string, id: string) => `${path.resolve(root)}\0${id}`;
 const due = (schedule: Schedule, time: Date) => Date.parse(schedule.nextRunAt) <= time.getTime();
 const next = (schedule: Schedule, time: Date) =>
   new Date(time.getTime() + schedule.everyMinutes * 60_000).toISOString();
@@ -45,6 +36,7 @@ async function mutate<T>(
   clock: () => Date,
   operation: (state: SchedulerState) => T | Promise<T>,
 ) {
+  root = await resolveProjectRoot(root);
   return withTaskStateLock(root, async () => {
     const state = await readSchedulerState(root, { clock });
     const result = await operation(state);
@@ -65,9 +57,20 @@ function cleanRun(schedule: Schedule, clock: () => Date) {
     run.state = 'interrupted';
     run.endedAt = now(clock);
     run.reason = 'Foreground scheduler stopped before the owned run completed.';
+    schedule.enabled = false;
   }
 }
 function validateInput(root: string, input: Input, clock: () => Date): Schedule {
+  if (
+    !Number.isSafeInteger(input.everyMinutes) ||
+    input.everyMinutes < 1 ||
+    input.everyMinutes > 10080
+  )
+    throw new SchedulerError(
+      'Recurrence must be between 1 and 10080 minutes.',
+      'SCHEDULER_INVALID',
+      '$.everyMinutes',
+    );
   const at = now(clock);
   const candidate: Schedule = {
     id: `schedule_${randomUUID()}`,
@@ -80,6 +83,7 @@ function validateInput(root: string, input: Input, clock: () => Date): Schedule 
     providerId: input.providerId,
     instructions: input.instructions,
     authorization: input.authorization,
+    authorizedDefinitionSha256: '',
     limits: {
       timeoutMs: input.limits?.timeoutMs ?? 300_000,
       outputLimitBytes: input.limits?.outputLimitBytes ?? 1_048_576,
@@ -91,6 +95,7 @@ function validateInput(root: string, input: Input, clock: () => Date): Schedule 
     createdAt: at,
     updatedAt: at,
   };
+  candidate.authorizedDefinitionSha256 = scheduleDefinitionDigest(candidate);
   const state: SchedulerState = {
     schemaVersion: 1,
     project: { id: 'validation' },
@@ -114,6 +119,7 @@ export async function createSchedule(
   input: Input,
   { clock = () => new Date() }: { clock?: () => Date } = {},
 ) {
+  root = await resolveProjectRoot(root);
   const candidate = validateInput(root, input, clock);
   return mutate(root, clock, (state) => {
     state.schedules.push(candidate);
@@ -164,7 +170,10 @@ export async function editSchedule(
         everyMinutes: patch.everyMinutes ?? current.everyMinutes,
         providerId: patch.providerId ?? current.providerId,
         instructions: patch.instructions ?? current.instructions,
-        authorization: patch.authorization ?? current.authorization,
+        authorization: patch.authorization ?? {
+          ...current.authorization,
+          executionAuthorized: false,
+        },
         limits: { ...current.limits, ...patch.limits },
       },
       clock,
@@ -200,7 +209,13 @@ export async function resumeSchedule(
 ) {
   return mutate(root, clock, (state) => {
     const current = schedule(state, id);
-    cleanRun(current, clock);
+    if (current.runs.some((run) => run.state === 'running'))
+      throw new SchedulerError('Cannot resume an owned run.', 'SCHEDULE_RUN_ACTIVE');
+    if (current.runs.some((run) => run.state === 'interrupted'))
+      throw new SchedulerError(
+        'Interrupted process ownership requires manual review; create a new schedule after reviewing the retained task evidence.',
+        'SCHEDULE_ORPHAN_REVIEW_REQUIRED',
+      );
     current.enabled = true;
     current.nextRunAt = next(current, clock());
     current.revision += 1;
@@ -213,16 +228,15 @@ export async function removeSchedule(
   id: string,
   { clock = () => new Date() }: { clock?: () => Date } = {},
 ) {
-  if (active.has(key(root, id)))
-    throw new SchedulerError(
-      'Cancel the owned run before removing its schedule.',
-      'SCHEDULE_RUN_ACTIVE',
-      '$.id',
-    );
   return mutate(root, clock, (state) => {
     const index = state.schedules.findIndex((item) => item.id === id);
     if (index === -1)
       throw new SchedulerError(`Schedule ${id} does not exist.`, 'SCHEDULE_NOT_FOUND', '$.id');
+    if (state.schedules[index]!.runs.some((run) => run.state === 'running'))
+      throw new SchedulerError(
+        'Cancel and wait for the owned run before removing its schedule.',
+        'SCHEDULE_RUN_ACTIVE',
+      );
     const [removed] = state.schedules.splice(index, 1);
     return { removed: clone(removed!) };
   });
@@ -232,15 +246,13 @@ export async function cancelScheduleRun(
   id: string,
   { clock = () => new Date() }: { clock?: () => Date } = {},
 ) {
-  const controller = active.get(key(root, id));
-  if (controller) controller.abort();
   return mutate(root, clock, (state) => {
     const current = schedule(state, id);
     const run = current.runs.findLast((item) => item.state === 'running');
     if (!run) return { cancelled: false, schedule: clone(current) };
-    run.state = 'cancelled';
-    run.endedAt = now(clock);
-    run.reason = 'Cancelled by explicit local schedule command.';
+    run.cancelRequestedAt ??= now(clock);
+    run.reason =
+      'Cancellation requested; waiting for the owning foreground process to stop its child.';
     current.updatedAt = now(clock);
     return { cancelled: true, schedule: clone(current) };
   });
@@ -255,8 +267,65 @@ export function createForegroundScheduler({
   clock?: () => Date;
   runner?: typeof runProviderProcess;
 }) {
-  root = path.resolve(root);
+  let owner: Awaited<ReturnType<typeof acquireTaskStateLock>> | null = null;
+  let acquiring: Promise<void> | null = null;
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let polling: Promise<unknown> | null = null;
+  let failure: unknown = null;
+  let stopping: Promise<{ stopped: true }> | null = null;
+  let resolveClosed!: (result: { error: unknown | null }) => void;
+  const closed = new Promise<{ error: unknown | null }>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const active = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  async function own() {
+    if (stopped) throw new SchedulerError('Scheduler is stopped.', 'SCHEDULER_STOPPED');
+    if (owner) return;
+    if (acquiring) return acquiring;
+    acquiring = (async () => {
+      root = await resolveProjectRoot(root);
+      // A copied or shared project cannot acquire another platform's ownership
+      // record before validating its canonical target binding.
+      await readSchedulerState(root, { clock });
+      const lockRoot = await safePath(root, '.latchkit/schedules/owner', 'directory');
+      await mkdir(lockRoot, { recursive: true });
+      await safePath(root, '.latchkit/schedules/owner', 'directory');
+      const inspected = await inspectTaskStateLock(lockRoot);
+      if ('metadata' in inspected && inspected.metadata.hostname !== os.hostname())
+        throw new SchedulerError(
+          'Scheduler ownership belongs to another host and cannot be reclaimed locally.',
+          'SCHEDULER_OWNER_AMBIGUOUS',
+        );
+      if (inspected.state === 'live')
+        throw new SchedulerError(
+          'Another foreground scheduler owns this project.',
+          'SCHEDULER_ALREADY_RUNNING',
+        );
+      try {
+        owner = await acquireTaskStateLock(lockRoot);
+      } catch (error) {
+        if ((error as { code?: string }).code === 'TASK_STATE_BUSY')
+          throw new SchedulerError(
+            'Another foreground scheduler owns this project.',
+            'SCHEDULER_ALREADY_RUNNING',
+          );
+        throw error;
+      }
+    })();
+    try {
+      await acquiring;
+    } finally {
+      acquiring = null;
+    }
+  }
   async function recover() {
+    await own();
+    if (active.size)
+      throw new SchedulerError(
+        'Cannot recover while this foreground scheduler owns an active run.',
+        'SCHEDULE_RUN_ACTIVE',
+      );
     return mutate(root, clock, (state) => {
       let recovered = 0;
       for (const item of state.schedules) {
@@ -270,8 +339,14 @@ export function createForegroundScheduler({
   }
   async function claim(id: string): Promise<{ schedule: Schedule; run: ScheduleRun } | null> {
     return mutate(root, clock, (state) => {
-      const item = schedule(state, id);
+      if (stopped) return null;
+      const item = state.schedules.find((item) => item.id === id);
+      if (!item) return null;
       if (!item.enabled || !due(item, clock())) return null;
+      if (clock().getTime() - Date.parse(item.nextRunAt) >= item.everyMinutes * 60_000) {
+        item.nextRunAt = next(item, clock());
+        return null;
+      }
       if (item.runs.some((run) => run.state === 'running')) {
         item.nextRunAt = next(item, clock());
         return null;
@@ -279,6 +354,8 @@ export function createForegroundScheduler({
       item.nextRunAt = next(item, clock());
       const run: ScheduleRun = {
         id: `schedule_run_${randomUUID()}`,
+        taskId: null,
+        cancelRequestedAt: null,
         state: item.authorization.executionAuthorized ? 'running' : 'blocked',
         startedAt: now(clock),
         endedAt: item.authorization.executionAuthorized ? null : now(clock),
@@ -289,92 +366,225 @@ export function createForegroundScheduler({
       };
       item.runs.push(run);
       item.runs = item.runs.slice(-item.limits.maxRuns);
+      if (run.state === 'blocked') item.enabled = false;
       item.updatedAt = now(clock);
       return run.state === 'running' ? { schedule: clone(item), run: clone(run) } : null;
     });
   }
-  async function finish(id: string, runId: string, result: ProcessRunResult) {
+  async function finish(id: string, runId: string, result: ProcessRunResult, taskState?: string) {
     return mutate(root, clock, (state) => {
       const item = schedule(state, id);
       const run = item.runs.find((candidate) => candidate.id === runId);
-      if (!run || run.state === 'cancelled') return clone(item);
+      if (!run || run.state !== 'running') return clone(item);
       run.state =
-        result.status === 'cancelled'
+        run.cancelRequestedAt !== null || result.status === 'cancelled'
           ? 'cancelled'
           : result.status === 'timed-out'
             ? 'timed-out'
             : result.status === 'exited' && result.exitCode === 0
-              ? 'completed'
-              : 'failed';
+              ? taskState === 'verified'
+                ? 'completed'
+                : 'blocked'
+              : result.status === 'refused'
+                ? 'blocked'
+                : 'failed';
       run.endedAt = now(clock);
-      run.reason = result.reason ?? result.message ?? null;
+      run.reason =
+        run.state === 'blocked'
+          ? 'Provider session did not produce verified task evidence; inspect the linked task before resuming.'
+          : `Owned process ended with ${result.status}.`;
       run.result = {
         status: result.status,
         exitCode: result.exitCode ?? null,
         outputBytes: result.outputBytes ?? 0,
       };
       item.updatedAt = now(clock);
+      if (run.state === 'blocked' || run.state === 'failed') item.enabled = false;
       return clone(item);
     });
   }
   async function tick() {
+    if (polling) return polling as Promise<{ started: string[] }>;
+    polling = tickOnce();
+    try {
+      return (await polling) as { started: string[] };
+    } finally {
+      polling = null;
+    }
+  }
+  async function tickOnce() {
+    try {
+      await own();
+    } catch (error) {
+      if ((error as { code?: string }).code === 'SCHEDULER_ALREADY_RUNNING') return { started: [] };
+      throw error;
+    }
     const state = await readSchedulerState(root, { clock });
     const started: string[] = [];
     for (const item of state.schedules) {
-      if (!item.enabled || !due(item, clock()) || active.has(key(root, item.id))) continue;
+      if (
+        stopped ||
+        active.size >= 1 ||
+        !item.enabled ||
+        !due(item, clock()) ||
+        active.has(item.id)
+      )
+        continue;
       const claimed = await claim(item.id);
       if (!claimed) continue;
-      const adapter = adapters.get(claimed.schedule.providerId);
-      if (!adapter) {
-        await finish(item.id, claimed.run.id, {
-          status: 'refused',
-          reason: 'Provider adapter is unavailable.',
-        });
-        continue;
-      }
-      let plan;
-      try {
-        plan = adapter.operations.planInvocation({
-          prompt: claimed.schedule.instructions,
-          cwd: claimed.schedule.targetProject,
-        });
-      } catch (error) {
-        await finish(item.id, claimed.run.id, {
-          status: 'refused',
-          reason: error instanceof Error ? error.message : 'Provider plan was refused.',
-        });
-        continue;
-      }
-      const controller = new AbortController();
-      active.set(key(root, item.id), controller);
+      const abort = new AbortController();
       started.push(item.id);
-      void runner({
-        provider: adapter.contract,
-        plan,
-        executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
-        timeoutMs: claimed.schedule.limits.timeoutMs,
-        outputLimitBytes: claimed.schedule.limits.outputLimitBytes,
-        signal: controller.signal,
-      })
-        .then((result) => finish(item.id, claimed.run.id, result))
-        .catch((error) =>
-          finish(item.id, claimed.run.id, {
-            status: 'spawn-failed',
-            message: error instanceof Error ? error.message : 'Scheduled runner failed.',
-          }),
-        )
-        .finally(() => active.delete(key(root, item.id)));
+      const done = execute(claimed, abort)
+        .catch((error) => {
+          failure = error;
+          void stop().catch(() => {});
+        })
+        .finally(() => active.delete(item.id));
+      active.set(item.id, { abort, done });
     }
     return { started };
   }
-  let timer: ReturnType<typeof setInterval> | null = null;
+  async function execute(
+    claimed: { schedule: Schedule; run: ScheduleRun },
+    abort: AbortController,
+  ) {
+    const { schedule: item, run } = claimed;
+    let cancellationPoll: ReturnType<typeof setInterval> | null = null;
+    let checking = false;
+    let taskId: string | null = null;
+    const controller = createTaskController({
+      root,
+      executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
+      launch: (options = {}) =>
+        runner({
+          ...options,
+          timeoutMs: Math.min(options.timeoutMs ?? item.limits.timeoutMs, item.limits.timeoutMs),
+          outputLimitBytes: Math.min(
+            options.outputLimitBytes ?? item.limits.outputLimitBytes,
+            item.limits.outputLimitBytes,
+          ),
+          signal: options.signal ? AbortSignal.any([options.signal, abort.signal]) : abort.signal,
+        }),
+    });
+    try {
+      const task = await createTask(root, {
+        title: `Scheduled task ${item.id}`,
+        authorization: {
+          source: 'user',
+          scope: item.authorization.scope,
+          reference: item.authorization.reference,
+          provenanceKind: 'explicit-cli',
+        },
+        criteria: [{ description: item.instructions, required: true }],
+      });
+      taskId = task.id;
+      await mutate(root, clock, (state) => {
+        const current = schedule(state, item.id).runs.find((candidate) => candidate.id === run.id)!;
+        current.taskId = task.id;
+        if (current.cancelRequestedAt !== null || stopped) abort.abort();
+      });
+      if (abort.signal.aborted) {
+        await controller.cancel({
+          taskId: task.id,
+          reason: 'Scheduled run cancelled before launch.',
+        });
+        await finish(item.id, run.id, { status: 'cancelled' });
+        return;
+      }
+      cancellationPoll = setInterval(() => {
+        if (checking) return;
+        checking = true;
+        void inspectSchedule(root, item.id, { clock })
+          .then((current) => {
+            if (
+              current.runs.find((candidate) => candidate.id === run.id)?.cancelRequestedAt !== null
+            )
+              abort.abort();
+          })
+          .catch((error) => {
+            failure = error;
+            abort.abort();
+            void stop().catch(() => {});
+          })
+          .finally(() => {
+            checking = false;
+          });
+      }, 100);
+      const result = await controller.start({
+        taskId: task.id,
+        providerId: item.providerId,
+        executionAuthorized: true,
+        prompt: `Authorized scope: ${item.authorization.scope}\nAuthorization reference: ${item.authorization.reference}\n\n${item.instructions}`,
+      });
+      const cancellationObserved = abort.signal.aborted;
+      if (cancellationObserved)
+        await controller.cancel({
+          taskId: task.id,
+          reason: 'Scheduled run cancelled by its owner.',
+        });
+      const finished = await finish(
+        item.id,
+        run.id,
+        abort.signal.aborted ? { ...result.process, status: 'cancelled' } : result.process,
+        result.task.state,
+      );
+      // A separate CLI may commit its request between the last poll and finish.
+      // Drain the linked task cancellation as well as preserving the run's state.
+      if (
+        !cancellationObserved &&
+        finished.runs.find((candidate) => candidate.id === run.id)?.state === 'cancelled'
+      )
+        await controller.cancel({
+          taskId: task.id,
+          reason: 'Scheduled cancellation won the completion race.',
+        });
+    } catch {
+      if (taskId && abort.signal.aborted)
+        await controller
+          .cancel({ taskId, reason: 'Scheduled run cancelled before launch.' })
+          .catch(() => {});
+      await finish(item.id, run.id, { status: abort.signal.aborted ? 'cancelled' : 'refused' });
+    } finally {
+      if (cancellationPoll) clearInterval(cancellationPoll);
+    }
+  }
+  async function stop(): Promise<{ stopped: true }> {
+    if (stopping) return stopping;
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    stopping = (async () => {
+      try {
+        await acquiring;
+        await polling;
+        for (const current of active.values()) current.abort.abort();
+        await Promise.all([...active.values()].map((current) => current.done));
+        if (failure) throw failure;
+        return { stopped: true as const };
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        try {
+          await owner?.release();
+        } catch (error) {
+          failure ??= error;
+        }
+        owner = null;
+        resolveClosed({ error: failure });
+      }
+    })();
+    return stopping;
+  }
   return Object.freeze({
     recover,
     tick,
-    start(intervalMs = 30_000) {
-      if (!Number.isInteger(intervalMs) || intervalMs < 1_000)
+    closed,
+    stop,
+    async start(intervalMs = 30_000) {
+      if (!Number.isInteger(intervalMs) || intervalMs < 1_000 || intervalMs > 60_000)
         throw new SchedulerError(
-          'Foreground interval must be at least 1000 ms.',
+          'Foreground interval must be between 1000 and 60000 ms.',
           'SCHEDULER_INVALID',
           '$.intervalMs',
         );
@@ -383,15 +593,21 @@ export function createForegroundScheduler({
           'Foreground scheduler is already running.',
           'SCHEDULER_ALREADY_RUNNING',
         );
-      timer = setInterval(() => void tick(), intervalMs);
+      try {
+        await recover();
+      } catch (error) {
+        await stop().catch(() => {});
+        throw error;
+      }
+      if (stopped)
+        throw new SchedulerError('Scheduler stopped during startup.', 'SCHEDULER_STOPPED');
+      timer = setInterval(() => {
+        void tick().catch((error) => {
+          failure = error;
+          void stop().catch(() => {});
+        });
+      }, intervalMs);
       return { intervalMs };
-    },
-    async stop() {
-      if (timer) clearInterval(timer);
-      timer = null;
-      for (const [owned, controller] of active)
-        if (owned.startsWith(`${root}\0`)) controller.abort();
-      return { stopped: true };
     },
   });
 }
