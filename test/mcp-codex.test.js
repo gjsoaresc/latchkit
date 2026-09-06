@@ -10,7 +10,13 @@ import {
   codexMcpQualification,
   planCodexManagedMcp,
 } from '../dist/src/integrations/mcp/codex.js';
-import { inspectManagedMcp } from '../dist/src/integrations/mcp/managed.js';
+import {
+  applyManagedMcp,
+  authorizeManagedMcp,
+  inspectManagedMcp,
+  managedMcpSnapshotDigest,
+  planManagedMcp,
+} from '../dist/src/integrations/mcp/managed.js';
 import { entryHash } from '../dist/src/integrations/mcp/contracts.js';
 
 const version = 'codex-cli 0.153.2';
@@ -164,4 +170,32 @@ test('Codex apply rejects an exact reviewed snapshot that becomes stale', async 
     }),
     { code: 'MCP_EDIT_CONFLICT' },
   );
+});
+
+test('public Codex apply rechecks the reviewed snapshot inside its locked mutation', async (t) => {
+  const root = await fixture(t);
+  const definitions = [definition()];
+  const grants = authorizeManagedMcp(definitions, true);
+  const codexOptions = { versionOutput: version };
+  const preview = await planManagedMcp(root, definitions, grants, process.env, codexOptions);
+  const snapshot = await managedMcpSnapshotDigest(root);
+  await assert.rejects(
+    applyManagedMcp(root, definitions, grants, {
+      expectedSnapshotDigest: snapshot,
+      expectedPlanDigest: entryHash(preview),
+      codexVersionOutput: version,
+      beforeCodexApply: async () => {
+        await fs.mkdir(path.join(root, '.codex'));
+        await fs.writeFile(path.join(root, '.codex/config.toml'), 'model = "late-change"\n');
+      },
+    }),
+    { code: 'MCP_EDIT_CONFLICT' },
+  );
+  assert.equal(
+    await fs.readFile(path.join(root, '.codex/config.toml'), 'utf8'),
+    'model = "late-change"\n',
+  );
+  await assert.rejects(fs.readFile(path.join(root, '.latchkit/mcp-codex-state.json')), {
+    code: 'ENOENT',
+  });
 });

@@ -288,6 +288,7 @@ export async function planManagedMcp(
   values: readonly unknown[],
   grants: readonly RuntimeMcpGrant[] = [],
   environment: NodeJS.ProcessEnv = process.env,
+  codexOptions: { executable?: string; versionOutput?: unknown } = {},
 ): Promise<McpPlan> {
   const definitions = values.map(validateMcpIntegration);
   if (
@@ -299,6 +300,7 @@ export async function planManagedMcp(
   ) {
     const plan = await planCodexManagedMcp(root, definitions, {
       authorized: grants.some((grant) => grant.provider === 'codex' && grant.authorized),
+      ...codexOptions,
     });
     return {
       changes: plan.changes,
@@ -328,6 +330,10 @@ export async function applyManagedMcp(
     faultBoundary?: TransactionInput['faultBoundary'];
     expectedSnapshotDigest?: string;
     expectedPlanDigest?: string;
+    /** @internal Deterministic qualification fixture; application paths always probe Codex. */
+    codexVersionOutput?: unknown;
+    /** @internal Test seam for the review-to-apply race boundary. */
+    beforeCodexApply?: () => Promise<void> | void;
   } = {},
 ): Promise<McpPlan> {
   const definitions = values.map(validateMcpIntegration);
@@ -338,7 +344,19 @@ export async function applyManagedMcp(
       )) ||
     (definitions.length === 0 && (await hasCodexManagedMcp(root)))
   ) {
-    const reviewedPlan = await planManagedMcp(root, definitions, grants, options.environment);
+    const codexOptions = { versionOutput: options.codexVersionOutput };
+    const reviewedPlan = await planManagedMcp(
+      root,
+      definitions,
+      grants,
+      options.environment,
+      codexOptions,
+    );
+    const codexSnapshotDigest = await codexManagedMcpSnapshotDigest(root);
+    const codexPlan = await planCodexManagedMcp(root, definitions, {
+      authorized: grants.some((grant) => grant.provider === 'codex' && grant.authorized),
+      ...codexOptions,
+    });
     if (
       (options.expectedSnapshotDigest !== undefined &&
         options.expectedSnapshotDigest !== (await managedMcpSnapshotDigest(root))) ||
@@ -349,9 +367,13 @@ export async function applyManagedMcp(
         'The reviewed MCP preview no longer matches the managed configuration. Review it again.',
         'MCP_EDIT_CONFLICT',
       );
+    await options.beforeCodexApply?.();
     const plan = await applyCodexManagedMcp(root, definitions, {
       authorized: grants.some((grant) => grant.provider === 'codex' && grant.authorized),
       faultBoundary: options.faultBoundary,
+      ...codexOptions,
+      expectedSnapshotDigest: codexSnapshotDigest,
+      expectedPlanDigest: entryHash(codexPlan),
     });
     return {
       changes: plan.changes,
