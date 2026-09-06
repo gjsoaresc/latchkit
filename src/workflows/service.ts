@@ -269,7 +269,10 @@ function approvalValid(record: WorkflowRecord, task: Task): boolean {
     // See docs/task-state.md#reconciling-changed-intent: a change to accepted intent (an accepted
     // decision superseded, an assumption un-confirmed, …) invalidates approval exactly like a
     // criteria change already does, even when no criterion text moved.
-    record.approval.intentDigest === computeIntentDigest(task.records ?? []),
+    // An approval persisted before intent digests existed was necessarily made with no adopted
+    // records, so it compares against the empty-intent digest.
+    (record.approval.intentDigest ?? computeIntentDigest([])) ===
+      computeIntentDigest(task.records ?? []),
   );
 }
 

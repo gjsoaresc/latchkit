@@ -2709,7 +2709,8 @@ export async function previewTaskReconciliation(
       workflowApproval: workflow?.approval
         ? {
             criteriaDigest: workflow.approval.criteriaDigest,
-            intentDigest: workflow.approval.intentDigest,
+            // A legacy approval (recorded before intent digests) reads as the empty-intent digest.
+            intentDigest: workflow.approval.intentDigest ?? computeIntentDigest([]),
           }
         : null,
     },
@@ -2811,7 +2812,8 @@ export async function applyTaskReconciliation(
         workflowApproval: workflow?.approval
           ? {
               criteriaDigest: workflow.approval.criteriaDigest,
-              intentDigest: workflow.approval.intentDigest,
+              // A legacy approval (recorded before intent digests) reads as the empty-intent digest.
+              intentDigest: workflow.approval.intentDigest ?? computeIntentDigest([]),
             }
           : null,
       },

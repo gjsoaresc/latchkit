@@ -386,3 +386,107 @@ test('reconcile-apply refuses to touch a task with an owned, in-flight workflow 
 
   releaseImplementation();
 });
+
+test('a plan approval persisted before intent digests existed stays usable until accepted intent changes', async (t) => {
+  const root = await fixture(t);
+  const task = await createTask(root, {
+    title: 'Legacy approval',
+    criteria: [
+      { description: 'Export completes successfully', required: true, approvalRequired: false },
+    ],
+    authorizationRequired: false,
+  });
+  const criterionId = task.criteria[0].id;
+  const { adapter, launch } = fakeAdapter({
+    schemaVersion: 1,
+    checks: [
+      {
+        id: 'export-check',
+        criterionId,
+        label: 'Export produced the expected file',
+        type: 'manual',
+        instructions: 'Inspect the exported file.',
+      },
+    ],
+  });
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['fixture', adapter]]),
+    launch,
+  });
+  t.after(() => controller.shutdown());
+
+  const created = await controller.run({
+    taskId: task.id,
+    providerId: 'fixture',
+    reviewProviderId: 'fixture',
+    executionAuthorized: true,
+  });
+  assert.equal((await controller.wait(created.taskId)).status, 'awaiting-approval');
+  const inspected = await controller.inspect(created.taskId);
+  await controller.approve({
+    taskId: created.taskId,
+    expectedRevision: inspected.revision,
+    planDigest: inspected.plan.digest,
+    requirementsDigest: inspected.requirements.digest,
+    checksDigest: inspected.plan.checksDigest,
+    scope: 'approve the plan',
+    reference: 'user approved',
+  });
+  const awaitingInput = await controller.wait(created.taskId);
+  assert.equal(awaitingInput.status, 'awaiting-input');
+
+  // Rewrite the persisted approval into its pre-intent-digest shape, exactly as an installation
+  // upgraded across this change would find it on disk.
+  const statePath = path.join(root, '.latchkit', 'workflows', 'state-v1.json');
+  const state = JSON.parse(await fs.readFile(statePath, 'utf8'));
+  const stored = state.workflows.find((item) => item.taskId === task.id);
+  assert.equal(typeof stored.approval.intentDigest, 'string');
+  delete stored.approval.intentDigest;
+  await fs.writeFile(statePath, JSON.stringify(state, null, 2));
+
+  // The legacy record still reads, and the approval still counts as fresh: an ordinary resume
+  // executes the approved contract again instead of rerouting to approval.
+  const legacy = await controller.inspect(created.taskId);
+  assert.equal(legacy.approval.intentDigest, undefined);
+  await controller.resume({
+    taskId: created.taskId,
+    executionAuthorized: true,
+    expectedRevision: legacy.revision,
+    prompt: 'continue',
+  });
+  const resumed = await controller.wait(created.taskId);
+  assert.equal(resumed.status, 'awaiting-input');
+  assert.equal(resumed.completedActions.length, legacy.completedActions.length + 1);
+
+  // Adopting new intent changes the digest the approval is compared against, so the legacy
+  // approval now goes stale exactly like a current one would.
+  const current = await inspectTask(root, task.id);
+  const added = await recordTaskRecord(root, {
+    taskId: task.id,
+    expectedRevision: current.task.revision,
+    kind: 'decision',
+    text: 'Export includes only orders visible to the current user',
+    provenance: { kind: 'direct-user', reference: 'user narrowed scope' },
+  });
+  const decision = added.records.at(-1);
+  await transitionTaskRecord(root, {
+    taskId: task.id,
+    expectedRevision: added.revision,
+    recordId: decision.id,
+    recordRevision: decision.revision,
+    status: 'accepted',
+    reason: 'confirmed with the user',
+    authorization: { source: 'user', scope: 'accept decision', reference: 'user confirmed' },
+  });
+  const beforeStaleResume = await controller.inspect(created.taskId);
+  await controller.resume({
+    taskId: created.taskId,
+    executionAuthorized: true,
+    expectedRevision: beforeStaleResume.revision,
+    prompt: 'continue',
+  });
+  const stale = await controller.wait(created.taskId);
+  assert.equal(stale.status, 'awaiting-approval');
+  assert.equal(stale.completedActions.length, beforeStaleResume.completedActions.length);
+});

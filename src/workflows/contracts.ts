@@ -37,8 +37,10 @@ export type WorkflowApproval = {
    * reconciliation that changes accepted intent — even one that never touches criteria text —
    * invalidates this approval immediately, the same way a criteria change already does through
    * `criteriaDigest`. A task with no adopted records produces the same fixed digest, so this
-   * never invalidates an approval on a task that predates task records (task-state schema < 4). */
-  intentDigest: string;
+   * never invalidates an approval on a task that predates task records (task-state schema < 4).
+   * Approvals persisted before this field existed omit it; they are read as if approved with no
+   * adopted intent, so they stay valid until accepted intent actually changes. */
+  intentDigest?: string;
   scope: string;
   reference: string;
   source: SourceIdentity;
@@ -403,7 +405,8 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
         'requirementsDigest',
         'checksDigest',
         'criteriaDigest',
-        'intentDigest',
+        // Legacy approvals (recorded before intent digests) omit this key.
+        ...(approval.intentDigest === undefined ? [] : ['intentDigest']),
         'scope',
         'reference',
         'source',
@@ -413,7 +416,7 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
       !digest(approval.requirementsDigest) ||
       !digest(approval.checksDigest) ||
       !digest(approval.criteriaDigest) ||
-      !digest(approval.intentDigest) ||
+      (approval.intentDigest !== undefined && !digest(approval.intentDigest)) ||
       !text(approval.scope) ||
       !text(approval.reference) ||
       !source(approval.source) ||
