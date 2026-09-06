@@ -219,7 +219,12 @@ function Console() {
     snapshot.selection.providers.includes(provider.id),
   );
   const connection =
-    snapshot.connection === 'Loading workspace…' ? state.doctor.project : snapshot.connection;
+    snapshot.connection === 'Loading workspace…'
+      ? (state.doctor.project
+          .replace(/[\\/]+$/, '')
+          .split(/[\\/]/)
+          .pop() ?? state.doctor.project)
+      : snapshot.connection;
   return (
     <div className="shell">
       <aside className="sidebar" aria-label="Workspace navigation">
