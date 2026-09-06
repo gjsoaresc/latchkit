@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/update-settings-v1.schema.json",
+  "title": "Latchkit installation update settings v1",
+  "description": "User-local, per-installation manual/notify/automatic update preference (issue #139), stored beside the activation pointer (`current`) and the launcher ownership record, never inside a project checkout and never once per project. An installation that has never explicitly changed this remains manual: reading a store that has never been written returns this shape with consent.source \"legacy-default\" without ever creating the file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "revision", "mode", "consent", "createdAt", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Incremented on every explicit write. A staged update record's authorizedRevision must match this exact value for automatic-activation eligibility; any settings write (including switching modes) invalidates a prior authorization."
+    },
+    "mode": {
+      "enum": ["manual", "notify", "automatic"],
+      "description": "manual: check only on request, explicit install and restart. notify: automatic checks with a notification, no automatic download/install. automatic: check, download, verify, and stage while running; activation still requires the installation-wide idle/compatibility gates from later #139 slices."
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "actor", "reason", "requestedAt"],
+      "properties": {
+        "source": {
+          "enum": ["legacy-default", "explicit-user"],
+          "description": "legacy-default never comes from a write; it is only ever the value read back when no settings file exists yet, so viewing or dismissing onboarding never opts a user in."
+        },
+        "actor": { "type": ["string", "null"], "minLength": 1 },
+        "reason": { "type": ["string", "null"], "minLength": 1 },
+        "requestedAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

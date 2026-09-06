@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/update-staged-v1.schema.json",
+  "title": "Latchkit staged update record v1",
+  "description": "Result of downloading, verifying, extracting, and staging a bound update preview (issue #139) into its immutable versions/<key> directory via the manager's stageBundle. Deliberately excludes any activation state: staging this record never changes `current`, the managed launchers, or the runtime a new launch resolves to. Stored beside the activation pointer, installation-scoped, never per project.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "previewId",
+    "version",
+    "target",
+    "assetName",
+    "sha256",
+    "key",
+    "directory",
+    "stagedAt",
+    "authorizedMode",
+    "authorizedRevision",
+    "status",
+    "failureReason"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "previewId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Binds this staged record back to the exact preview (version, asset identity, checksum) it was built from."
+    },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "target": { "type": "string", "pattern": "^(win32-x64|linux-x64|darwin-x64|darwin-arm64)$" },
+    "assetName": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The versions/<key> directory name (version-target), matching the manager's own immutable version-directory naming."
+    },
+    "directory": {
+      "type": "string",
+      "description": "Absolute path to the staged immutable version directory. Empty only for a failed record whose staging never reached a resolved version directory."
+    },
+    "stagedAt": { "type": "string", "format": "date-time" },
+    "authorizedMode": {
+      "enum": ["manual", "notify", "automatic"],
+      "description": "The update mode in effect when staging completed."
+    },
+    "authorizedRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The update settings revision in effect when staging completed. A future automatic-activation step must re-check this against the current settings revision (see isStagedUpdateEligibleForAutomaticActivation) before activating."
+    },
+    "status": { "enum": ["ready", "failed"] },
+    "failureReason": { "type": ["string", "null"], "minLength": 1 }
+  }
+}
