@@ -138,6 +138,12 @@ import {
 } from './spec-imports/registration-service.js';
 import { buildContextBrief } from './context-brief/service.js';
 import type { ContextBrief } from './context-brief/contracts.js';
+import {
+  exploreCodegraph,
+  inspectCodegraph,
+  readCodegraphSettings,
+  saveCodegraphSettings,
+} from './integrations/codegraph/service.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -344,6 +350,7 @@ Usage: latchkit <command> [options]
              previewed entry into existing task state (an ordinary task plus one imported
              observation record), reinspect its registered snapshot, or remove only
              Latchkit's association — never the source file
+  codegraph Inspect, enable/disable, or run a bounded advisory CodeGraph exploration
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -500,6 +507,7 @@ try {
       prompt: { type: 'string' },
       session: { type: 'string' },
       'host-local-authorized': { type: 'boolean' },
+      query: { type: 'string' },
       help: { type: 'boolean' },
       version: { type: 'boolean' },
       export: { type: 'boolean' },
@@ -788,6 +796,7 @@ try {
         'id',
         'expected-revision',
       ],
+      codegraph: ['project', 'query'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -2121,6 +2130,23 @@ try {
           }),
         );
       else print(await removeProject(registryRoot, requiredOption(values.id, 'id')));
+    } else if (command === 'codegraph') {
+      const action = extra[0];
+      if (
+        extra.length !== 1 ||
+        !action ||
+        !['inspect', 'enable', 'disable', 'explore'].includes(action)
+      )
+        throw new Error(
+          'Usage: latchkit codegraph <inspect|enable|disable|explore> [--query <text>].',
+        );
+      if (action === 'inspect') print(await inspectCodegraph(root));
+      else if (action === 'explore')
+        print(await exploreCodegraph(root, requiredOption(values.query, 'query')));
+      else {
+        const settings = await readCodegraphSettings(root);
+        print(await saveCodegraphSettings(root, { ...settings, enabled: action === 'enable' }));
+      }
     } else if (command === 'spec-import') {
       const specImportActions = ['discover', 'preview', 'register', 'reinspect', 'detach'];
       const action = extra[0];
