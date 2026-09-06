@@ -3,7 +3,7 @@
  *
  * Latchkit ships no bundled zip/tar reader (the project has zero runtime
  * dependencies), so extraction shells out to the platform tool already
- * proven for this exact job: PowerShell's `Expand-Archive` for the qualified
+ * proven for this exact job: .NET `ZipFile` through PowerShell for the qualified
  * `win32-x64` `.zip` target (the same mechanism `install.ps1` and
  * `scripts/bundle-smoke.js` already use), and `tar` for the deferred
  * experimental `.tar.gz` targets. No administrator rights, WSL, or Bash are
@@ -37,13 +37,16 @@ async function extractZipOnWindows(
   destination: string,
   timeoutMs: number,
 ): Promise<void> {
+  // .NET ZipFile rather than Expand-Archive: a Windows PowerShell 5.1 child spawned from pwsh
+  // (as on CI) inherits a PSModulePath that cannot autoload script-module cmdlets, which is why
+  // install.ps1 already extracts this way.
   // A script file (rather than an inline -Command string) survives paths
   // with spaces and Unicode without shell-quoting concerns, matching the
   // technique already proven in scripts/bundle-smoke.js.
   const script = path.join(destination, '..', `extract-${path.basename(destination)}.ps1`);
   await writeFile(
     script,
-    'param($Archive,$Destination)\n$ErrorActionPreference="Stop"\nExpand-Archive -LiteralPath $Archive -DestinationPath $Destination -Force\n',
+    'param($Archive,$Destination)\n$ErrorActionPreference="Stop"\nAdd-Type -AssemblyName System.IO.Compression.FileSystem\n[System.IO.Compression.ZipFile]::ExtractToDirectory($Archive, $Destination)\n',
   );
   try {
     await run(
