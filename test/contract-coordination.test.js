@@ -4,7 +4,11 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { createTask, recordTaskRecord, transitionTaskRecord } from '../dist/src/task-state/service.js';
+import {
+  createTask,
+  recordTaskRecord,
+  transitionTaskRecord,
+} from '../dist/src/task-state/service.js';
 import {
   acknowledgeContractReceipt,
   createContractAssociation,
