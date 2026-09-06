@@ -44,13 +44,21 @@ edited. Enable, disable, and recovery use the registered-resource transaction
 layer, so interrupted changes remain inspectable and recoverable.
 
 The documented CLI events are `PreToolUse`, `PostToolUse`, `PreInvocation`,
-`PostInvocation`, and `Stop`. The adapter translates only `Stop` into the
-normalized `turn-completed` lifecycle event; the other events are observations.
-It emits only advisory responses: the published hook documentation establishes
-JSON stdin/stdout but does not justify a blocking enforcement response here.
-Malformed payloads, unknown event names, unsupported decisions, and missing
-correlation fields are refused. The [shared hooks documentation](https://antigravity.google/docs/hooks)
-is distinct from the IDE-specific hook contract.
+`PostInvocation`, and `Stop`. The export deliberately registers only
+`PostToolUse`, whose documented empty response is advisory. The other events
+are omitted: their responses can control execution or have no evidenced,
+permission-preserving advisory response. This preserves Antigravity's native
+permission policy.
+
+The adapter can translate `Stop` into a normalized `turn-completed` lifecycle
+envelope when its owning application supplies project, task, and conversation
+correlation. The standalone project handler does not have that task context or
+start a dispatcher/daemon, so it validates bounded JSON and returns the
+documented advisory response; it does not claim to persist or dispatch lifecycle
+events on its own. Malformed payloads, unknown registered event names,
+unsupported decisions, and missing adapter correlation fields are refused. The
+[shared hooks documentation](https://antigravity.google/docs/hooks) is distinct
+from the IDE-specific hook contract.
 
 Headless permission denials may return process exit zero. Existing permissions
 must therefore be preserved and acceptance checked independently. The

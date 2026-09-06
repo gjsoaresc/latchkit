@@ -25,12 +25,16 @@ export const ANTIGRAVITY_RESUME_VERSION = '1.1.27';
 export const ANTIGRAVITY_HOOKS_PATH = '.agents/hooks.json';
 export const ANTIGRAVITY_HANDLER_PATH = '.latchkit/providers/antigravity/hook-handler.cjs';
 export const ANTIGRAVITY_STATE_PATH = '.latchkit/providers/antigravity/ownership.json';
-export const ANTIGRAVITY_HOOK_EVENTS = Object.freeze([
+export const ANTIGRAVITY_HOOK_EVENTS = Object.freeze(['PostToolUse']);
+export const ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS = Object.freeze([
   'PreToolUse',
-  'PostToolUse',
   'PreInvocation',
   'PostInvocation',
   'Stop',
+]);
+const ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS = Object.freeze([
+  ...ANTIGRAVITY_HOOK_EVENTS,
+  ...ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS,
 ]);
 const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 
@@ -57,12 +61,24 @@ const contract = {
       'Official documentation describes print mode (-p/--print) and machine-readable JSON output.',
       HEADLESS_DOCS_URL,
     ),
-    hooks: Object.fromEntries(
-      ANTIGRAVITY_HOOK_EVENTS.map((event) => [
-        event,
-        evidence('supported', `Antigravity CLI documents the ${event} hook.`, HOOK_DOCS_URL),
-      ]),
-    ),
+    hooks: {
+      ...Object.fromEntries(
+        ANTIGRAVITY_HOOK_EVENTS.map((event) => [
+          event,
+          evidence('supported', `Antigravity CLI documents the ${event} hook.`, HOOK_DOCS_URL),
+        ]),
+      ),
+      ...Object.fromEntries(
+        ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS.map((event) => [
+          event,
+          evidence(
+            'unsupported',
+            `${event} requires an output decision or has no permission-preserving advisory response evidence.`,
+            HOOK_DOCS_URL,
+          ),
+        ]),
+      ),
+    },
     decisions: {
       blocking: evidence(
         'unknown',
@@ -314,7 +330,7 @@ function parseHooks(raw: string | null): HookDocument {
 
 function entriesFor(event: string, command: string) {
   const eventCommand = `${command} --event ${event}`;
-  return ['PreToolUse', 'PostToolUse'].includes(event)
+  return event === 'PostToolUse'
     ? [{ matcher: '*', hooks: [hookEntry(eventCommand)] }]
     : [invocationEntry(eventCommand)];
 }
@@ -478,7 +494,11 @@ export function translateAntigravityLifecycleInput(
 ) {
   if (!isRecord(input)) throw new ProviderContractError('Expected Antigravity hook payload.');
   const event = text(context.eventName, 'eventName');
-  if (!ANTIGRAVITY_HOOK_EVENTS.includes(event as (typeof ANTIGRAVITY_HOOK_EVENTS)[number]))
+  if (
+    !ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS.includes(
+      event as (typeof ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS)[number],
+    )
+  )
     throw new ProviderContractError('Unsupported Antigravity hook event.', '$.eventName');
   const kind = event === 'Stop' ? 'turn-completed' : null;
   if (!kind) return { accepted: true, event, envelope: null };
@@ -513,7 +533,9 @@ export function translateAntigravityLifecycleOutput(
 ) {
   if (
     typeof event !== 'string' ||
-    !ANTIGRAVITY_HOOK_EVENTS.includes(event as (typeof ANTIGRAVITY_HOOK_EVENTS)[number])
+    !ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS.includes(
+      event as (typeof ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS)[number],
+    )
   )
     throw new ProviderContractError('Unsupported Antigravity hook event.', '$.event');
   if (result.decision === undefined || result.decision === 'advisory') return {};

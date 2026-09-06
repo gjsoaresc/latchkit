@@ -1,7 +1,10 @@
 'use strict';
-/* Packaged Antigravity CLI hook: validate bounded JSON then fail-open. */
+/* Packaged Antigravity CLI hook: validate bounded JSON then emit the documented
+ * PostToolUse empty advisory response. Other documented events are deliberately
+ * absent because their responses can control execution or lack an evidenced
+ * permission-preserving advisory response. */
 const INPUT_LIMIT = 64 * 1024;
-const events = new Set(['PreToolUse', 'PostToolUse', 'PreInvocation', 'PostInvocation', 'Stop']);
+const events = new Set(['PostToolUse']);
 
 async function main() {
   const [flag, event] = process.argv.slice(2);

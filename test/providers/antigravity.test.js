@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import {
   ANTIGRAVITY_ADAPTER,
   ANTIGRAVITY_HANDLER_PATH,
@@ -24,6 +25,30 @@ const temporaryRoot = async (t) => {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 };
+const runHook = (root, event, input) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [path.join(root, ANTIGRAVITY_HANDLER_PATH), '--event', event],
+      {
+        cwd: root,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.once('error', reject);
+    child.once('exit', (exitCode) =>
+      resolve({
+        exitCode,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      }),
+    );
+    child.stdin.end(input);
+  });
 
 test('Antigravity exposes the documented bounded print-mode contract', () => {
   assert.equal(ANTIGRAVITY_ADAPTER.contract.id, 'antigravity');
@@ -116,7 +141,8 @@ test('Antigravity resumes only an explicit conversation on the evidenced exact v
     'partial',
   );
   assert.equal(ANTIGRAVITY_ADAPTER.contract.capabilities.invocation.state, 'supported');
-  assert.equal(ANTIGRAVITY_ADAPTER.contract.capabilities.hooks.Stop.state, 'supported');
+  assert.equal(ANTIGRAVITY_ADAPTER.contract.capabilities.hooks.PostToolUse.state, 'supported');
+  assert.equal(ANTIGRAVITY_ADAPTER.contract.capabilities.hooks.Stop.state, 'unsupported');
 });
 
 test('Antigravity hook registration is explicit, reversible, and preserves unrelated settings', async (t) => {
@@ -141,8 +167,18 @@ test('Antigravity hook registration is explicit, reversible, and preserves unrel
   assert.deepEqual(installed.future, { keep: true });
   assert.deepEqual(installed.other, { Stop: [{ command: 'user-hook' }] });
   assert.deepEqual(Object.keys(installed.latchkit).sort(), [...ANTIGRAVITY_HOOK_EVENTS].sort());
-  assert.match(installed.latchkit.Stop[0].command, /--event Stop/);
+  assert.match(installed.latchkit.PostToolUse[0].hooks[0].command, /--event PostToolUse/);
   assert.ok(await fs.readFile(path.join(root, ANTIGRAVITY_HANDLER_PATH), 'utf8'));
+  const post = await runHook(root, 'PostToolUse', JSON.stringify({ conversationId: 'opaque-id' }));
+  assert.deepEqual(post, { exitCode: 0, stdout: '{}\n', stderr: '' });
+  for (const event of ['PreToolUse', 'PreInvocation', 'PostInvocation', 'Stop']) {
+    const refused = await runHook(root, event, '{}');
+    assert.equal(refused.exitCode, 1);
+    assert.match(refused.stderr, /Unsupported Antigravity hook event/);
+  }
+  const malformed = await runHook(root, 'PostToolUse', '{');
+  assert.equal(malformed.exitCode, 1);
+  assert.match(malformed.stderr, /Invalid Antigravity hook JSON input/);
   await applyAntigravityHookExport(root, { enabled: false });
   // The original document's unrelated content survives, while an empty managed namespace is removed.
   const removed = JSON.parse(await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8'));
@@ -163,7 +199,7 @@ test('Antigravity hook ownership conflicts refuse removal and transaction failur
   });
   const before = await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8');
   const edited = JSON.parse(before);
-  edited.latchkit.Stop[0].timeout = 9;
+  edited.latchkit.PostToolUse[0].hooks[0].timeout = 9;
   await fs.writeFile(
     path.join(root, ANTIGRAVITY_HOOKS_PATH),
     `${JSON.stringify(edited, null, 2)}\n`,
