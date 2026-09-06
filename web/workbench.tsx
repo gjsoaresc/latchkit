@@ -228,6 +228,9 @@ export function TaskList({
                 {task.reconciliation?.recordedProcess ?? 'unknown'} · verification{' '}
                 {task.verificationMode ?? 'standard'}
               </p>
+              <Button asChild variant="outline">
+                <a href={`/specs/review?task=${encodeURIComponent(task.id)}`}>Review decisions</a>
+              </Button>
               <strong>Acceptance criteria</strong>
               <ul>
                 {task.criteria.map((criterion) => {

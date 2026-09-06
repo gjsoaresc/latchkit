@@ -36,6 +36,15 @@ import {
   listDiffAnnotations,
   updateDiffAnnotation,
 } from './reviews/diff-annotations.js';
+import {
+  formatDecisionComparisonText,
+  inspectDecisionComparison,
+} from './reviews/decision-comparison.js';
+import {
+  addResultDecisionNotes,
+  approveResultDecision,
+} from './workflows/result-decision-service.js';
+import { addSpecDecisionNotes, approveSpecDecision } from './workflows/spec-decision-service.js';
 import { createAcceptanceVerifier } from './acceptance/service.js';
 import {
   inspectTask,
@@ -114,6 +123,9 @@ const ASSETS = new Map<string, [string, string]>([
   // the matching page. /projects predates this (#94) and keeps working unchanged.
   ['/projects', ['index.html', 'text/html; charset=utf-8']],
   ['/specs', ['index.html', 'text/html; charset=utf-8']],
+  // Issue #113: a directly addressable per-task decision-comparison review, linked from Specs &
+  // Tasks (?task=<id> selects the task; see web/review.tsx).
+  ['/specs/review', ['index.html', 'text/html; charset=utf-8']],
   ['/memory', ['index.html', 'text/html; charset=utf-8']],
   ['/usage', ['index.html', 'text/html; charset=utf-8']],
   ['/settings', ['index.html', 'text/html; charset=utf-8']],
@@ -726,6 +738,40 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         } else if (pathname === '/api/annotations/action' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof updateDiffAnnotation>[1]>(req);
           respond(res, 200, await serialize(() => updateDiffAnnotation(root, body)));
+          // Issue #113: a read-only comparison of changed decisions/consequences for one task,
+          // reusing #110's task records, #111's impact graph, and #97/#101's decision machinery.
+          // Viewing or exporting never mutates state or triggers provider/evidence-refresh work.
+        } else if (pathname === '/api/reviews/decision-comparison' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('task');
+          if (!taskId) throw fail(400, 'Task ID is required.');
+          const baselineParam = requestUrl.searchParams.get('baselineRevision');
+          const baselineRevision = baselineParam === null ? undefined : Number(baselineParam);
+          if (baselineRevision !== undefined && !Number.isInteger(baselineRevision))
+            throw fail(400, 'baselineRevision must be an integer task revision.');
+          const format = requestUrl.searchParams.get('format') ?? 'json';
+          if (!['json', 'text'].includes(format)) throw fail(400, 'format must be json or text.');
+          const report = await inspectDecisionComparison(root, { taskId, baselineRevision });
+          if (format === 'text') {
+            const text = formatDecisionComparisonText(report);
+            res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(text);
+          } else respond(res, 200, { report });
+          // The read comparison above shows what an approval covers; these thin routes commit
+          // review actions through the exact same #97/#101 shared services the CLI and existing
+          // console already use — no per-decision approval or independent approval store is added.
+        } else if (pathname === '/api/reviews/result-decision/approve' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof approveResultDecision>[1]>(req);
+          respond(res, 200, await serialize(() => approveResultDecision(root, body)));
+        } else if (pathname === '/api/reviews/result-decision/notes' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof addResultDecisionNotes>[1]>(req);
+          respond(res, 200, await serialize(() => addResultDecisionNotes(root, body)));
+        } else if (pathname === '/api/reviews/spec-decision/approve' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof approveSpecDecision>[1]>(req);
+          respond(res, 200, await serialize(() => approveSpecDecision(root, body)));
+        } else if (pathname === '/api/reviews/spec-decision/notes' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof addSpecDecisionNotes>[1]>(req);
+          respond(res, 200, await serialize(() => addSpecDecisionNotes(root, body)));
         } else if (pathname === '/api/acceptance/verify' && req.method === 'POST') {
           const body =
             await readJson<NonNullable<Parameters<typeof acceptanceVerifier.verify>[0]>>(req);
