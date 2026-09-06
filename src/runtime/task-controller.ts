@@ -29,6 +29,7 @@ import {
   resumeTask,
 } from '../task-state/service.js';
 import { buildContextBrief } from '../context-brief/service.js';
+import { contractFreshness } from '../task-state/contract-coordination.js';
 import { withTaskStateLock } from '../task-state/lock.js';
 import type { Task } from '../task-state/contracts.js';
 import { recordProviderUsage } from '../usage/service.js';
@@ -65,6 +66,14 @@ type TaskSession = {
    * building the brief never blocks a direct task start/resume, and is recorded as `null` rather
    * than guessed. Absent on sessions persisted before this field existed. */
   contextBriefDigest?: string | null;
+  /** Cross-task contract freshness is checked at dispatch; a stale association blocks a new
+   * provider launch and leaves the existing checkpoint/resume route intact. */
+  contractFreshness?: Array<{
+    associationId: string;
+    expected: string;
+    actual: string;
+    reconciliation: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 };
@@ -330,6 +339,14 @@ export function createTaskController({
     const before = await inspectTask(root, taskId);
     if (before.task.state === 'cancelled')
       throw new TaskControllerError('Cancelled tasks cannot be resumed.', 'TASK_CANCELLED');
+    const contracts = await contractFreshness(root, taskId);
+    if (
+      contracts.some((item) => item.expected !== item.actual || item.reconciliation !== 'current')
+    )
+      throw new TaskControllerError(
+        'A declared producer contract changed or is awaiting reconciliation. No provider was launched; use the existing checkpoint/stop/resume path after acknowledging the changed context.',
+        'CONTRACT_RECONCILIATION_PENDING',
+      );
     // Resuming reuses whatever workspace (or lack of one) the session already
     // recorded; it never re-decides, so an unrelated default change cannot
     // move an active task's workspace. A session persisted before this field
@@ -455,6 +472,7 @@ export function createTaskController({
         result: null,
         workspace,
         contextBriefDigest,
+        contractFreshness: contracts,
         createdAt: now(),
         updatedAt: now(),
       };

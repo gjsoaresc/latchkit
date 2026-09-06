@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://github.com/gjsoaresc/latchkit/schemas/contract-association-v1.schema.json","title":"Latchkit task contract association v1","type":"object","required":["schemaVersion","associations"],"properties":{"schemaVersion":{"const":1},"associations":{"type":"array"}},"additionalProperties":false}
