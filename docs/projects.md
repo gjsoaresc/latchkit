@@ -56,11 +56,11 @@ inspectProject(registryRoot, id, options?): Promise<ProjectDetail>
 capture hook: registering an already-registered root (matched by resolved path, case-insensitively
 on Windows) never creates a duplicate — it reconciles `lastSeenAt`/`lastSeenVia` and only changes
 `displayName` when one is explicitly supplied, so an implicit touch can never silently rename a
-project the user already renamed. `source` must be one of `init`, `ui-start`, `task-run`, or
-`manual` (`PROJECT_SOURCES` in `src/projects/contracts.ts`); every other value is rejected rather
-than silently accepted. `removeProject` only deletes the registry entry — it never touches the
-project's own files, `.latchkit/` state, or Git history, and removing an unregistered ID reports
-`PROJECT_NOT_FOUND` (HTTP 404 through the API) rather than succeeding silently.
+project the user already renamed. `source` must be one of `init`, `ui-start`, `task-run`, `manual`,
+or `onboarding` (`PROJECT_SOURCES` in `src/projects/contracts.ts`); every other value is rejected
+rather than silently accepted. `removeProject` only deletes the registry entry — it never touches
+the project's own files, `.latchkit/` state, or Git history, and removing an unregistered ID
+reports `PROJECT_NOT_FOUND` (HTTP 404 through the API) rather than succeeding silently.
 
 ### Where a project is captured today
 
@@ -73,6 +73,16 @@ project's own files, `.latchkit/` state, or Git history, and removing an unregis
   `source: 'task-run'` after the operation succeeds.
 - `latchkit projects add` / `POST /api/projects` explicitly register a project with
   `source: 'manual'`.
+- The installation-onboarding wizard's "project" step (`selectProject` in
+  `src/onboarding/service.ts`, issue #100 — `latchkit onboarding project` /
+  `POST /api/onboarding/project` / the console's onboarding page) registers the selected project
+  with `source: 'onboarding'` once the project is initialized. This is the same idempotent
+  `registerProject` call as every other capture point, so re-selecting an already-registered
+  project (resuming an interrupted onboarding run, or re-running the step) reconciles the
+  existing entry instead of duplicating it. Unlike the capture points above, this one does not
+  merely swallow a registry failure: onboarding's own result additionally reports it as an
+  explicit `registryWarning` (`null` on success) so the wizard can surface it, while the "project"
+  step itself still completes — see `registerProjectWithRegistry` in `src/onboarding/service.ts`.
 
 This is the full set of capture points wired in this change; a task or workflow **resumed** rather
 than freshly started does not itself re-touch the registry (its project is already registered from
@@ -197,9 +207,6 @@ could not be read for that project.
   `task start`/`workflow run`) is not automatically registered. `latchkit projects add` (or the
   console's "Add existing project" form) covers that case explicitly.
 - `activityStale`'s 30-minute window is a fixed constant, not yet configurable.
-- The `#100` onboarding hook point (recording a chosen project root during first-run setup calling
-  `registerProject` with `source: 'init'` or a new source) is left for that work to wire once both
-  branches merge; this change only guarantees the function signature and behavior described above.
 - A browser acceptance spec (`test/browser/projects-console.spec.js`) covers the grid, add/remove,
   identity grouping display, and the detail view end to end; see the build report for which browser
   projects it was actually run against on this host.

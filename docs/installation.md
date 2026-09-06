@@ -210,6 +210,16 @@ the installation's own activation state
 (`<install-root>/onboarding-state.json`, next to `current` and
 `.launchers.json` — see `src/installation/onboarding-state.ts`).
 
+The `project` step (`selectProject` in `src/onboarding/service.ts`) is also one of the
+[multi-project overview](projects.md)'s registry capture points: once the selected project is
+initialized, it is registered with `source: 'onboarding'` in the same user-local registry
+`latchkit init`/`latchkit ui`/`latchkit projects add` capture into (`registerProject`, idempotent
+by resolved root — see [projects.md](projects.md#where-a-project-is-captured-today)). This never
+fails the step itself: an unavailable or unwritable registry root is caught and reported back as
+an explicit `registryWarning` (`null` on success) on the step's result instead, so a wizard caller
+(the CLI or the browser console) can surface it without the "project" step ever failing because of
+it.
+
 The same steps are available as a guided wizard in the browser console
 (`latchkit ui`, `#onboarding` section): it distinguishes an agent that is
 *unavailable* (not found on PATH), *installed* (found, not yet selected), and

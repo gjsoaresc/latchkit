@@ -10,6 +10,7 @@
  */
 import { withTaskStateLock } from '../task-state/lock.js';
 import { resolveProjectRoot } from '../storage.js';
+import { errorMessage } from '../types.js';
 import {
   doctor,
   initProject,
@@ -25,6 +26,8 @@ import type { LatchkitConfig, WorkspaceExecutionPreference } from '../config/con
 import { configureVerification, inspectVerificationSettings } from '../verification/service.js';
 import type { VerificationMode } from '../verification/service.js';
 import { configureUsage, inspectUsage } from '../usage/service.js';
+import { registerProject } from '../projects/service.js';
+import { defaultProjectsRegistryRoot } from '../projects/store.js';
 import {
   markOnboardingHandoffCompleted,
   markOnboardingHandoffDismissed,
@@ -51,21 +54,54 @@ type ClockOptions = { clock?: () => Date };
  * installation directory. */
 type HandoffOptions = ClockOptions & { installRoot?: string };
 
+/** Outcome of a best-effort registry registration attempt: never thrown, always reported so the
+ * caller (`selectProject`) can surface it honestly instead of pretending registration always
+ * succeeds. */
+export interface ProjectRegistrationOutcome {
+  registered: boolean;
+  /** Human-readable notice when `registered` is false; `null` on success. Never thrown — a
+   * registry failure must not fail the onboarding step that triggered it. */
+  warning: string | null;
+}
+
 /**
  * Integration point for issue #94 (multi-project overview backed by a local
  * project registry under `src/projects/`). Onboarding intentionally does not
  * build or own a registry of its own (see AGENTS.md coordination note for
  * #100): it only records the chosen root in the user-local installation
  * hand-off state (`lastProjectRoot`, `src/installation/onboarding-state.ts`)
- * so a caller resuming onboarding knows which project it was working on.
+ * so a caller resuming onboarding knows which project it was working on, in
+ * addition to upserting the same root into the #94 registry here.
  *
- * Once #94 lands, replace this no-op body with a call that upserts `root`
- * into that registry. It is called every time a project is selected, so the
- * registry implementation is responsible for its own idempotency (upsert by
- * resolved root, never append a duplicate entry).
+ * Registers `root` in the user-local multi-project registry
+ * (`defaultProjectsRegistryRoot()`, overridable via `LATCHKIT_PROJECTS_ROOT`)
+ * with `source: 'onboarding'`. `registerProject` is itself idempotent (an
+ * upsert keyed by resolved root — see `src/projects/service.ts`), so calling
+ * this repeatedly for the same project (re-selecting it, or resuming an
+ * interrupted onboarding run) reconciles the existing entry's
+ * `lastSeenAt`/`lastSeenVia` rather than creating a duplicate. This function
+ * never scans the filesystem itself — it only calls the existing
+ * `registerProject` primitive with the already-resolved project root.
+ *
+ * A registry failure (an unavailable or unwritable registry root) is caught
+ * here and reported back as `warning` rather than thrown, the same
+ * best-effort treatment every other registry capture point in this codebase
+ * gives a registry write (`latchkit init`, `latchkit ui` start, task/workflow
+ * start — see docs/projects.md). Onboarding additionally surfaces that
+ * warning on `selectProject`'s result instead of silently swallowing it.
  */
-export async function registerProjectWithRegistry(_root: string): Promise<void> {
-  // TODO(#94): call into src/projects/ once the local project registry lands.
+export async function registerProjectWithRegistry(
+  root: string,
+): Promise<ProjectRegistrationOutcome> {
+  try {
+    await registerProject(defaultProjectsRegistryRoot(), { root, source: 'onboarding' });
+    return { registered: true, warning: null };
+  } catch (error) {
+    return {
+      registered: false,
+      warning: `Could not register this project in the local projects registry: ${errorMessage(error)}`,
+    };
+  }
 }
 
 async function mutate<T>(
@@ -138,16 +174,22 @@ export async function startOnboarding(
 
 /** "Select or add a project": initializes configuration for an existing
  * project directory without replacing an already-initialized project's
- * settings (`initProject` is idempotent), then advances the "project" step. */
+ * settings (`initProject` is idempotent), then advances the "project" step.
+ * Also registers the project in the user-local multi-project registry (issue
+ * #94, `source: 'onboarding'`) so it appears in the `/projects` overview
+ * without a separate `latchkit init`/`latchkit projects add`. A registry
+ * failure never fails this step: it is reported honestly as
+ * `registryWarning` on the returned config instead (`null` on success — see
+ * `registerProjectWithRegistry`). */
 export async function selectProject(
   root: string,
   options: { providers?: readonly string[]; skills?: readonly string[] } = {},
-): Promise<LatchkitConfig> {
+): Promise<LatchkitConfig & { registryWarning: string | null }> {
   root = await resolveProjectRoot(root);
   const config = await initProject(root, options);
-  await registerProjectWithRegistry(root);
+  const registration = await registerProjectWithRegistry(root);
   await advanceStep(root, 'project', 'complete');
-  return config;
+  return { ...config, registryWarning: registration.warning };
 }
 
 export async function updateProjectSelection(
