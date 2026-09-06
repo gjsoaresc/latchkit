@@ -1,8 +1,16 @@
 import { access, readdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export function resolveRepositoryRoot(scriptDirectory: string): string {
+  const adjacentRoot = path.resolve(scriptDirectory, '..');
+  return existsSync(path.join(adjacentRoot, 'tsconfig.json'))
+    ? adjacentRoot
+    : path.resolve(adjacentRoot, '..');
+}
+
+const repositoryRoot = resolveRepositoryRoot(path.dirname(fileURLToPath(import.meta.url)));
 
 function parseFrontMatter(content: string, relativePath: string): Map<string, string> {
   const lines = content.split(/\r?\n/);
