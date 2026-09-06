@@ -1,4 +1,17 @@
+import os from 'node:os';
+import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
+
+// See src/projects/store.js: without this override, a browser spec that calls startServer (every
+// one of which now touches the multi-project registry on `ui-start`, see docs/projects.md) would
+// write into the real user's machine-wide installation directory. Playwright worker processes
+// inherit this process's environment, so setting it once here, before workers spawn, is enough.
+if (!process.env.LATCHKIT_PROJECTS_ROOT) {
+  process.env.LATCHKIT_PROJECTS_ROOT = path.join(
+    os.tmpdir(),
+    `latchkit-test-projects-registry-playwright-${process.pid}`,
+  );
+}
 
 export default defineConfig({
   testDir: './test/browser',
