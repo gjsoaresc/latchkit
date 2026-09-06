@@ -1,0 +1,148 @@
+[
+  {
+    "schemaVersion": 2,
+    "id": "export-visibility",
+    "kind": "requirement-change",
+    "title": "Order export narrows from all orders to only orders visible to the current user",
+    "fixture": "requirement-change/export-visibility",
+    "instructions": "The order-export requirement changed after the naive implementation shipped: export only orders visible to the current user, not every order in the system. Apply the change, flag anything whose impact on other consumers is unclear, and preserve unrelated formatting work.",
+    "environment": { "requirements": ["node"] },
+    "initialRequirement": "Export every order in the system to CSV.",
+    "changedRequirement": "Export only the orders visible to the current user to CSV.",
+    "changePoint": {
+      "after": "the all-orders CSV export and its formatting already shipped",
+      "description": "Product changes the requirement after the naive all-orders export ships: only orders visible to the requesting user may appear in the export."
+    },
+    "changeTargets": ["src/export.js", "requirement.md", "memory.json"],
+    "unknownImpactDependencies": [
+      {
+        "id": "order-access",
+        "path": "src/orderAccess.js",
+        "note": "Shared order-listing helper also used by an admin reporting job outside this fixture. Narrowing it here could silently change that other consumer's results; impact is unknown and must be flagged, not resolved."
+      }
+    ],
+    "preserveArtifacts": ["src/csvFormat.js"],
+    "memoryRecords": [
+      {
+        "id": "decision-export-scope",
+        "text": "Decision D-014: The order export intentionally includes every order in the system across all users; do not add per-user filtering to exportOrdersToCsv.",
+        "misleadingAfterChange": true
+      }
+    ],
+    "mandatoryConstraints": [
+      "The export includes only orders visible to the current user.",
+      "The CSV still begins with the existing header row.",
+      "The CSV number formatting is unchanged.",
+      "requirement.md states the new visibility requirement.",
+      "The now-misleading old export-scope decision is marked superseded, not silently left standing."
+    ],
+    "acceptance": {
+      "module": "acceptance.mjs",
+      "assertions": [
+        {
+          "id": "visibility-filters-to-current-user",
+          "description": "The export includes only orders visible to the current user.",
+          "mandatory": true,
+          "tag": "new-requirement"
+        },
+        {
+          "id": "csv-still-has-header",
+          "description": "The CSV still begins with the existing header row.",
+          "mandatory": true,
+          "tag": "preexisting"
+        },
+        {
+          "id": "csv-format-preserved",
+          "description": "The CSV number formatting is unchanged.",
+          "mandatory": true,
+          "tag": "preexisting"
+        },
+        {
+          "id": "requirement-doc-updated",
+          "description": "requirement.md states the new visibility requirement.",
+          "mandatory": true,
+          "tag": "new-requirement"
+        },
+        {
+          "id": "misleading-decision-superseded",
+          "description": "The now-misleading old export-scope decision is marked superseded, not silently left standing.",
+          "mandatory": true,
+          "tag": "new-requirement"
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 2,
+    "id": "notification-opt-out",
+    "kind": "requirement-change",
+    "title": "Order confirmation notifications gain a late opt-out requirement",
+    "fixture": "requirement-change/notification-opt-out",
+    "instructions": "The order-notification requirement changed after the naive implementation shipped: an owner who opted out of order notifications must no longer receive one. Apply the change, flag anything whose impact on other consumers is unclear, and preserve unrelated template rendering.",
+    "environment": { "requirements": ["node"] },
+    "initialRequirement": "Send a confirmation email to the order owner for every order.",
+    "changedRequirement": "Send a confirmation email to the order owner for every order, unless the owner has opted out of order notifications.",
+    "changePoint": {
+      "after": "the notify-every-owner implementation and its email template already shipped",
+      "description": "Product adds an opt-out requirement after the naive always-notify implementation ships."
+    },
+    "changeTargets": ["src/notify.js", "requirement.md", "memory.json"],
+    "unknownImpactDependencies": [
+      {
+        "id": "digest-sender",
+        "path": "src/digestSender.js",
+        "note": "Shared subscriber lookup also used by a weekly digest job outside this fixture. Whether the opt-out should also suppress that unrelated digest is unknown and must be flagged, not resolved."
+      }
+    ],
+    "preserveArtifacts": ["src/templates.js"],
+    "memoryRecords": [
+      {
+        "id": "decision-notify-all",
+        "text": "Decision D-002: All customers receive transactional order emails; opt-out preferences do not apply to order notifications.",
+        "misleadingAfterChange": true
+      }
+    ],
+    "mandatoryConstraints": [
+      "An opted-out owner receives no confirmation email.",
+      "A non-opted-out owner still receives the confirmation email.",
+      "The confirmation wording is unchanged.",
+      "requirement.md states the new opt-out requirement.",
+      "The now-misleading old notify-all decision is marked superseded, not silently left standing."
+    ],
+    "acceptance": {
+      "module": "acceptance.mjs",
+      "assertions": [
+        {
+          "id": "skips-opted-out-owner",
+          "description": "An opted-out owner receives no confirmation email.",
+          "mandatory": true,
+          "tag": "new-requirement"
+        },
+        {
+          "id": "still-sends-when-not-opted-out",
+          "description": "A non-opted-out owner still receives the confirmation email.",
+          "mandatory": true,
+          "tag": "preexisting"
+        },
+        {
+          "id": "template-text-preserved",
+          "description": "The confirmation wording is unchanged.",
+          "mandatory": true,
+          "tag": "preexisting"
+        },
+        {
+          "id": "requirement-doc-updated",
+          "description": "requirement.md states the new opt-out requirement.",
+          "mandatory": true,
+          "tag": "new-requirement"
+        },
+        {
+          "id": "misleading-decision-superseded",
+          "description": "The now-misleading old notify-all decision is marked superseded, not silently left standing.",
+          "mandatory": true,
+          "tag": "new-requirement"
+        }
+      ]
+    }
+  }
+]

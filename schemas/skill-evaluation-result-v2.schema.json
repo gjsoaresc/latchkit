@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://latchkit.dev/schemas/skill-evaluation-result-v2.schema.json",
+  "title": "Latchkit requirement-change evaluation result v2",
+  "description": "Result shape for skill-evaluation-v2.schema.json requirement-change scenarios (issue #116). Each scenario reports two arms: a deterministic scripted-controller 'baseline' arm (never model-driven output) and an explicit, schema-level 'unavailable' reconciliation arm pending issues #110-#112. Deterministic scripted-controller results are never merged with model-driven outcomes in the same field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "metadata",
+    "metricDefinitions",
+    "denominator",
+    "counts",
+    "scenarios"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "generatedAt": { "type": "string" },
+    "metadata": { "type": "object" },
+    "metricDefinitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "unit", "limitation"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "unit": { "type": "string" },
+          "limitation": { "type": "string" }
+        }
+      }
+    },
+    "denominator": { "type": "integer", "minimum": 0 },
+    "counts": {
+      "type": "object",
+      "required": ["completed", "unavailable"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0 },
+        "unavailable": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "title", "arms", "completedAt"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "const": "requirement-change" },
+          "title": { "type": "string" },
+          "arms": {
+            "type": "object",
+            "required": ["baseline", "reconciliation"],
+            "properties": {
+              "baseline": { "$ref": "#/$defs/arm" },
+              "reconciliation": { "$ref": "#/$defs/arm" }
+            }
+          },
+          "completedAt": { "type": "string" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "arm": {
+      "type": "object",
+      "required": ["arm", "status", "metrics"],
+      "properties": {
+        "arm": { "enum": ["baseline", "reconciliation"] },
+        "status": { "enum": ["completed", "unavailable"] },
+        "reason": { "type": "string" },
+        "controller": { "enum": ["scripted", "model"] },
+        "provider": { "type": "string" },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "availability", "value", "detail"],
+            "properties": {
+              "id": { "type": "string" },
+              "availability": { "enum": ["measured", "unavailable"] },
+              "value": { "type": ["number", "boolean", "null"] },
+              "detail": { "type": "string" }
+            }
+          }
+        },
+        "correctnessGate": {
+          "type": "object",
+          "required": ["denominator", "failures", "uncertain", "regressions", "passed"],
+          "properties": {
+            "denominator": { "type": "integer", "minimum": 0 },
+            "failures": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["rule", "detail"],
+                "properties": {
+                  "rule": {
+                    "enum": [
+                      "stale-completion",
+                      "unauthorized-intent-promotion",
+                      "dropped-mandatory-constraint",
+                      "silently-lost-work"
+                    ]
+                  },
+                  "detail": { "type": "string" }
+                }
+              }
+            },
+            "uncertain": { "type": "array", "items": { "type": "string" } },
+            "regressions": { "type": "array", "items": { "type": "string" } },
+            "passed": { "type": "boolean" }
+          }
+        },
+        "acceptance": {
+          "type": "object",
+          "required": ["total", "passed", "failedIds"],
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "passed": { "type": "integer", "minimum": 0 },
+            "failedIds": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "flaggedDependencies": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
