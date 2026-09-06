@@ -365,10 +365,12 @@ try {
       if (
         extra.length !== 2 ||
         extra[0] !== 'fcc' ||
-        !['inspect', 'preview', 'install', 'start', 'stop', 'remove'].includes(extra[1] ?? '')
+        !['inspect', 'preview', 'install', 'start', 'stop', 'remove', 'recover'].includes(
+          extra[1] ?? '',
+        )
       )
         throw new Error(
-          'Usage: latchkit tool fcc <inspect|preview|install|start|stop|remove> [--archive <path>] [--python <path>] [--tool-root <path>].',
+          'Usage: latchkit tool fcc <inspect|preview|install|start|stop|remove|recover> [--archive <path>] [--python <path>] [--uv <path>] [--tool-root <path>].',
         );
       const fcc = await import('./managed-tools/fcc.js');
       const options = {
@@ -389,7 +391,9 @@ try {
                 ? await fcc.startFcc(options)
                 : action === 'stop'
                   ? await fcc.stopFcc(options)
-                  : await fcc.removeFcc(options),
+                  : action === 'recover'
+                    ? await fcc.recoverFcc(options)
+                    : await fcc.removeFcc(options),
       );
     } else if (command === 'self') {
       const action = extra[0];

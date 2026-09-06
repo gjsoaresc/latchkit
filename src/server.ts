@@ -23,6 +23,7 @@ import {
   inspectFcc,
   installFcc,
   previewFccInstall,
+  recoverFcc,
   removeFcc,
   startFcc,
   stopFcc,
@@ -350,6 +351,9 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         } else if (pathname === '/api/tools/fcc/start' && req.method === 'POST') {
           const body = await readJson<{ root?: string }>(req);
           respond(res, 200, await serialize(() => startFcc(body)));
+        } else if (pathname === '/api/tools/fcc/recover' && req.method === 'POST') {
+          const body = await readJson<{ root?: string; archive?: string }>(req);
+          respond(res, 200, await serialize(() => recoverFcc(body)));
         } else if (pathname === '/api/tools/fcc/stop' && req.method === 'POST') {
           const body = await readJson<{ root?: string }>(req);
           respond(res, 200, await serialize(() => stopFcc(body)));

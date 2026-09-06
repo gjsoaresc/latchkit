@@ -1,52 +1,62 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, rename, rm } from 'node:fs/promises';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { lstat, mkdir, open, readFile, readdir, realpath, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { inflateRawSync } from 'node:zlib';
-import { spawn } from 'node:child_process';
-import { applyRegisteredTransaction, createResourceRegistry } from '../installer/transactions.js';
-import { readOptional, statIfExists, writeAtomic } from '../storage.js';
+import {
+  applyRegisteredTransaction,
+  createResourceRegistry,
+  inspectTransaction,
+  recoverTransaction,
+} from '../installer/transactions.js';
+import { readOptional, safePath, statIfExists } from '../storage.js';
+import { isRecord } from '../types.js';
+import { FCC, digest, parseFccArchive } from './fcc-archive.js';
+import type { ArchiveMember } from './fcc-archive.js';
+import {
+  controllerStatus,
+  launchController,
+  localRequest,
+  runBounded,
+  stopController,
+  systemEnvironment,
+} from './fcc-process.js';
+import type { ControllerRecord } from './fcc-process.js';
 
-const FCC_COMMIT = 'c9b75088b09cbd3251d1e828b710cfdcd1ff3c5a';
-const FCC_VERSION = '5.22.8';
-const FCC_ARCHIVE_SHA256 = '7de379974935a29a59419b96665464205ea847f010cbb5684d098edf139686df';
+export { FCC, validateFccArchive } from './fcc-archive.js';
 const STATE = 'fcc-state.json';
 const ACTIVE = 'active.json';
-const CONFIG = 'fcc-defaults.json';
-const REGISTRY = createResourceRegistry([
-  { id: 'fcc-state', path: STATE },
-  { id: 'fcc-active', path: ACTIVE },
-  { id: 'fcc-defaults', path: CONFIG },
-]);
-function run(
-  command: string,
-  args: string[],
-  cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env, stdio: 'ignore', windowsHide: true });
-    child.once('error', reject);
-    child.once('exit', (code) =>
-      code === 0 ? resolve() : reject(new Error(`${command} exited ${code ?? 'without a code'}`)),
-    );
-  });
-}
+const LIFECYCLE = 'fcc-lifecycle.json';
+const PROFILE = 'fcc-profile.json';
+const RECEIPT = 'fcc-runtime-files.json';
+const CONFIG = 'profile/.fcc/.env';
+const ADMIN_ASSETS = [
+  'admin.css',
+  'admin.js',
+  'app-icon.svg',
+  'chat_sessions.css',
+  'chat_sessions.js',
+  'model_combobox.js',
+];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const REGISTRY = createResourceRegistry(
+  [STATE, ACTIVE, LIFECYCLE, PROFILE, RECEIPT, CONFIG].map((name) => ({ id: name, path: name })),
+);
 
-export const FCC = Object.freeze({
-  id: 'fcc',
-  commit: FCC_COMMIT,
-  version: FCC_VERSION,
-  archiveSha256: FCC_ARCHIVE_SHA256,
-});
+// Verified against the source pin's settings.py and loader.py. There is no
+// FCC_DISABLE_PAID_FALLBACK setting; empty MODEL_FALLBACKS disables fallbacks.
 export const FCC_START_ENVIRONMENT = Object.freeze({
   HOST: '127.0.0.1',
+  PORT: '8082',
   MESSAGING_PLATFORM: 'none',
   PROXY_AUTH_ENABLED: 'true',
-  FCC_DISABLE_PAID_FALLBACK: '1',
+  FCC_OPEN_BROWSER: 'false',
   MODEL_FALLBACKS: '',
+  MODEL_FABLE: '',
+  MODEL_OPUS: '',
+  MODEL_SONNET: '',
+  MODEL_HAIKU: '',
 });
 export type FccState = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   tool: 'fcc';
   version: string;
   commit: string;
@@ -54,9 +64,11 @@ export type FccState = {
   installId: string;
   sourceArchiveSha256: string;
   python: string;
+  pythonVersion: string;
+  uvVersion: string;
   runtimeDirectory: string;
-  ownsFccHome: boolean;
-  previousRuntime?: string;
+  profileDirectory: 'profile';
+  ownsFccHome: false;
 };
 export type FccOptions = {
   root?: string;
@@ -65,378 +77,771 @@ export type FccOptions = {
   python?: string;
   uv?: string;
 };
+// A code-only seam for deterministic installer execution tests. HTTP and CLI
+// accept FccOptions only and cannot supply executable implementations.
+type InstallRuntime = {
+  run: typeof runBounded;
+  archive: (archive: string) => Promise<ArchiveMember[]>;
+};
+type Lifecycle = {
+  schemaVersion: 2;
+  installId: string;
+  runtimeDirectory: string;
+  phase: 'building' | 'failed' | 'abandoned';
+  createdAt: string;
+};
+type OwnershipManifest = { schemaVersion: 2; tool: 'fcc'; resources: Record<string, string> };
 
 function defaultHome(): string {
   return process.env.USERPROFILE ?? process.env.HOME ?? process.cwd();
 }
 export function defaultFccRoot(home = defaultHome()): string {
-  return path.join(home, 'AppData', 'Local', 'Latchkit', 'tools', 'fcc');
+  return path.join(home, '.local', 'share', 'latchkit-tools', 'fcc');
 }
-function fccHome(home: string): string {
-  return path.join(home, '.fcc');
+function resolveOptions(options: FccOptions) {
+  const home = path.resolve(options.home ?? defaultHome());
+  return { home, root: path.resolve(options.root ?? defaultFccRoot(home)) };
 }
-function sha256(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
-function safeMember(name: string): boolean {
-  return (
-    !!name &&
-    !name.includes('\\') &&
-    !name.startsWith('/') &&
-    !/^[A-Za-z]:/.test(name) &&
-    !name.split('/').some((part) => !part || part === '.' || part === '..')
-  );
-}
-type ZipEntry = {
-  name: string;
-  method: number;
-  compressedSize: number;
-  uncompressedSize: number;
-  offset: number;
-  directory: boolean;
-};
-function zipEntries(bytes: Buffer): ZipEntry[] {
-  const min = 22;
-  let end = -1;
-  for (let i = bytes.length - min; i >= Math.max(0, bytes.length - 0x10016); i -= 1)
-    if (bytes.readUInt32LE(i) === 0x06054b50) {
-      end = i;
-      break;
-    }
-  if (end < 0) throw new Error('FCC archive has no ZIP central directory.');
-  const count = bytes.readUInt16LE(end + 10);
-  const central = bytes.readUInt32LE(end + 16);
-  if (central >= bytes.length)
-    throw new Error('FCC archive central directory is outside the archive.');
-  const entries: ZipEntry[] = [];
-  const names = new Set<string>();
-  let cursor = central;
-  for (let i = 0; i < count; i += 1) {
-    if (cursor + 46 > bytes.length || bytes.readUInt32LE(cursor) !== 0x02014b50)
-      throw new Error('FCC archive central directory is malformed.');
-    const method = bytes.readUInt16LE(cursor + 10);
-    const compressedSize = bytes.readUInt32LE(cursor + 20);
-    const uncompressedSize = bytes.readUInt32LE(cursor + 24);
-    const nameLength = bytes.readUInt16LE(cursor + 28);
-    const extraLength = bytes.readUInt16LE(cursor + 30);
-    const commentLength = bytes.readUInt16LE(cursor + 32);
-    const offset = bytes.readUInt32LE(cursor + 42);
-    const name = bytes.subarray(cursor + 46, cursor + 46 + nameLength).toString('utf8');
-    if (!safeMember(name.replace(/\/$/, '')))
-      throw new Error(`FCC archive contains an unsafe member: ${name}`);
-    if (names.has(name)) throw new Error(`FCC archive contains duplicate member: ${name}`);
-    names.add(name);
-    if (![0, 8].includes(method))
-      throw new Error(`FCC archive uses unsupported compression for ${name}.`);
-    if (uncompressedSize > 128 * 1024 * 1024)
-      throw new Error(`FCC archive member is too large: ${name}`);
-    entries.push({
-      name,
-      method,
-      compressedSize,
-      uncompressedSize,
-      offset,
-      directory: name.endsWith('/'),
-    });
-    cursor += 46 + nameLength + extraLength + commentLength;
+const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
+const runtimeName = (installId: string): string => `runtime-${FCC.commit}-${installId}`;
+const timestamp = (value: unknown): value is string =>
+  typeof value === 'string' && Number.isFinite(Date.parse(value));
+
+async function checkRoot(root: string): Promise<void> {
+  let current = path.parse(root).root;
+  let existing = current;
+  for (const part of root.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    const stat = await statIfExists(current);
+    if (stat?.isSymbolicLink() || (stat && !stat.isDirectory()))
+      throw new Error('FCC tool root contains a symlink, junction or non-directory.');
+    if (stat) existing = current;
   }
-  if (!entries.length) throw new Error('FCC archive is empty.');
-  return entries;
+  const canonical = await realpath(existing);
+  const normalize = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value);
+  if (normalize(canonical) !== normalize(existing))
+    throw new Error(
+      'FCC tool root resolves to another location, including Windows package virtualization. Choose a short canonical home-local tool root.',
+    );
 }
-function zipContent(bytes: Buffer, entry: ZipEntry): Buffer {
-  if (entry.offset + 30 > bytes.length || bytes.readUInt32LE(entry.offset) !== 0x04034b50)
-    throw new Error(`FCC archive member header is malformed: ${entry.name}`);
-  const nameLength = bytes.readUInt16LE(entry.offset + 26);
-  const extraLength = bytes.readUInt16LE(entry.offset + 28);
-  const start = entry.offset + 30 + nameLength + extraLength;
-  const raw = bytes.subarray(start, start + entry.compressedSize);
-  if (raw.length !== entry.compressedSize)
-    throw new Error(`FCC archive member is truncated: ${entry.name}`);
-  const output = entry.method === 0 ? raw : inflateRawSync(raw);
-  if (output.length !== entry.uncompressedSize)
-    throw new Error(`FCC archive member size mismatch: ${entry.name}`);
-  return output;
+async function ownedManifest(root: string): Promise<OwnershipManifest> {
+  const raw = await readOptional(root, '.latchkit/manifest.json');
+  if (raw === null) {
+    for (const name of [STATE, ACTIVE, LIFECYCLE, PROFILE, RECEIPT])
+      if ((await readOptional(root, name)) !== null)
+        throw new Error(
+          `FCC has unowned managed records (${name}); preserve and inspect them before installation.`,
+        );
+    return { schemaVersion: 2, tool: 'fcc', resources: {} };
+  }
+  const value: unknown = JSON.parse(raw);
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== 2 ||
+    value.tool !== 'fcc' ||
+    !isRecord(value.resources)
+  )
+    throw new Error('FCC ownership manifest is unsupported; no files were changed.');
+  for (const [name, hash] of Object.entries(value.resources)) {
+    if (
+      !REGISTRY.has(name) ||
+      name === CONFIG ||
+      typeof hash !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(hash)
+    )
+      throw new Error('FCC ownership manifest is malformed.');
+    const bytes = await readOptional(root, name, null);
+    if (bytes === null || digest(bytes) !== hash)
+      throw new Error(
+        `FCC managed record was edited or removed: ${name}. Preserve it and inspect recovery.`,
+      );
+  }
+  for (const name of [STATE, ACTIVE, LIFECYCLE, PROFILE, RECEIPT])
+    if (!(name in value.resources) && (await readOptional(root, name)) !== null)
+      throw new Error(`FCC record is not owned: ${name}.`);
+  return value as OwnershipManifest;
+}
+async function changeRecords(
+  root: string,
+  operation: string,
+  changes: { resourceId: string; bytes: string | null }[],
+): Promise<void> {
+  const manifest = await ownedManifest(root);
+  for (const change of changes) {
+    if (change.resourceId === CONFIG) continue; // FCC owns configuration after initial creation.
+    if (change.bytes === null) delete manifest.resources[change.resourceId];
+    else manifest.resources[change.resourceId] = digest(Buffer.from(change.bytes));
+  }
+  await applyRegisteredTransaction(root, {
+    operation,
+    registry: REGISTRY,
+    changes,
+    manifest: json(manifest),
+  });
+}
+async function assertMutable(root: string): Promise<void> {
+  await checkRoot(root);
+  if ((await inspectTransaction(root, REGISTRY)).state !== 'none')
+    throw new Error(
+      'FCC has an interrupted transaction; run latchkit tool fcc recover before mutation.',
+    );
+  await ownedManifest(root);
+}
+async function withLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  await checkRoot(root);
+  await mkdir(root, { recursive: true });
+  const lockPath = await safePath(root, '.fcc-operation.lock');
+  let handle;
+  try {
+    handle = await open(lockPath, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+      throw new Error(
+        'FCC operation lock exists. Another operation may be running; inspect the lock before manually removing a stale lock.',
+      );
+    throw error;
+  }
+  await handle.writeFile(json({ pid: process.pid, startedAt: new Date().toISOString() }));
+  try {
+    return await operation();
+  } finally {
+    await handle.close();
+    await unlink(lockPath);
+  }
 }
 async function readState(root: string): Promise<FccState | null> {
   const raw = await readOptional(root, STATE);
   if (raw === null) return null;
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new Error('FCC managed state is not valid JSON.');
-  }
-  const state = value as Partial<FccState>;
+  const value: unknown = JSON.parse(raw);
   if (
-    state.schemaVersion !== 1 ||
-    state.tool !== 'fcc' ||
-    state.commit !== FCC_COMMIT ||
-    typeof state.runtimeDirectory !== 'string' ||
-    typeof state.python !== 'string'
+    !isRecord(value) ||
+    value.schemaVersion !== 2 ||
+    value.tool !== 'fcc' ||
+    value.version !== FCC.version ||
+    value.commit !== FCC.commit ||
+    value.sourceArchiveSha256 !== FCC.archiveSha256 ||
+    typeof value.installId !== 'string' ||
+    !UUID.test(value.installId) ||
+    value.runtimeDirectory !== runtimeName(value.installId) ||
+    value.profileDirectory !== 'profile' ||
+    value.ownsFccHome !== false ||
+    typeof value.python !== 'string' ||
+    !path.isAbsolute(value.python) ||
+    typeof value.pythonVersion !== 'string' ||
+    typeof value.uvVersion !== 'string' ||
+    !timestamp(value.installedAt)
   )
-    throw new Error('FCC managed state is malformed or belongs to another pin.');
-  return state as FccState;
+    throw new Error('FCC managed state is malformed or belongs to an unsupported pin.');
+  await safePath(root, value.runtimeDirectory as string, 'directory');
+  await safePath(root, 'profile', 'directory');
+  return value as FccState;
 }
-export function validateFccArchive(
-  bytes: Buffer,
-  expectedSha256 = FCC_ARCHIVE_SHA256,
-): { members: string[] } {
-  if (sha256(bytes) !== expectedSha256)
-    throw new Error('FCC archive SHA-256 does not match the pinned source.');
-  return { members: zipEntries(bytes).map((entry) => entry.name) };
+async function readLifecycle(root: string): Promise<Lifecycle | null> {
+  const raw = await readOptional(root, LIFECYCLE);
+  if (raw === null) return null;
+  const value: unknown = JSON.parse(raw);
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== 2 ||
+    typeof value.installId !== 'string' ||
+    !UUID.test(value.installId) ||
+    value.runtimeDirectory !== runtimeName(value.installId) ||
+    !['building', 'failed', 'abandoned'].includes(String(value.phase)) ||
+    !timestamp(value.createdAt)
+  )
+    throw new Error('FCC lifecycle record is malformed.');
+  return value as Lifecycle;
 }
-async function archivePlan(archive: string): Promise<{ bytes: Buffer; entries: ZipEntry[] }> {
-  const bytes = await (await import('node:fs/promises')).readFile(archive);
-  validateFccArchive(bytes);
-  return { bytes, entries: zipEntries(bytes) };
+async function readActive(root: string): Promise<ControllerRecord | null> {
+  const raw = await readOptional(root, ACTIVE);
+  if (raw === null) return null;
+  const value: unknown = JSON.parse(raw);
+  if (
+    !isRecord(value) ||
+    value.schemaVersion !== 2 ||
+    typeof value.installId !== 'string' ||
+    !UUID.test(value.installId) ||
+    typeof value.controlToken !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(value.controlToken) ||
+    !Number.isInteger(value.controlPort) ||
+    Number(value.controlPort) < 1 ||
+    Number(value.controlPort) > 65535 ||
+    value.port !== 8082 ||
+    !Number.isInteger(value.controllerPid) ||
+    Number(value.controllerPid) < 1 ||
+    !timestamp(value.startedAt)
+  )
+    throw new Error('FCC active record is malformed; no process was signalled.');
+  return value as ControllerRecord;
 }
-async function pythonReadiness(
-  python?: string,
-): Promise<{ state: 'available' | 'unavailable'; path?: string; reason?: string }> {
-  if (!python)
+async function readiness(
+  executable: string | undefined,
+  kind: 'python' | 'uv',
+  runner = runBounded,
+) {
+  if (!executable || !path.isAbsolute(executable) || !(await statIfExists(executable))?.isFile())
     return {
       state: 'unavailable',
-      reason:
-        'Choose an explicit Python 3.14+ runtime; Latchkit will not select one automatically.',
+      reason: `Choose an explicit absolute ${kind === 'python' ? 'Python 3.14+' : 'uv 0.11.16+'} executable.`,
     };
-  const entry = await statIfExists(python);
-  if (!entry?.isFile())
-    return { state: 'unavailable', reason: 'The selected Python runtime does not exist.' };
-  return { state: 'available', path: python };
-}
-async function uvReadiness(
-  uv?: string,
-): Promise<{ state: 'available' | 'unavailable'; path?: string; reason?: string }> {
-  if (!uv)
+  try {
+    const output = await runner(
+      executable,
+      kind === 'python'
+        ? ['-I', '-c', 'import sys; print(".".join(map(str, sys.version_info[:3])))']
+        : ['--version'],
+      path.dirname(executable),
+      systemEnvironment(),
+    );
+    const version = (
+      kind === 'python' ? /^(\d+)\.(\d+)\.(\d+)$/ : /^uv (\d+)\.(\d+)\.(\d+)(?: |$)/
+    ).exec(output);
+    if (
+      !version ||
+      (kind === 'python'
+        ? Number(version[1]) !== 3 || Number(version[2]) < 14
+        : Number(version[1]) === 0 &&
+          (Number(version[2]) < 11 || (Number(version[2]) === 11 && Number(version[3]) < 16)))
+    )
+      throw new Error('version');
+    return { state: 'available', path: executable, version: version.slice(1, 4).join('.') };
+  } catch {
     return {
       state: 'unavailable',
-      reason: "Choose an explicit uv 0.11.16+ executable to apply FCC's pinned uv.lock.",
+      reason: `The selected ${kind} executable did not report a supported version.`,
     };
-  const entry = await statIfExists(uv);
-  if (!entry?.isFile())
-    return { state: 'unavailable', reason: 'The selected uv executable does not exist.' };
-  return { state: 'available', path: uv };
+  }
 }
-export async function inspectFcc(options: FccOptions = {}) {
-  const home = options.home ?? defaultHome();
-  const root = options.root ?? defaultFccRoot(home);
+async function archivePlan(archive: string) {
+  const stat = await lstat(archive);
+  if (!stat.isFile() || stat.size > 64 * 1024 * 1024)
+    throw new Error('FCC requires a regular local archive within its size limit.');
+  return parseFccArchive(await readFile(archive));
+}
+function publicActive(active: ControllerRecord, running: boolean) {
+  return {
+    state: running ? 'running' : 'unverified',
+    installId: active.installId,
+    startedAt: active.startedAt,
+    bind: '127.0.0.1',
+    url: `http://127.0.0.1:${active.port}`,
+    adminUrl: `http://127.0.0.1:${active.port}/admin`,
+  };
+}
+export async function inspectFcc(options: FccOptions = {}, runner = runBounded) {
+  const { root, home } = resolveOptions(options);
+  await checkRoot(root);
+  const transaction = await inspectTransaction(root, REGISTRY);
+  await ownedManifest(root);
   const state = await readState(root);
-  const existing = await statIfExists(fccHome(home));
-  const active = await readOptional(root, ACTIVE);
+  const active = await readActive(root);
+  const lifecycle = await readLifecycle(root);
   return {
     tool: FCC,
     root,
-    state: state ? 'managed' : existing ? 'attachable' : 'absent',
+    state: state ? 'managed' : 'absent',
     managed: state,
-    existingFccHome: existing !== null,
-    active: active === null ? null : JSON.parse(active),
-    python: await pythonReadiness(options.python),
-    uv: await uvReadiness(options.uv),
+    existingFccHome: (await statIfExists(path.join(home, '.fcc'))) !== null,
+    profile: path.join(root, 'profile', '.fcc'),
+    active: active ? publicActive(active, await controllerStatus(active)) : null,
+    lifecycle,
+    transaction,
+    python: await readiness(options.python, 'python', runner),
+    uv: await readiness(options.uv, 'uv', runner),
+    capabilities: {
+      install: 'available',
+      start: 'authenticated controller',
+      stop: 'owned controller only',
+      update: 'unsupported: one audited pin',
+      attach: 'unsupported: existing FCC stays independent',
+      removal: 'deregistration; runtime and profile retained',
+      providerVerification: 'not performed',
+    },
   };
 }
-export async function previewFccInstall(options: FccOptions) {
-  const inspected = await inspectFcc(options);
+export async function previewFccInstall(
+  options: FccOptions,
+  runtime: InstallRuntime = { run: runBounded, archive: archivePlan },
+) {
+  const inspected = await inspectFcc(options, runtime.run);
+  if (inspected.managed)
+    return {
+      ...inspected,
+      action: 'none',
+      reason: 'The audited pin is already installed; automatic updates are unsupported.',
+    };
+  if (
+    inspected.transaction.state !== 'none' ||
+    (inspected.lifecycle && inspected.lifecycle.phase !== 'abandoned')
+  )
+    return {
+      ...inspected,
+      action: 'blocked',
+      reason:
+        'Recover the interrupted installation first; incomplete runtime files will be retained.',
+    };
   if (!options.archive)
     return {
       ...inspected,
       action: 'blocked',
-      reason: 'Provide the pinned FCC archive path to preview installation.',
+      reason: 'Provide the local pinned FCC archive path.',
     };
-  const archive = await archivePlan(options.archive);
-  if (inspected.state === 'managed')
-    return { ...inspected, action: 'none', archiveMembers: archive.entries.length };
-  if (inspected.existingFccHome)
+  const archive = await runtime.archive(options.archive);
+  if (inspected.python.state !== 'available' || inspected.uv.state !== 'available')
     return {
       ...inspected,
-      action: 'attach',
-      archiveMembers: archive.entries.length,
-      reason: 'Existing ~/.fcc is preserved and is never silently adopted.',
+      action: 'blocked',
+      reason: 'Explicit supported Python and uv executables are required.',
+      archiveMembers: archive.length,
     };
   return {
     ...inspected,
     action: 'install',
-    archiveMembers: archive.entries.length,
-    python: await pythonReadiness(options.python),
-    uv: await uvReadiness(options.uv),
-    changes: [STATE, ACTIVE, CONFIG],
+    archiveMembers: archive.length,
+    changes: [STATE, LIFECYCLE, PROFILE, RECEIPT, 'unique runtime directory', CONFIG],
     security: {
       bind: '127.0.0.1',
       inferenceProxyAuthentication: true,
       messaging: 'disabled',
-      paidFallback: 'disabled',
-      credentials: 'FCC Admin UI only',
+      automaticFallbacks: 'disabled',
+      credentials: 'private FCC Admin UI',
+      profile: 'private; existing user FCC data is preserved',
     },
   };
 }
-async function extractToStage(bytes: Buffer, entries: ZipEntry[], stage: string): Promise<string> {
-  await mkdir(stage, { recursive: true });
-  const first = entries[0]?.name.split('/')[0];
-  if (!first) throw new Error('FCC archive has no root directory.');
-  for (const entry of entries) {
-    const relative = entry.name.replace(new RegExp(`^${first}/?`), '');
-    if (!relative) continue;
-    const target = path.join(stage, relative);
-    if (!path.resolve(target).startsWith(`${path.resolve(stage)}${path.sep}`))
-      throw new Error(`Unsafe FCC archive member: ${entry.name}`);
-    if (entry.directory) await mkdir(target, { recursive: true });
-    else {
-      await mkdir(path.dirname(target), { recursive: true });
-      await writeAtomic(stage, relative, zipContent(bytes, entry), 0o600);
+function runtimePython(root: string, state: Pick<FccState, 'runtimeDirectory'>): string {
+  return path.join(
+    root,
+    state.runtimeDirectory,
+    'venv',
+    process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
+  );
+}
+function processEnvironment(root: string): NodeJS.ProcessEnv {
+  const profile = path.join(root, 'profile');
+  return {
+    ...systemEnvironment(),
+    HOME: profile,
+    USERPROFILE: profile,
+    APPDATA: path.join(profile, 'AppData', 'Roaming'),
+    LOCALAPPDATA: path.join(profile, 'AppData', 'Local'),
+    PYTHONDONTWRITEBYTECODE: '1',
+    ...FCC_START_ENVIRONMENT,
+  };
+}
+async function inventory(root: string, directory: string): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  const queue = [directory];
+  let total = 0;
+  let count = 0;
+  while (queue.length) {
+    const parent = queue.shift()!;
+    for (const entry of await readdir(await safePath(root, parent, 'directory'), {
+      withFileTypes: true,
+    })) {
+      const relative = `${parent}/${entry.name}`;
+      if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile()))
+        throw new Error(`FCC runtime contains an unsupported link or special file: ${relative}`);
+      if (entry.isDirectory()) queue.push(relative);
+      else {
+        const file = await safePath(root, relative);
+        const stat = await lstat(file);
+        total += stat.size;
+        count += 1;
+        if (stat.size > 256 * 1024 * 1024 || total > 2 * 1024 * 1024 * 1024 || count > 50_000)
+          throw new Error(
+            'FCC runtime exceeds its inspection size limits; all files were preserved.',
+          );
+        result[relative] = digest(await readFile(file));
+      }
     }
   }
-  return stage;
+  return result;
 }
-export async function installFcc(options: FccOptions) {
-  if (!options.archive) throw new Error('FCC installation requires a local pinned archive.');
-  const preview = await previewFccInstall(options);
-  if (preview.action === 'attach' || preview.action === 'none') return preview;
-  const ready = await pythonReadiness(options.python);
-  if (ready.state !== 'available' || !ready.path)
-    throw new Error(ready.reason ?? 'An explicit Python runtime is required.');
-  const uv = await uvReadiness(options.uv);
-  if (uv.state !== 'available' || !uv.path)
-    throw new Error(uv.reason ?? 'An explicit uv executable is required.');
-  const home = options.home ?? defaultHome();
-  const root = options.root ?? defaultFccRoot(home);
-  const { bytes, entries } = await archivePlan(options.archive);
-  await mkdir(root, { recursive: true });
-  const stage = path.join(root, `.stage-${randomUUID()}`);
-  const runtime = path.join(root, `runtime-${FCC_COMMIT}`);
-  const previous = await readState(root);
-  try {
-    await extractToStage(bytes, entries, stage);
-    const venv = path.join(stage, 'venv');
-    await run(ready.path, ['-m', 'venv', venv], stage);
-    const lock = path.join(stage, 'uv.lock');
-    if (!(await statIfExists(lock))?.isFile())
-      throw new Error('Pinned FCC archive is missing uv.lock.');
-    await run(uv.path, ['sync', '--frozen', '--no-dev', '--active'], stage, {
-      ...process.env,
-      VIRTUAL_ENV: venv,
-    });
-    if (await statIfExists(runtime))
-      throw new Error('Pinned FCC runtime path already exists; inspect it before retrying.');
-    await rename(stage, runtime);
-    const state: FccState = {
-      schemaVersion: 1,
-      tool: 'fcc',
-      version: FCC_VERSION,
-      commit: FCC_COMMIT,
-      installedAt: new Date().toISOString(),
-      installId: randomUUID(),
-      sourceArchiveSha256: FCC_ARCHIVE_SHA256,
-      python: ready.path,
-      runtimeDirectory: path.basename(runtime),
-      ownsFccHome: false,
-      ...(previous ? { previousRuntime: previous.runtimeDirectory } : {}),
+async function verifyRuntime(root: string, state: FccState): Promise<void> {
+  const raw = await readOptional(root, RECEIPT);
+  const expected: unknown = raw === null ? null : JSON.parse(raw);
+  if (!isRecord(expected) || !isRecord(expected.files) || expected.installId !== state.installId)
+    throw new Error('FCC runtime receipt is missing or malformed.');
+  const files = expected.files;
+  const actual = await inventory(root, state.runtimeDirectory);
+  if (
+    Object.keys(actual).length !== Object.keys(files).length ||
+    Object.entries(actual).some(([name, hash]) => files[name] !== hash)
+  )
+    throw new Error(
+      'FCC runtime files were edited, added or removed; launch is blocked and all files are preserved.',
+    );
+}
+export async function installFcc(
+  options: FccOptions,
+  installer: InstallRuntime = { run: runBounded, archive: archivePlan },
+) {
+  const { root, home } = resolveOptions(options);
+  return withLock(root, async () => {
+    await assertMutable(root);
+    const preview = await previewFccInstall(options, installer);
+    if (preview.action === 'none') return preview;
+    if (preview.action !== 'install' || !options.archive)
+      throw new Error('reason' in preview ? preview.reason : 'FCC installation is blocked.');
+    const python = await readiness(options.python, 'python', installer.run);
+    const uv = await readiness(options.uv, 'uv', installer.run);
+    if (!python.path || !python.version || !uv.path || !uv.version)
+      throw new Error('FCC prerequisite verification failed.');
+    const members = await installer.archive(options.archive);
+    if (!members.some((member) => member.name === 'uv.lock'))
+      throw new Error('FCC archive is missing uv.lock.');
+    const installId = randomUUID();
+    const runtimeDirectory = runtimeName(installId);
+    const runtime = await safePath(root, runtimeDirectory, 'directory');
+    if (await statIfExists(runtime)) throw new Error('FCC runtime directory already exists.');
+    const lifecycle: Lifecycle = {
+      schemaVersion: 2,
+      installId,
+      runtimeDirectory,
+      phase: 'building',
+      createdAt: new Date().toISOString(),
     };
-    const active = {
-      schemaVersion: 1,
-      runtimeDirectory: state.runtimeDirectory,
-      activatedAt: state.installedAt,
-    };
-    const defaults = {
-      schemaVersion: 1,
-      bind: '127.0.0.1',
-      inferenceProxyAuthentication: true,
-      messaging: false,
-      paidFallback: false,
-      credentialEntry: 'FCC Admin UI',
-    };
-    await applyRegisteredTransaction(root, {
-      operation: 'install-fcc',
-      registry: REGISTRY,
-      changes: [
-        { resourceId: 'fcc-state', bytes: `${JSON.stringify(state, null, 2)}\n` },
-        { resourceId: 'fcc-active', bytes: `${JSON.stringify(active, null, 2)}\n` },
-        { resourceId: 'fcc-defaults', bytes: `${JSON.stringify(defaults, null, 2)}\n` },
-      ],
-      manifest: `${JSON.stringify({ schemaVersion: 1, tool: 'fcc', files: [STATE, ACTIVE, CONFIG] }, null, 2)}\n`,
-    });
-    return { ...(await inspectFcc({ ...options, root, home })), action: 'installed' };
-  } catch (error) {
-    await rm(stage, { recursive: true, force: true });
-    throw error;
-  }
-}
-function commandFor(state: FccState, root: string): string {
-  return process.platform === 'win32'
-    ? path.join(root, state.runtimeDirectory, 'venv', 'Scripts', 'fcc-server.exe')
-    : path.join(root, state.runtimeDirectory, 'venv', 'bin', 'fcc-server');
-}
-export async function startFcc(options: FccOptions) {
-  const home = options.home ?? defaultHome();
-  const root = options.root ?? defaultFccRoot(home);
-  const state = await readState(root);
-  if (!state) throw new Error('FCC is not managed by Latchkit.');
-  const command = commandFor(state, root);
-  if (!(await statIfExists(command))) throw new Error('Managed FCC server command is missing.');
-  const child = spawn(command, [], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env: {
-      ...process.env,
-      ...FCC_START_ENVIRONMENT,
-      ANTHROPIC_AUTH_TOKEN: randomBytes(32).toString('base64url'),
-    },
-  });
-  child.unref();
-  const active = {
-    schemaVersion: 1,
-    runtimeDirectory: state.runtimeDirectory,
-    pid: child.pid,
-    startedAt: new Date().toISOString(),
-    bind: '127.0.0.1',
-  };
-  await applyRegisteredTransaction(root, {
-    operation: 'start-fcc',
-    registry: REGISTRY,
-    changes: [{ resourceId: 'fcc-active', bytes: `${JSON.stringify(active, null, 2)}\n` }],
-    manifest: `${JSON.stringify({ schemaVersion: 1, tool: 'fcc', files: [STATE, ACTIVE, CONFIG] }, null, 2)}\n`,
-  });
-  return { action: 'started', active };
-}
-export async function stopFcc(options: FccOptions) {
-  const home = options.home ?? defaultHome();
-  const root = options.root ?? defaultFccRoot(home);
-  const activeRaw = await readOptional(root, ACTIVE);
-  if (activeRaw === null) return { action: 'not-running' };
-  const active = JSON.parse(activeRaw) as { pid?: number };
-  if (Number.isInteger(active.pid) && active.pid! > 0) {
+    // Register intent before source materialization or any external package work.
+    // Runtime trees never move after a venv exists and are never recursively deleted.
+    await changeRecords(root, 'prepare-fcc-runtime', [
+      { resourceId: LIFECYCLE, bytes: json(lifecycle) },
+    ]);
     try {
-      process.kill(active.pid!);
+      const sourceRegistry = createResourceRegistry(
+        members.map((member) => ({ id: member.name, path: `${runtimeDirectory}/${member.name}` })),
+      );
+      await applyRegisteredTransaction(root, {
+        operation: 'materialize-fcc-source',
+        registry: sourceRegistry,
+        changes: members.map((member) => ({ resourceId: member.name, bytes: member.bytes })),
+        manifest: (await readOptional(root, '.latchkit/manifest.json'))!,
+      });
+      const venv = path.join(runtime, 'venv');
+      const installEnv = {
+        ...systemEnvironment(),
+        UV_PROJECT_ENVIRONMENT: venv,
+        UV_CACHE_DIR: path.join(root, 'cache'),
+        UV_PYTHON_DOWNLOADS: 'never',
+        UV_NO_PROGRESS: '1',
+      };
+      await installer.run(
+        uv.path,
+        [
+          'sync',
+          '--frozen',
+          '--no-dev',
+          '--no-editable',
+          '--no-config',
+          '--link-mode',
+          'copy',
+          '--no-managed-python',
+          '--no-python-downloads',
+          '--python',
+          python.path,
+        ],
+        runtime,
+        installEnv,
+        600_000,
+      );
+      const installedPython = runtimePython(root, { runtimeDirectory });
+      const actualVersion = await installer.run(
+        installedPython,
+        [
+          '-I',
+          '-B',
+          '-c',
+          `from importlib.metadata import version; from free_claude_code.api.admin_routes import _asset_path; [_asset_path(name) for name in ${JSON.stringify(ADMIN_ASSETS)}]; print(version("free-claude-code"))`,
+        ],
+        runtime,
+        processEnvironment(root),
+      );
+      if (actualVersion !== FCC.version)
+        throw new Error('Installed FCC package version does not match the audited pin.');
+      const receipt = {
+        schemaVersion: 2,
+        installId,
+        files: await inventory(root, runtimeDirectory),
+      };
+      const state: FccState = {
+        schemaVersion: 2,
+        tool: 'fcc',
+        version: FCC.version,
+        commit: FCC.commit,
+        installedAt: new Date().toISOString(),
+        installId,
+        sourceArchiveSha256: FCC.archiveSha256,
+        python: python.path,
+        pythonVersion: python.version,
+        uvVersion: uv.version,
+        runtimeDirectory,
+        profileDirectory: 'profile',
+        ownsFccHome: false,
+      };
+      const profile = await readOptional(root, PROFILE);
+      const profileChanges = [];
+      if (profile === null) {
+        if (await statIfExists(path.join(root, 'profile')))
+          throw new Error(
+            'FCC private profile already exists without an ownership marker; it was preserved.',
+          );
+        const token = randomBytes(32).toString('hex');
+        profileChanges.push(
+          {
+            resourceId: CONFIG,
+            bytes: `FCC_CONFIG_SCHEMA=1\nANTHROPIC_AUTH_TOKEN=${token}\nPROXY_AUTH_ENABLED=true\nMODEL=nvidia_nim/nvidia/nemotron-3-super-120b-a12b\nMESSAGING_PLATFORM=none\n`,
+          },
+          {
+            resourceId: PROFILE,
+            bytes: json({
+              schemaVersion: 2,
+              profileDirectory: 'profile',
+              createdAt: state.installedAt,
+            }),
+          },
+        );
+      }
+      await changeRecords(root, 'activate-fcc-runtime', [
+        ...profileChanges,
+        { resourceId: STATE, bytes: json(state) },
+        { resourceId: RECEIPT, bytes: json(receipt) },
+        { resourceId: LIFECYCLE, bytes: null },
+      ]);
+      return {
+        ...(await inspectFcc({ ...options, root, home }, installer.run)),
+        action: 'installed',
+      };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      if ((await inspectTransaction(root, REGISTRY)).state === 'none')
+        await changeRecords(root, 'record-fcc-install-failure', [
+          { resourceId: LIFECYCLE, bytes: json({ ...lifecycle, phase: 'failed' }) },
+        ]);
+      throw new Error(
+        `FCC installation did not activate. Runtime files were retained at ${runtime}; run latchkit tool fcc recover before retrying. ${error instanceof Error ? error.message : 'Installation failed.'}`,
+      );
     }
-  }
-  await applyRegisteredTransaction(root, {
-    operation: 'stop-fcc',
-    registry: REGISTRY,
-    changes: [{ resourceId: 'fcc-active', bytes: null }],
-    manifest: `${JSON.stringify({ schemaVersion: 1, tool: 'fcc', files: [STATE, CONFIG] }, null, 2)}\n`,
   });
+}
+
+// Original adapter to the pinned public ServerSupervisor API. EOF also handles
+// unexpected controller termination and Windows venv launcher indirection.
+const SERVER_SCRIPT = [
+  'import sys, threading',
+  'from free_claude_code.cli.commands import ServerSupervisor',
+  'server = ServerSupervisor(console_logging=False)',
+  'def watch_owner():',
+  '    sys.stdin.readline()',
+  '    server.request_stop()',
+  'threading.Thread(target=watch_owner, daemon=True).start()',
+  'server.run(open_admin_browser=False)',
+].join('\n');
+
+export async function startFcc(options: FccOptions) {
+  const { root } = resolveOptions(options);
+  return withLock(root, async () => {
+    await assertMutable(root);
+    const state = await readState(root);
+    if (!state) throw new Error('FCC is not managed by Latchkit.');
+    const previous = await readActive(root);
+    if (previous) {
+      if (previous.installId !== state.installId)
+        throw new Error('FCC active record does not match this installation.');
+      if (await controllerStatus(previous))
+        return { action: 'already-running', active: publicActive(previous, true) };
+      throw new Error(
+        'FCC has an unverified active record; run latchkit tool fcc recover. No process was signalled.',
+      );
+    }
+    await verifyRuntime(root, state);
+    const env = processEnvironment(root);
+    await safePath(root, CONFIG);
+    const python = runtimePython(root, state);
+    const token = await runBounded(
+      python,
+      [
+        '-I',
+        '-B',
+        '-c',
+        'from free_claude_code.config.loader import get_settings; print(get_settings().proxy_auth_token)',
+      ],
+      path.join(root, state.runtimeDirectory),
+      env,
+    );
+    if (!token || token.length > 4096 || /[\r\n]/.test(token))
+      throw new Error('FCC private proxy token is unavailable or malformed.');
+    const launched = await launchController({
+      command: python,
+      args: ['-I', '-B', '-c', SERVER_SCRIPT],
+      cwd: path.join(root, state.runtimeDirectory),
+      env,
+      proxyToken: token,
+      port: 8082,
+      timeoutMs: 45_000,
+      installId: state.installId,
+      requiredAssets: ADMIN_ASSETS.map((name) => `/admin/assets/${FCC.version}/${name}`),
+    });
+    try {
+      await changeRecords(root, 'start-fcc', [
+        { resourceId: ACTIVE, bytes: json(launched.record) },
+      ]);
+      await launched.commit();
+    } catch (error) {
+      await launched.abort();
+      throw error;
+    }
+    return { action: 'started', active: publicActive(launched.record, true) };
+  });
+}
+async function stopOwned(root: string) {
+  const active = await readActive(root);
+  if (!active) return { action: 'not-running' };
+  const state = await readState(root);
+  if (!state || active.installId !== state.installId)
+    throw new Error('FCC active record does not match the installation; no process was signalled.');
+  await stopController(active);
+  await changeRecords(root, 'stop-fcc', [{ resourceId: ACTIVE, bytes: null }]);
   return { action: 'stopped' };
 }
-export async function removeFcc(options: FccOptions) {
-  const home = options.home ?? defaultHome();
-  const root = options.root ?? defaultFccRoot(home);
-  const state = await readState(root);
-  if (!state) return { action: 'not-managed' };
-  await stopFcc({ ...options, root, home });
-  await applyRegisteredTransaction(root, {
-    operation: 'remove-fcc',
-    registry: REGISTRY,
-    changes: [
-      { resourceId: 'fcc-state', bytes: null },
-      { resourceId: 'fcc-defaults', bytes: null },
-    ],
-    manifest: `${JSON.stringify({ schemaVersion: 1, tool: 'fcc', files: [] }, null, 2)}\n`,
+export async function stopFcc(options: FccOptions) {
+  const { root } = resolveOptions(options);
+  return withLock(root, async () => {
+    await assertMutable(root);
+    return stopOwned(root);
   });
-  await rm(path.join(root, state.runtimeDirectory), { recursive: true, force: true });
-  return {
-    action: 'removed',
-    preservedFccHome: true,
-    previousRuntime: state.previousRuntime ?? null,
-  };
+}
+
+/** Internal invocation bridge. Never serialize this callback's environment.
+ * The caller retains the installed Claude executable, arguments, permissions,
+ * approvals and bounded process runner. This helper changes only the child
+ * Anthropic connection environment after proving the owned proxy is ready.
+ */
+export async function runWithFccClaudeEnvironment<T>(
+  options: FccOptions,
+  invoke: (environment: NodeJS.ProcessEnv) => Promise<T>,
+): Promise<T> {
+  const { root } = resolveOptions(options);
+  await assertMutable(root);
+  const state = await readState(root);
+  const active = await readActive(root);
+  if (
+    !state ||
+    !active ||
+    active.installId !== state.installId ||
+    !(await controllerStatus(active))
+  )
+    throw new Error(
+      'An authenticated owned FCC controller must be running before client invocation.',
+    );
+  await verifyRuntime(root, state);
+  await safePath(root, CONFIG);
+  const token = await runBounded(
+    runtimePython(root, state),
+    [
+      '-I',
+      '-B',
+      '-c',
+      'from free_claude_code.config.loader import get_settings; print(get_settings().proxy_auth_token)',
+    ],
+    path.join(root, state.runtimeDirectory),
+    processEnvironment(root),
+  );
+  if (!token || token.length > 4096 || /[\r\n]/.test(token))
+    throw new Error('FCC proxy token is malformed.');
+  const authorized = await localRequest(active.port, '/v1/messages', 'HEAD', {
+    authorization: `Bearer ${token}`,
+  });
+  const anonymous = await localRequest(active.port, '/v1/messages', 'HEAD');
+  if (authorized.status < 200 || authorized.status >= 300 || anonymous.status !== 401)
+    throw new Error('FCC authenticated client readiness failed; no client was invoked.');
+  const environment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith('ANTHROPIC_')),
+  );
+  const bypass = [
+    ...new Set(
+      `${environment.NO_PROXY ?? ''},${environment.no_proxy ?? ''},127.0.0.1,localhost,::1`
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ].join(',');
+  return invoke({
+    ...environment,
+    NO_PROXY: bypass,
+    no_proxy: bypass,
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${active.port}`,
+    ANTHROPIC_AUTH_TOKEN: token,
+  });
+}
+
+export async function removeFcc(options: FccOptions) {
+  const { root } = resolveOptions(options);
+  return withLock(root, async () => {
+    await assertMutable(root);
+    const state = await readState(root);
+    if (!state) return { action: 'not-managed' };
+    await stopOwned(root);
+    await changeRecords(root, 'deregister-fcc', [
+      { resourceId: STATE, bytes: null },
+      { resourceId: RECEIPT, bytes: null },
+    ]);
+    return {
+      action: 'deregistered',
+      preservedFccHome: true,
+      preservedProfile: path.join(root, 'profile'),
+      preservedRuntime: path.join(root, state.runtimeDirectory),
+      reason:
+        'Runtime and profile files are retained, including local edits and credentials. No recursive cleanup is performed.',
+    };
+  });
+}
+export async function recoverFcc(options: FccOptions) {
+  const { root } = resolveOptions(options);
+  return withLock(root, async () => {
+    // Derive source recovery registrations only from the hash-verified pin and
+    // validated lifecycle identity, never from paths supplied by the journal.
+    const transaction = await inspectTransaction(root, REGISTRY);
+    if (transaction.state === 'invalid') {
+      const lifecycle = await readLifecycle(root);
+      if (!lifecycle || !options.archive)
+        throw new Error(
+          'FCC source recovery requires the same pinned archive; runtime files remain preserved.',
+        );
+      const members = await archivePlan(options.archive);
+      const registry = createResourceRegistry(
+        members.map((member) => ({
+          id: member.name,
+          path: `${lifecycle.runtimeDirectory}/${member.name}`,
+        })),
+      );
+      await recoverTransaction(root, registry);
+    } else await recoverTransaction(root, REGISTRY);
+    await ownedManifest(root);
+    const active = await readActive(root);
+    if (active) {
+      if (await controllerStatus(active))
+        return { action: 'running', active: publicActive(active, true) };
+      try {
+        process.kill(active.controllerPid, 0);
+        throw new Error(
+          'FCC controller PID still exists but ownership could not be proved. Preserve the active record and inspect the process manually.',
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      }
+      await changeRecords(root, 'recover-fcc-stale-controller', [
+        { resourceId: ACTIVE, bytes: null },
+      ]);
+    }
+    const lifecycle = await readLifecycle(root);
+    if (lifecycle && lifecycle.phase !== 'abandoned')
+      await changeRecords(root, 'abandon-fcc-incomplete-runtime', [
+        { resourceId: LIFECYCLE, bytes: json({ ...lifecycle, phase: 'abandoned' }) },
+      ]);
+    return {
+      action: 'recovered',
+      preservedRuntime: lifecycle ? path.join(root, lifecycle.runtimeDirectory) : null,
+      reason:
+        'Incomplete runtime files are retained. Installation may be retried in a new directory.',
+    };
+  });
 }
