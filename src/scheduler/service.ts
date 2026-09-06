@@ -21,6 +21,7 @@ import {
 } from './contracts.js';
 import type { Schedule, ScheduleRun, SchedulerState } from './contracts.js';
 import { readSchedulerState, writeSchedulerState } from './store.js';
+import { appendEvent } from '../diagnostics/logger.js';
 
 type Input = {
   timezone?: string;
@@ -35,6 +36,33 @@ const due = (schedule: Schedule, time: Date) => Date.parse(schedule.nextRunAt) <
 const next = (schedule: Schedule, time: Date) =>
   new Date(time.getTime() + schedule.everyMinutes * 60_000).toISOString();
 const clone = <T>(value: T) => structuredClone(value);
+
+async function notifyRunState(root: string, schedule: Schedule, run: ScheduleRun): Promise<void> {
+  // Keep this event intentionally small: schedules contain user instructions and
+  // authorization metadata, neither of which belongs in an operational log.
+  const event = {
+    type: 'scheduler-run-state',
+    scheduleId: schedule.id,
+    runId: run.id,
+    state: run.state,
+    ...(run.result?.code ? { code: run.result.code } : {}),
+    ...(run.taskId ? { taskId: run.taskId } : {}),
+    actionable:
+      run.state === 'blocked' || run.state === 'failed' || run.state === 'timed-out'
+        ? 'Inspect the retained run evidence before resuming the schedule.'
+        : undefined,
+  };
+  try {
+    await appendEvent(root, event);
+    if (run.state !== 'completed')
+      console.error(
+        `Latchkit scheduler: run ${run.id} is ${run.state}; inspect the schedule for details.`,
+      );
+  } catch {
+    // Diagnostics are best effort. The durable run transition has already been
+    // committed, and a logger failure must never reopen or launch a run.
+  }
+}
 
 async function mutate<T>(
   root: string,
@@ -333,16 +361,22 @@ export function createForegroundScheduler({
         'Cannot recover while this foreground scheduler owns an active run.',
         'SCHEDULE_RUN_ACTIVE',
       );
-    return mutate(root, clock, (state) => {
+    const recoveredRuns = await mutate(root, clock, (state) => {
+      const changed: Array<{ schedule: Schedule; run: ScheduleRun }> = [];
       let recovered = 0;
       for (const item of state.schedules) {
-        const before = item.runs.filter((run) => run.state === 'running').length;
+        const running = item.runs.filter((run) => run.state === 'running');
+        const before = running.length;
         cleanRun(item, clock);
         recovered += before;
+        for (const run of running) changed.push({ schedule: clone(item), run: clone(run) });
         if (Date.parse(item.nextRunAt) < clock().getTime()) item.nextRunAt = next(item, clock());
       }
-      return { recovered };
+      return { recovered, changed };
     });
+    for (const entry of recoveredRuns.changed)
+      await notifyRunState(root, entry.schedule, entry.run);
+    return { recovered: recoveredRuns.recovered };
   }
   async function claim(id: string): Promise<{ schedule: Schedule; run: ScheduleRun } | null> {
     return mutate(root, clock, (state) => {
@@ -375,11 +409,11 @@ export function createForegroundScheduler({
       item.runs = item.runs.slice(-item.limits.maxRuns);
       if (run.state === 'blocked') item.enabled = false;
       item.updatedAt = now(clock);
-      return run.state === 'running' ? { schedule: clone(item), run: clone(run) } : null;
+      return { schedule: clone(item), run: clone(run) };
     });
   }
   async function finish(id: string, runId: string, result: ProcessRunResult, taskState?: string) {
-    return mutate(root, clock, (state) => {
+    const finished = await mutate(root, clock, (state) => {
       const item = schedule(state, id);
       const run = item.runs.find((candidate) => candidate.id === runId);
       if (!run || run.state !== 'running') return clone(item);
@@ -411,6 +445,9 @@ export function createForegroundScheduler({
       if (run.state === 'blocked' || run.state === 'failed') item.enabled = false;
       return clone(item);
     });
+    const finalRun = finished.runs.find((candidate) => candidate.id === runId);
+    if (finalRun) await notifyRunState(root, finished, finalRun);
+    return finished;
   }
   async function tick() {
     if (polling) return polling as Promise<{ started: string[] }>;
@@ -441,6 +478,10 @@ export function createForegroundScheduler({
         continue;
       const claimed = await claim(item.id);
       if (!claimed) continue;
+      if (claimed.run.state !== 'running') {
+        await notifyRunState(root, claimed.schedule, claimed.run);
+        continue;
+      }
       const abort = new AbortController();
       started.push(item.id);
       const done = execute(claimed, abort)
