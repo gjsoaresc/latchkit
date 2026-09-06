@@ -15,7 +15,7 @@ export const CODEGRAPH_CONTRACT = Object.freeze({
   package: '@colbymchenry/codegraph',
   version: '1.6.0',
   license: 'MIT',
-  cli: ['status', 'explore', 'sync'],
+  cli: ['init', 'status', 'explore', 'sync'],
   documentation: 'https://github.com/colbymchenry/codegraph#cli-reference',
 });
 export interface CodegraphSettings {
