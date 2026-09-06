@@ -138,17 +138,6 @@ function windows11Qualification(item) {
   );
 }
 
-function macOS14Qualification(item) {
-  if (
-    typeof item.qualificationOS !== 'string' ||
-    !/(?:darwin|mac\s*os)/i.test(item.qualificationOS) ||
-    typeof item.qualificationVersion !== 'string'
-  )
-    return false;
-  const match = item.qualificationVersion.match(/^(\d+)(?:\.\d+){1,2}$/);
-  return Boolean(match && Number(match[1]) >= 14);
-}
-
 function exactWorkflowEvidence(item, manifests) {
   if (!record(item) || item.kind !== 'live-workflow-qualification' || !record(item.candidate))
     return false;
@@ -346,12 +335,12 @@ export async function verifyReleaseArtifacts(
     embeddedChecks.push({ archive: path.join(directory, manifest.archive), manifest, sbom });
     manifests.push(manifest);
   }
-  if (requireClean && targets.size !== 4)
-    throw new Error('Publication requires all four qualified native bundles.');
+  if (requireClean && (targets.size !== 1 || !targets.has('win32-x64') || manifests.length !== 1))
+    throw new Error('Publication requires one qualified Windows standalone bundle.');
   if (requireClean) {
     for (const item of embeddedChecks)
       await verifyEmbeddedArchive(item.archive, item.manifest, item.sbom);
-    const allowed = new Set(['install.ps1', 'install.sh']);
+    const allowed = new Set(['install.ps1']);
     for (const manifest of manifests) {
       allowed.add(manifest.archive);
       allowed.add(`${manifest.archive}.sha256`);
@@ -363,7 +352,7 @@ export async function verifyReleaseArtifacts(
       if (allowed.has(name) || name === 'previous' || name.endsWith('.evidence.json')) continue;
       throw new Error(`Publication directory contains an unrecognized artifact: ${name}`);
     }
-    for (const bootstrap of ['install.ps1', 'install.sh']) {
+    for (const bootstrap of ['install.ps1']) {
       if (
         sha256(await readFile(path.join(directory, bootstrap))) !==
         sha256(await readFile(path.join(repository, bootstrap)))
@@ -386,7 +375,6 @@ export async function verifyReleaseArtifacts(
       )
         .filter(({ valid }) => valid)
         .map(({ item }) => item);
-      const supplemental = evidence.filter((item) => smokeArtifactEvidence(item, manifest));
       if (!matching.some((item) => item.runtime === 'native'))
         throw new Error(
           'Exact prior-archive qualification evidence is missing for ' + manifest.target,
@@ -395,23 +383,6 @@ export async function verifyReleaseArtifacts(
       if (manifest.target === 'win32-x64' && !native.some(windows11Qualification))
         throw new Error(
           'Windows qualification requires exact prior-archive evidence from Windows 11, not Windows Server.',
-        );
-      if (manifest.target.startsWith('darwin-') && !native.some(macOS14Qualification))
-        throw new Error(
-          'macOS qualification requires exact prior-archive evidence from macOS 14 or newer.',
-        );
-      if (
-        manifest.target === 'linux-x64' &&
-        (!supplemental.some((item) => item.runtime === 'WSL') ||
-          !supplemental.some(
-            (item) => item.runtime === 'native' && /VERSION_ID="24\.04"/.test(item.qualificationOS),
-          ) ||
-          !supplemental.some(
-            (item) => item.runtime === 'native' && /VERSION_ID="22\.04"/.test(item.qualificationOS),
-          ))
-      )
-        throw new Error(
-          'Linux qualification requires Ubuntu 22.04, Ubuntu 24.04, and WSL evidence for the same archive.',
         );
     }
     if (!evidence.some((item) => exactWorkflowEvidence(item, manifests)))

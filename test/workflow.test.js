@@ -34,6 +34,7 @@ function harness() {
   let holdVerification = false;
   let completionGate = null;
   let completionStarted = null;
+  let planChecksJson;
   const calls = [];
   const task = {
     id: `task_${randomUUID()}`,
@@ -160,7 +161,7 @@ function harness() {
         summary: `${phase} ready`,
         artifact: `${phase} artifact`,
         questions: [],
-        checks_json: phase === 'plan' ? JSON.stringify(checks) : '',
+        checks_json: phase === 'plan' ? (planChecksJson ?? JSON.stringify(checks)) : '',
       }),
       stderr: '',
     };
@@ -206,6 +207,7 @@ function harness() {
   return {
     task,
     tasks,
+    checks,
     adapter,
     launch,
     acceptance,
@@ -243,6 +245,9 @@ function harness() {
         type: 'manual',
         instructions: 'Inspect the second deterministic fixture.',
       });
+    },
+    setPlanChecksJson(value) {
+      planChecksJson = value;
     },
     holdImplementation() {
       let release;
@@ -493,6 +498,75 @@ test('workflow persists exact approval and completes only after verification, re
     fixture.calls.filter((item) => item.type === 'launch').map((item) => item.phase),
     ['requirements', 'plan', 'implementation', 'handoff'],
   );
+});
+
+test('supplied checks stay authoritative when the planner leaves checks_json empty', async (t) => {
+  const root = await rootFixture(t);
+  const fixture = harness();
+  fixture.setPlanChecksJson('');
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['fixture', fixture.adapter]]),
+    launch: fixture.launch,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+    tasks: fixture.tasks,
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    providerId: 'fixture',
+    reviewProviderId: 'fixture-review',
+    executionAuthorized: true,
+    checksDocument: {
+      schemaVersion: 1,
+      checks: [
+        {
+          id: 'fixed-check',
+          criterionId: fixture.task.criteria[0].id,
+          label: 'Run fixed command',
+          type: 'cli',
+          plan: { executable: process.execPath, args: ['--test'] },
+        },
+      ],
+    },
+  });
+  const planned = await controller.wait(started.taskId);
+  assert.equal(planned.status, 'awaiting-approval');
+  assert.equal(planned.plan.checks.checks[0].id, 'fixed-check');
+  assert.equal(planned.plan.checks.checks[0].timeoutMs, 15_000);
+  assert.match(
+    fixture.calls.find((item) => item.type === 'plan' && /plan phase/.test(item.options.prompt))
+      ?.options.prompt,
+    /authoritative host-validated/,
+  );
+});
+
+test('a planner cannot replace supplied acceptance checks', async (t) => {
+  const root = await rootFixture(t);
+  const fixture = harness();
+  const supplied = structuredClone(fixture.checks);
+  const changed = structuredClone(supplied);
+  changed.checks[0].instructions = 'Different instruction.';
+  fixture.setPlanChecksJson(JSON.stringify(changed));
+  const controller = createWorkflowController({
+    root,
+    adapters: new Map([['fixture', fixture.adapter]]),
+    launch: fixture.launch,
+    acceptance: fixture.acceptance,
+    review: fixture.review,
+    tasks: fixture.tasks,
+  });
+  const started = await controller.run({
+    taskId: fixture.task.id,
+    providerId: 'fixture',
+    reviewProviderId: 'fixture-review',
+    executionAuthorized: true,
+    checksDocument: supplied,
+  });
+  const blocked = await controller.wait(started.taskId);
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.lastOutcome.summary, /changed the supplied acceptance checks/);
+  assert.equal(blocked.plan, null);
 });
 
 test('verification failures reserve and enforce the durable three-repair budget', async (t) => {

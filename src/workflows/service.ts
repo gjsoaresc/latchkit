@@ -290,16 +290,11 @@ function validateAgentOutcome(outcome: AgentOutcome, phase: WorkflowPhase): void
   }
 }
 
-function parseChecks(raw: string, task: Task): { document: unknown; digest: string } {
-  if (!raw.trim())
-    throw new WorkflowError('Plan output omitted acceptance checks.', 'WORKFLOW_CHECKS_INVALID');
-  let proposed: unknown;
-  try {
-    proposed = JSON.parse(raw);
-  } catch {
-    throw new WorkflowError('Plan acceptance checks are invalid JSON.', 'WORKFLOW_CHECKS_INVALID');
-  }
-  let document: unknown;
+function normalizeChecks(
+  proposed: unknown,
+  task: Task,
+): { document: AcceptanceDocument; digest: string } {
+  let document: AcceptanceDocument;
   try {
     document = validateAcceptanceDocument(proposed);
   } catch (error) {
@@ -307,8 +302,7 @@ function parseChecks(raw: string, task: Task): { document: unknown; digest: stri
       cause: error instanceof Error ? error.message : String(error),
     });
   }
-  const checks = (document as { checks: Array<{ criterionId: string }> }).checks;
-  const covered = new Set(checks.map((check) => check.criterionId));
+  const covered = new Set(document.checks.map((check) => check.criterionId));
   const missing = task.criteria.filter(
     (criterion) => criterion.required && !covered.has(criterion.id),
   );
@@ -318,7 +312,36 @@ function parseChecks(raw: string, task: Task): { document: unknown; digest: stri
       'WORKFLOW_CHECK_COVERAGE_INCOMPLETE',
       { criterionIds: missing.map((item) => item.id) },
     );
-  return { document, digest: digestJson(document) };
+  return { document: structuredClone(document), digest: digestJson(document) };
+}
+
+function parseChecks(raw: string, task: Task): { document: AcceptanceDocument; digest: string } {
+  if (!raw.trim())
+    throw new WorkflowError('Plan output omitted acceptance checks.', 'WORKFLOW_CHECKS_INVALID');
+  let proposed: unknown;
+  try {
+    proposed = JSON.parse(raw);
+  } catch {
+    throw new WorkflowError('Plan acceptance checks are invalid JSON.', 'WORKFLOW_CHECKS_INVALID');
+  }
+  return normalizeChecks(proposed, task);
+}
+
+function planChecks(
+  raw: string,
+  task: Task,
+  supplied: unknown | null,
+): { document: AcceptanceDocument; digest: string } {
+  if (supplied === null) return parseChecks(raw, task);
+  const authoritative = normalizeChecks(supplied, task);
+  if (!raw.trim()) return authoritative;
+  const echoed = parseChecks(raw, task);
+  if (echoed.digest !== authoritative.digest)
+    throw new WorkflowError(
+      'Plan output changed the supplied acceptance checks.',
+      'WORKFLOW_CHECKS_CONFLICT',
+    );
+  return authoritative;
 }
 
 function makeArtifact(phase: WorkflowPhase, outcome: AgentOutcome, at: string): WorkflowArtifact {
@@ -717,7 +740,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       }
       const checks =
         parsed.status === 'ready' && action.phase === 'plan'
-          ? parseChecks(parsed.checks_json, task)
+          ? planChecks(parsed.checks_json, task, record.proposedChecks)
           : null;
       const status = parsed.status === 'ready' ? 'passed' : parsed.status;
       await commitAction(pending, { status, summary: parsed.summary }, (current, at) => {
@@ -1081,9 +1104,20 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         'Workflow requires at least one required criterion.',
         'WORKFLOW_CRITERIA_REQUIRED',
       );
+    const suppliedChecks =
+      input.checksDocument === undefined ? null : normalizeChecks(input.checksDocument, task);
     const existing = await readWorkflow(root, task.id);
     if (existing) {
       assertCurrentPolicy(existing);
+      if (
+        suppliedChecks &&
+        (existing.proposedChecks === null ||
+          digestJson(existing.proposedChecks) !== suppliedChecks.digest)
+      )
+        throw new WorkflowError(
+          'Workflow already exists with different acceptance checks.',
+          'WORKFLOW_CHECKS_CONFLICT',
+        );
       if (existing.status === 'running' && !existing.pendingAction) schedule(task.id);
       return existing;
     }
@@ -1119,7 +1153,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       promptDigest: sha256(prompt),
       initialPrompt: prompt,
       inputs: [],
-      proposedChecks: input.checksDocument ?? null,
+      proposedChecks: suppliedChecks?.document ?? null,
       requirements: null,
       plan: null,
       approval: null,

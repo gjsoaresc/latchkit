@@ -1,5 +1,10 @@
 # Provider verification evidence
 
+The current release target is Windows 11 x64. Qualification focuses on one complete
+Codex delivery workflow on that setup. Additional provider probes, interruption
+scenarios, and other operating systems are deferred; they are available as optional
+diagnostics below and are not additional 1.0 release gates.
+
 `npm test` and pull-request CI are credential-free contract coverage. They never download a provider, invoke a model, or use an account. The offline tests cover the five adapter contracts, known-version fixtures, generated resources, invocation vectors, lifecycle translation, unsupported fallbacks, task cancellation, quality-gate failure, and managed-file removal.
 
 Use the separate runner only from a disposable project/worktree after an operator has authorized a provider session:
@@ -15,7 +20,7 @@ The output follows `schemas/provider-e2e-evidence-v1.schema.json`; it binds the 
 For an explicitly authorized Codex release-candidate lifecycle, first build the exact archive and record its SHA-256, then run:
 
 ```sh
-npm run verify:lifecycle -- --authorized --provider codex --artifact <standalone.zip-or-tar.gz> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/lifecycle-codex-windows.evidence.json
+npm run verify:lifecycle -- --authorized --provider codex --artifact <standalone.zip> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/lifecycle-codex-windows.evidence.json
 ```
 
 The candidate archive must come from clean, committed source. The harness verifies
@@ -35,24 +40,24 @@ not evidence for another provider or operating system.
 The full delivery controller has its own exact-archive harness:
 
 ```sh
-npm run verify:workflow -- --authorized --provider codex --artifact <standalone.zip-or-tar.gz> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/workflow-codex-windows.evidence.json
+npm run verify:workflow -- --authorized --provider codex --artifact <standalone.zip> --artifact-sha256 <sha256> --output .github/release-evidence/1.0.0/workflow-codex-windows.evidence.json
 ```
 
 Use `node scripts/live-provider-adapter-evidence.js` with the same authorization,
 archive, digest, provider, and output arguments for a bounded read-only Codex or
 Claude adapter probe. All three harnesses use the coding tool's configured model.
 
-## Release matrix
+## Current qualification scope
 
-| Provider        | Native Windows | WSL2    | Linux   | macOS   | Evidence required                                                           |
-| --------------- | -------------- | ------- | ------- | ------- | --------------------------------------------------------------------------- |
-| Claude Code     | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
-| Codex           | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
-| Antigravity CLI | unknown        | unknown | unknown | unknown | No authenticated run; upstream contract is limited to documented print mode |
-| Cursor IDE      | unknown        | unknown | unknown | unknown | manual editor workflow                                                      |
-| Cursor CLI      | unknown        | unknown | unknown | unknown | authenticated CLI smoke                                                     |
+Codex on native Windows is the delivery workflow under qualification. Its exact
+archive evidence must show requirements, plan approval, implementation, acceptance
+checks, independent review, and handoff. Provider exit status alone is insufficient.
 
-`unknown` means no observed provider session exists; it is not support. WSL2 is an independent runtime and cannot inherit native Windows evidence. Mark each cell `pass`, `fail`, `unsupported`, `blocked`, or `skipped` with a reason and an evidence record. Only observed cells may be promoted to supported release claims.
+Claude Code, Cursor CLI, and Cursor IDE retain their implemented adapters and offline
+contract coverage. Their live sessions are not part of this candidate's release gate.
+Antigravity retains its documented limited print-mode capabilities. WSL, Linux, and
+macOS qualification is deferred. Historical evidence for a different archive or host
+does not establish current support.
 
 ## Cursor IDE manual workflow
 

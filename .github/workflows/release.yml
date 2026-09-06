@@ -1,4 +1,4 @@
-name: Controlled release
+name: Controlled Windows release
 on:
   workflow_dispatch:
     inputs:
@@ -12,15 +12,15 @@ on:
         default: false
         type: boolean
       prior_run_id:
-        description: 'Completed candidate run containing the prior standalone version for upgrade qualification'
+        description: 'Completed candidate run containing the prior Windows standalone version for upgrade qualification'
         required: false
         type: string
       artifact_run_id:
-        description: 'Completed qualified run to publish without rebuilding (required for publication)'
+        description: 'Completed qualified Windows run to publish without rebuilding (required for publication)'
         required: false
         type: string
       evidence_ref:
-        description: 'Repository ref containing additional exact-artifact evidence, such as Windows 11 and live delivery'
+        description: 'Repository ref containing additional exact Windows artifact evidence'
         required: false
         type: string
 permissions:
@@ -29,20 +29,8 @@ permissions:
 jobs:
   prepare:
     if: '!inputs.publish'
-    name: Native bundle / ${{ matrix.target }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: win32-x64
-          - os: ubuntu-24.04
-            target: linux-x64
-          - os: macos-15-intel
-            target: darwin-x64
-          - os: macos-14
-            target: darwin-arm64
-    runs-on: ${{ matrix.os }}
+    name: Windows bundle / Node 24
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -53,24 +41,21 @@ jobs:
           node-version: 24.20.0
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Install archive verification tools
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       - run: npm run check
       - run: npm test
       - run: npm run release:artifacts
         id: bundle
       - name: Include installation scripts
-        shell: bash
-        run: cp install.sh install.ps1 release-artifacts/
+        shell: pwsh
+        run: Copy-Item install.ps1 -Destination release-artifacts
       - name: Qualify the exact standalone archive
         if: inputs.prior_run_id == ''
         run: node scripts/bundle-smoke.js --directory release-artifacts
-      - name: Download exact prior version
+      - name: Download exact prior Windows version
         if: inputs.prior_run_id != ''
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: standalone-${{ matrix.target }}
+          name: standalone-win32-x64
           path: prior-artifacts
           run-id: ${{ inputs.prior_run_id }}
           github-token: ${{ github.token }}
@@ -83,67 +68,15 @@ jobs:
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         if: always() && steps.bundle.outcome == 'success'
         with:
-          name: standalone-${{ matrix.target }}
+          name: standalone-win32-x64
           path: release-artifacts/
           include-hidden-files: true
           if-no-files-found: error
-  ubuntu-22-smoke:
-    name: Exact Linux bundle / Ubuntu 22.04
-    needs: prepare
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
-        with:
-          node-version: 24.20.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: standalone-linux-x64
-          path: release-artifacts
-      - run: node scripts/bundle-smoke.js --directory release-artifacts
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
-        with:
-          name: qualification-ubuntu22
-          path: release-artifacts/*.evidence.json
-          if-no-files-found: error
-  wsl-artifact-smoke:
-    name: Exact Linux bundle / WSL / mounted drive
-    needs: prepare
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: standalone-linux-x64
-          path: release-artifacts
-      - name: Require actual WSL and qualify using the bundled runtime
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          wsl --status
-          if ($LASTEXITCODE -ne 0) { throw 'WSL is required for this qualification cell.' }
-          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
-          if ($distros -notmatch 'Ubuntu') { wsl --install --distribution Ubuntu --no-launch }
-          $workspace = '${{ github.workspace }}'.Replace('\', '/')
-          $repo = wsl -d Ubuntu -- wslpath -a -- $workspace
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($repo)) { throw 'Could not map the GitHub workspace into WSL.' }
-          $repo = $repo.Trim()
-          wsl -d Ubuntu -- sh "$repo/scripts/wsl-bundle-smoke.sh" "$repo"
-          if ($LASTEXITCODE -ne 0) { throw 'WSL exact bundle qualification failed.' }
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
-        with:
-          name: qualification-wsl
-          path: release-artifacts/*.wsl.evidence.json
-          if-no-files-found: error
   publish:
-    name: Publish approved GitHub Release
-    needs: [prepare, ubuntu-22-smoke, wsl-artifact-smoke]
+    name: Publish approved Windows release
+    needs: prepare
     if: always() && inputs.publish && inputs.tag != '' && inputs.artifact_run_id != ''
-    runs-on: ubuntu-24.04
+    runs-on: windows-latest
     environment: github-release-production
     permissions:
       contents: write
@@ -158,16 +91,8 @@ jobs:
           node-version: 24.20.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          pattern: standalone-*
+          name: standalone-win32-x64
           path: release-artifacts
-          merge-multiple: true
-          run-id: ${{ inputs.artifact_run_id }}
-          github-token: ${{ github.token }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          pattern: qualification-*
-          path: release-artifacts
-          merge-multiple: true
           run-id: ${{ inputs.artifact_run_id }}
           github-token: ${{ github.token }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -176,17 +101,15 @@ jobs:
           path: qualification-evidence
       - name: Collect matching external qualification records
         run: node scripts/collect-release-evidence.js --artifacts release-artifacts --evidence qualification-evidence/.github/release-evidence
-      - name: Install archive verification tools
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       - name: Verify qualified bytes against the existing tag commit
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: node scripts/release-artifacts.js --verify-only --tag "$RELEASE_TAG" --output release-artifacts
+        run: node scripts/release-artifacts.js --verify-only --tag "$env:RELEASE_TAG" --output release-artifacts
       - name: Publish the verified artifacts without rebuilding
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        shell: bash
+        shell: pwsh
         run: |
-          mapfile -d '' assets < <(find release-artifacts -maxdepth 1 -type f -print0)
-          gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --title "$RELEASE_TAG" --generate-notes
+          $assets = Get-ChildItem -LiteralPath release-artifacts -File | ForEach-Object FullName
+          gh release create "$env:RELEASE_TAG" @assets --verify-tag --title "$env:RELEASE_TAG" --generate-notes

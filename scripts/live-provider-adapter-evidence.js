@@ -121,18 +121,97 @@ function adapterDisposition(provider) {
   return null;
 }
 
-function resultStatus(result, nonce, sourceUnchanged) {
+const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const authenticationFailure = (value) =>
+  /\b(?:login|logged in|sign[ -]?in|authenti\w*|unauthorized|credentials?|permission|approval|api key)\b/i.test(
+    String(value ?? ''),
+  );
+
+function failed(reason) {
+  return { status: 'failed', reason };
+}
+
+function blocked(reason) {
+  return { status: 'blocked', reason };
+}
+
+function claudeCompletion(stdout, nonce) {
+  let completion;
+  try {
+    completion = JSON.parse(stdout);
+  } catch {
+    return failed('Claude returned malformed JSON output.');
+  }
+  if (!isRecord(completion) || completion.type !== 'result')
+    return failed('Claude omitted its structured result record.');
+  if (completion.permission_denials !== undefined && !Array.isArray(completion.permission_denials))
+    return failed('Claude returned malformed permission-denial metadata.');
+  if (Array.isArray(completion.permission_denials) && completion.permission_denials.length > 0)
+    return blocked('Claude reported a permission denial.');
+  if (completion.is_error === true || completion.subtype !== 'success') {
+    return authenticationFailure(completion.result)
+      ? blocked('Claude reported an authentication failure.')
+      : failed('Claude reported an unsuccessful result.');
+  }
+  if (typeof completion.result !== 'string' || completion.result.trim() !== nonce)
+    return failed('Claude result omitted the exact correlation nonce.');
+  return null;
+}
+
+function codexCompletion(stdout, nonce) {
+  const records = [];
+  for (const line of String(stdout ?? '')
+    .split(/\r?\n/)
+    .filter(Boolean)) {
+    try {
+      const parsed = JSON.parse(line);
+      if (!isRecord(parsed)) return failed('Codex returned a non-object JSONL record.');
+      records.push(parsed);
+    } catch {
+      return failed('Codex returned malformed JSONL output.');
+    }
+  }
+  if (!records.length) return failed('Codex omitted its structured completion records.');
+  const errorRecord = records.find((record) =>
+    ['error', 'turn.failed'].includes(String(record.type)),
+  );
+  if (errorRecord) {
+    const detail = JSON.stringify(errorRecord);
+    return authenticationFailure(detail)
+      ? blocked('Codex reported an authentication failure.')
+      : failed('Codex reported an unsuccessful turn.');
+  }
+  if (!records.some((record) => record.type === 'turn.completed'))
+    return failed('Codex omitted its turn completion record.');
+  const message = records.findLast(
+    (record) =>
+      record.type === 'item.completed' &&
+      isRecord(record.item) &&
+      record.item.type === 'agent_message' &&
+      typeof record.item.text === 'string',
+  );
+  if (!message || message.item.text.trim() !== nonce)
+    return failed('Codex assistant result omitted the exact correlation nonce.');
+  return null;
+}
+
+export function resultStatus(provider, result, nonce, sourceUnchanged) {
   if (!sourceUnchanged)
     return { status: 'failed', reason: 'Provider changed the disposable read-only fixture.' };
   if (result.status === 'timed-out' || result.status === 'cancelled')
     return { status: 'blocked', reason: `Bounded provider execution ${result.status}.` };
-  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  if (/login|sign[ -]?in|authenti[ck]|credential|permission|approval/i.test(output))
-    return { status: 'blocked', reason: 'Provider requested authentication or approval.' };
-  if (result.status !== 'exited' || result.exitCode !== 0)
-    return { status: 'failed', reason: `Provider process ended as ${result.status}.` };
-  if (!output.includes(nonce))
-    return { status: 'failed', reason: 'Provider response omitted the correlation nonce.' };
+  if (result.status !== 'exited' || result.exitCode !== 0) {
+    return authenticationFailure(result.stderr)
+      ? blocked('Provider reported an authentication failure.')
+      : failed(`Provider process ended as ${result.status}.`);
+  }
+  const completion =
+    provider === 'claude'
+      ? claudeCompletion(String(result.stdout ?? ''), nonce)
+      : provider === 'codex'
+        ? codexCompletion(String(result.stdout ?? ''), nonce)
+        : failed(`Provider ${provider} has no structured completion parser.`);
+  if (completion) return completion;
   return {
     status: 'passed',
     reason: 'Bounded correlated response completed without file changes.',
@@ -238,6 +317,7 @@ async function inner(values) {
         outputLimitBytes: 262_144,
       });
       result = resultStatus(
+        provider,
         processResult,
         nonce,
         JSON.stringify(await inventory(fixture)) === JSON.stringify(before),
@@ -326,18 +406,19 @@ async function outer(values) {
   }
 }
 
-const { values } = parseArgs({
-  options: {
-    authorized: { type: 'boolean' },
-    provider: { type: 'string' },
-    timeout: { type: 'string' },
-    output: { type: 'string' },
-    artifact: { type: 'string' },
-    'artifact-sha256': { type: 'string' },
-    inner: { type: 'boolean' },
-    bundle: { type: 'string' },
-    'archive-sha256': { type: 'string' },
-  },
-});
-
-await (values.inner ? inner(values) : outer(values));
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const { values } = parseArgs({
+    options: {
+      authorized: { type: 'boolean' },
+      provider: { type: 'string' },
+      timeout: { type: 'string' },
+      output: { type: 'string' },
+      artifact: { type: 'string' },
+      'artifact-sha256': { type: 'string' },
+      inner: { type: 'boolean' },
+      bundle: { type: 'string' },
+      'archive-sha256': { type: 'string' },
+    },
+  });
+  await (values.inner ? inner(values) : outer(values));
+}

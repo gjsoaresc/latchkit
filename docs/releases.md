@@ -1,17 +1,17 @@
 # Releases
 
-Latchkit 1.0 is distributed through GitHub Releases as standalone, immutable
-bundles. npm remains development tooling and is not the end-user installation
-route. A qualified bundle contains the compiled TypeScript application,
-licenses and SBOM, and private Node.js 24.20.0. End users do not need Node,
-npm, or BAML. The BAML integration is retained on an experimental branch.
+Latchkit 1.0 is distributed through GitHub Releases as a Windows 11 x64
+standalone, immutable bundle. npm remains development tooling and is not the
+end-user installation route. A qualified bundle contains the compiled
+TypeScript application, licenses and SBOM, and private Node.js 24.20.0. End
+users do not need Node, npm, or BAML. The BAML integration is retained on the
+`feat/experimental-baml` branch.
 
-The supported release targets are Windows x64 (`win32-x64`), Linux x64 with
-glibc (`linux-x64`, including WSL), macOS x64 (`darwin-x64`), and macOS arm64
-(`darwin-arm64`). musl Linux and other architectures are not advertised.
-Each archive has a SHA-256 sidecar and manifest. The manifest records the
-exact source commit, runtime pins, target, package inventory, and archive
-checksum; the SBOM covers the complete delivered application and Node runtime.
+The current release target is Windows x64 (`win32-x64`). Linux, WSL, macOS,
+musl, and other architectures remain deferred experimental work. Each archive
+has a SHA-256 sidecar and manifest. The manifest records the exact source
+commit, runtime pins, target, package inventory, and archive checksum; the
+SBOM covers the complete delivered application and Node runtime.
 
 ## Candidate qualification
 
@@ -22,32 +22,32 @@ qualify these bundles. CI workflow cells describe configured coverage; they do
 not become release evidence until the exact archive produces passing evidence
 for that target and environment.
 
-Before a maintainer considers a release candidate, run on each matching build
-host:
+Before a maintainer considers a release candidate, run on Windows 11:
 
-```sh
+```powershell
 npm ci --ignore-scripts
 npm run check
 npm test
 npm run release:artifacts
-cp install.sh install.ps1 release-artifacts/
+Copy-Item install.ps1 -Destination release-artifacts
 node scripts/bundle-smoke.js --directory release-artifacts
 ```
 
-The release workflow builds on Ubuntu 24.04 and also runs the exact Linux archive on Ubuntu 22.04 and in WSL,
-including a mounted Windows checkout. Bundle smoke removes `node`, `npm`, and
-`baml` from `PATH`, exercises the packaged CLI, UI/API, hooks, spaces and
-Unicode, asynchronous policy execution, installation, failed-upgrade preservation, rollback,
-and uninstall retention. A release is not qualified until the corresponding
-evidence files are reviewed for the exact archive bytes.
+The release workflow builds the Windows archive with Node.js 24.20.0. Bundle
+smoke removes `node`, `npm`, and `baml` from `PATH`, exercises the packaged
+CLI, UI/API, hooks, spaces and Unicode, asynchronous policy execution,
+installation, failed-upgrade preservation, rollback, and uninstall retention.
+A release is not qualified until the corresponding evidence files are reviewed
+for the exact archive bytes.
 
 Dispatch a preparation run with `publish: false`. For a subsequent version,
 set `prior_run_id` to the completed preparation run for its predecessor. This
-downloads the exact prior archives and proves installation, upgrade, rollback,
-and continued dispatch through hooks bound to the prior version. A smoke run
-without a prior archive is useful for initial candidate validation but cannot
-satisfy the publication upgrade gate. Prior archives and their checksum and
-manifest sidecars are retained under `release-artifacts/previous/` for verification.
+downloads the exact prior Windows archive and proves installation, upgrade,
+rollback, and continued dispatch through hooks bound to the prior version. A
+smoke run without a prior archive is useful for initial candidate validation
+but cannot satisfy the publication upgrade gate. Prior archives and their
+checksum and manifest sidecars are retained under
+`release-artifacts/previous/` for verification.
 
 Qualify the downloaded Windows archive on Windows 11, and run the live workflow
 harness against an exact candidate archive with an authenticated coding tool.
@@ -57,20 +57,20 @@ they cannot qualify a later rebuild with different bytes.
 
 ## GitHub Release publication
 
-The controlled workflow is `.github/workflows/release.yml`. It builds on the
-four native hosts with Node 24.20.0, runs the checks and bundle smoke, then
-uploads the archives, checksums, manifests, SBOMs, and qualification evidence
-as workflow artifacts. Publication downloads those already-qualified bytes and
+The controlled workflow is `.github/workflows/release.yml`. It builds the
+Windows x64 bundle with Node.js 24.20.0, runs the checks and bundle smoke, then
+uploads its archive, checksum, manifest, SBOM, and qualification evidence as
+workflow artifacts. Publication downloads those already-qualified bytes and
 verifies them against the exact tag commit before calling `gh release create`.
 It does not rebuild during publication.
 
 After final maintainer approval, create the exact version tag at the candidate
 source commit. Dispatch publication with that `tag`, `publish: true`, and
 `artifact_run_id` set to the qualified preparation run. Set `evidence_ref` to the
-reviewed repository ref containing any additional Windows 11 or live workflow
-records. The verifier checks all four bundles, their complete file inventories,
-prior-version upgrade evidence, supported-platform records, and a completed
-delivery workflow before the protected publication step can proceed.
+reviewed repository ref containing the Windows 11 and live workflow records.
+The verifier checks the Windows bundle's complete file inventory, prior-version
+upgrade evidence, Windows 11 record, and completed delivery workflow before
+the protected publication step can proceed.
 
 The publication job requires the protected `github-release-production`
 environment, which is configured with required reviewer `willahealm` (GitHub
@@ -81,24 +81,20 @@ not publish automatically.
 
 ## Install, upgrade, rollback, and uninstall
 
-The install scripts download an archive and its `.sha256` file, verify the
-checksum, unpack to a temporary directory, verify the expected bundle layout,
-and ask the bundled runtime to stage and activate the version. A failed
-installation leaves the prior active version in place. Both scripts support an
+The PowerShell installer downloads an archive and its `.sha256` file, verifies
+the checksum, unpacks to a temporary directory, verifies the expected bundle
+layout, and asks the bundled runtime to stage and activate the version. A
+failed installation leaves the prior active version in place. It supports an
 exact version, a custom user-local root, and local files or URLs:
 
 ```powershell
 ./install.ps1 -Version 1.0.0 -Root "$env:LOCALAPPDATA\Latchkit"
 ```
 
-```sh
-sh install.sh --version 1.0.0 --root "$HOME/.local/share/latchkit"
-```
-
-Use `-Artifact`/`-Checksum` on PowerShell or `--artifact`/`--checksum` on
-POSIX when testing a local archive or a pinned mirror. The scripts require
-Windows x64, Linux x64 with glibc, or macOS x64/arm64 as applicable; they do
-not require elevation or symlinks.
+Use `-Artifact`/`-Checksum` when testing a local archive or a pinned mirror.
+The installer requires Windows 11 x64 and does not require elevation or
+symlinks. `install.sh` is retained for deferred experimental work and is not a
+qualified 1.0 installation path.
 
 Inside an installed bundle, the stable launcher exposes:
 

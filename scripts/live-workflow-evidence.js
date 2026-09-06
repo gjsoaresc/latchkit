@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 
 const run = promisify(execFile);
@@ -131,7 +131,20 @@ async function writeFixture(root) {
 }
 
 function exactJson(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return isDeepStrictEqual(left, right);
+}
+
+function reportBlockedWorkflow(record) {
+  console.error(
+    JSON.stringify({
+      kind: 'workflow-qualification-blocked',
+      phase: record.phase,
+      status: record.status,
+      lastOutcome: record.lastOutcome,
+      repairAttempts: record.repairAttempts,
+      actions: record.completedActions.map(({ phase, status }) => ({ phase, status })),
+    }),
+  );
 }
 
 function planFitsFixtureScope(value) {
@@ -253,10 +266,20 @@ async function inner(values) {
         'Implement only multiply in src/calculator.js for the accepted immutable REQUIREMENTS.md and test/calculator.test.js. Do not change any other file, dependency, configuration, test, or requirement. The supplied acceptance document is the only permitted check. Requirements, plan, and handoff are read-only phases. Return the workflow JSON shape exactly in every reasoning phase.',
     });
     const proposed = await controller.wait(started.taskId);
-    if (proposed.status !== 'awaiting-approval' || !proposed.requirements || !proposed.plan)
+    if (proposed.status !== 'awaiting-approval' || !proposed.requirements || !proposed.plan) {
+      reportBlockedWorkflow(proposed);
       throw new Error(`Workflow did not reach exact-plan approval: ${proposed.status}.`);
-    if (!exactJson(proposed.plan.checks, exactChecks))
+    }
+    if (!exactJson(proposed.plan.checks, exactChecks)) {
+      console.error(
+        JSON.stringify({
+          kind: 'workflow-qualification-checks-changed',
+          expected: exactChecks,
+          proposed: proposed.plan.checks,
+        }),
+      );
       throw new Error('Generated plan changed the narrow predeclared acceptance document.');
+    }
     if (!planFitsFixtureScope(proposed.plan.artifact))
       throw new Error('Generated plan does not fit the narrow approved fixture scope.');
 
@@ -271,8 +294,10 @@ async function inner(values) {
       mutationId: `event_${randomUUID()}`,
     });
     const completed = await controller.wait(proposed.taskId);
-    if (completed.status !== 'verified' || completed.phase !== 'handoff')
+    if (completed.status !== 'verified' || completed.phase !== 'handoff') {
+      reportBlockedWorkflow(completed);
       throw new Error(`Workflow did not reach verified handoff: ${completed.status}.`);
+    }
     const packagedPolicyDigest = policy_artifact_digest([
       new URL(moduleAt('dist/src/workflows/service.js')),
       new URL(moduleAt('dist/src/reviews/orchestrator.js')),

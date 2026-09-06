@@ -211,10 +211,9 @@ async function publicationFixture(t) {
   t.after(() => rm(output, { recursive: true, force: true }));
   await mkdir(path.join(output, 'previous'), { recursive: true });
   await cp(path.join(root, 'install.ps1'), path.join(output, 'install.ps1'));
-  await cp(path.join(root, 'install.sh'), path.join(output, 'install.sh'));
   const manifests = [];
   const evidence = [];
-  for (const target of ['win32-x64', 'linux-x64', 'darwin-x64', 'darwin-arm64']) {
+  for (const target of ['win32-x64']) {
     const current = await embeddedArchiveFixture(t, { target });
     const prior = await embeddedArchiveFixture(t, { target, version: '0.9.0' });
     const archive = `latchkit-1.0.0-${target}.tar.gz`;
@@ -260,32 +259,14 @@ async function publicationFixture(t) {
       systemToolchains: 'absent from PATH',
       checks: smokeChecks,
     };
-    const nativePlatform =
-      target === 'win32-x64'
-        ? { qualificationOS: 'Windows 11 Pro', qualificationVersion: '10.0.26100' }
-        : target.startsWith('darwin-')
-          ? {
-              qualificationOS: 'Darwin Kernel Version 24.6.0',
-              qualificationVersion: '15.6.1',
-            }
-          : { qualificationOS: 'VERSION_ID="24.04"', qualificationVersion: '6.8.0' };
-    evidence.push({ ...base, runtime: 'native', ...nativePlatform });
-    if (target === 'linux-x64') {
-      evidence.push({
-        ...base,
-        runtime: 'native',
-        qualificationOS: 'VERSION_ID="22.04"',
-        qualificationVersion: '5.15.0',
-      });
-      evidence.push({
-        ...base,
-        runtime: 'WSL',
-        qualificationOS: 'WSL',
-        qualificationVersion: '5.15.0-microsoft-standard-WSL2',
-      });
-    }
+    evidence.push({
+      ...base,
+      runtime: 'native',
+      qualificationOS: 'Windows 11 Pro',
+      qualificationVersion: '10.0.26100',
+    });
   }
-  const workflowManifest = manifests.find((item) => item.target === 'win32-x64');
+  const workflowManifest = manifests[0];
   evidence.push({
     schemaVersion: 1,
     kind: 'live-workflow-qualification',
@@ -343,11 +324,13 @@ test('release verification binds bytes, version, source commit, and production p
   await assert.rejects(verifyReleaseArtifacts(fixture.output), /SBOM/);
 });
 
-test('publication rejects missing targets and modified archives', async (t) => {
+test('publication rejects non-Windows bundles and modified archives', async (t) => {
   const fixture = await releaseFixture(t);
+  fixture.manifest.target = 'linux-x64';
+  await fixture.save();
   await assert.rejects(
     verifyReleaseArtifacts(fixture.output, { requireClean: true }),
-    /four qualified/,
+    /one qualified Windows/,
   );
   await writeFile(path.join(fixture.output, fixture.archive), 'tampered');
   await assert.rejects(verifyReleaseArtifacts(fixture.output), /checksum/);
@@ -355,7 +338,7 @@ test('publication rejects missing targets and modified archives', async (t) => {
 
 test('publication requires exact prior-archive smoke and exact live workflow evidence', async (t) => {
   const fixture = await publicationFixture(t);
-  assert.equal((await verifyReleaseArtifacts(fixture.output, { requireClean: true })).length, 4);
+  assert.equal((await verifyReleaseArtifacts(fixture.output, { requireClean: true })).length, 1);
   fixture.evidence[0].upgradeKind = 'single-archive-fallback';
   await fixture.saveEvidence();
   await assert.rejects(
@@ -371,7 +354,7 @@ test('publication requires exact prior-archive smoke and exact live workflow evi
   );
 });
 
-test('publication requires Windows 11 and macOS 14+ exact native evidence', async (t) => {
+test('publication requires Windows 11 exact native evidence', async (t) => {
   const fixture = await publicationFixture(t);
   const windows = fixture.evidence.find(
     (item) => item.target === 'win32-x64' && item.runtime === 'native',
@@ -389,20 +372,6 @@ test('publication requires Windows 11 and macOS 14+ exact native evidence', asyn
     /Windows 11/,
   );
   windows.qualificationOS = 'Windows 11 Pro';
-
-  const mac = fixture.evidence.find(
-    (item) => item.target === 'darwin-x64' && item.runtime === 'native',
-  );
-  mac.qualificationOS = 'Windows 11 Pro';
-  await fixture.saveEvidence();
-  await assert.rejects(verifyReleaseArtifacts(fixture.output, { requireClean: true }), /macOS 14/);
-  mac.qualificationOS = 'Darwin Kernel Version 23.6.0';
-  delete mac.qualificationVersion;
-  await fixture.saveEvidence();
-  await assert.rejects(verifyReleaseArtifacts(fixture.output, { requireClean: true }), /macOS 14/);
-  mac.qualificationVersion = '13.7.8';
-  await fixture.saveEvidence();
-  await assert.rejects(verifyReleaseArtifacts(fixture.output, { requireClean: true }), /macOS 14/);
 });
 
 test('release preparation refuses a mismatched tag before building', async () => {

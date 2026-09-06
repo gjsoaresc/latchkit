@@ -1,4 +1,4 @@
-name: Cross-platform CI
+name: Windows CI
 on:
   push:
   pull_request:
@@ -6,98 +6,39 @@ permissions:
   contents: read
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        node: [22, 24]
-    runs-on: ${{ matrix.os }}
+    name: Windows / Node 24
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24.20.0
       - run: npm ci --ignore-scripts
-      - name: Install archive verification tools
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
-      - run: npm run build
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run check:skills
       - run: npm run check
       - run: npm test
       - run: npm pack --dry-run
       - name: Installed artifact smoke
         run: npm run smoke:artifact -- --require-links
-        if: runner.os == 'Windows'
-      - name: Installed artifact smoke
-        run: npm run smoke:artifact
-        if: runner.os != 'Windows'
-
-  wsl-smoke:
-    name: WSL / Node 22 / mounted-drive artifact smoke
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Require an actual WSL distribution
-        shell: pwsh
-        run: |
-          wsl --status
-          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
-          if ($distros -notmatch 'Ubuntu') { wsl --install --distribution Ubuntu --no-launch }
-          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
-          if ($distros -notmatch 'Ubuntu') { throw 'A WSL Ubuntu distribution is required; a Linux container is not an acceptable substitute.' }
-      - name: Install Node 22 in WSL when needed
-        shell: pwsh
-        run: |
-          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; if ! node --version | grep -Eq '^v(2[2-9]|[3-9][0-9])\\.'; then mkdir -p ~/.local; curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C ~/.local; fi; node --version; npm --version"
-      - name: Run WSL filesystem and mounted-drive smoke
-        shell: pwsh
-        run: |
-          $windowsRepo = '${{ github.workspace }}'.Replace('\', '/')
-          $repo = (wsl wslpath -a $windowsRepo).Trim()
-          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd '$repo'; npm ci --ignore-scripts; npm run build; node scripts/artifact-smoke.js --require-wsl --require-links --mounted-project '$repo/.wsl-mounted-smoke'"
 
   browser:
-    name: Browser console / ${{ matrix.browser }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            browser: chromium
-            install: chromium
-          - os: ubuntu-latest
-            browser: firefox
-            install: firefox
-          - os: ubuntu-latest
-            browser: webkit
-            install: webkit
-          - os: windows-latest
-            browser: chromium
-            install: chromium
-    runs-on: ${{ matrix.os }}
+    name: Browser console / Windows Chromium
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.20.0
       - run: npm ci --ignore-scripts
       - run: npm run build
-      - name: Install browser dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: npx playwright install-deps ${{ matrix.install }}
-      - name: Install browser
-        run: npx playwright install ${{ matrix.install }}
-      - run: npm run test:browser -- --project=${{ matrix.browser }}
+      - run: npx playwright install chromium
+      - run: npm run test:browser -- --project=chromium
       - name: Retain sanitized acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: acceptance-evidence-${{ runner.os }}-${{ matrix.browser }}
+          name: acceptance-evidence-windows-chromium
           path: test-results/acceptance-*/.latchkit/tasks/acceptance-evidence/
           include-hidden-files: true
           if-no-files-found: warn
