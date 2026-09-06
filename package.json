@@ -27,6 +27,8 @@
     "start": "npm run build && node dist/src/cli.js ui",
     "build": "node scripts/build.js",
     "build:clean": "node scripts/build.js --clean",
+    "clean": "node scripts/clean.js",
+    "clean:apply": "node scripts/clean.js --apply",
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "test": "npm run build && node --test --test-timeout=120000 test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
     "test:browser": "npm run build && playwright test",
