@@ -5,6 +5,8 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'n
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import filesystem from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
@@ -18,6 +20,93 @@ import {
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const run = promisify(execFile);
+
+function interceptActivation(t, operation) {
+  const original = filesystem.rename;
+  t.mock.method(filesystem, 'rename', async (from, to) => {
+    if (String(from).endsWith('.staging')) return operation(from, to, original);
+    return original(from, to);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+}
+
+test(
+  'Windows activation retries a transient sharing failure and activates the complete bundle',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-activation-retry-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const version = JSON.parse(
+      await readFile(path.join(repository, 'package.json'), 'utf8'),
+    ).version;
+    const { bundle, target } = await fixtureBundle(scratch, version);
+    let attempts = 0;
+    interceptActivation(t, async (from, to, rename) => {
+      attempts += 1;
+      if (attempts < 3)
+        throw Object.assign(new Error('Temporary sharing violation'), { code: 'EPERM' });
+      return rename(from, to);
+    });
+    const installed = await installBundle({ root: path.join(scratch, 'root'), bundle, target });
+    assert.equal(attempts, 3);
+    assert.equal(installed.active, `${version}-${target}`);
+    assert.deepEqual(await readdir(path.join(installed.root, 'versions')), [
+      `${version}-${target}`,
+    ]);
+  },
+);
+
+test(
+  'Windows activation retry exhaustion preserves the active pointer and original error',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-activation-exhaust-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const version = JSON.parse(
+      await readFile(path.join(repository, 'package.json'), 'utf8'),
+    ).version;
+    const { bundle, target } = await fixtureBundle(scratch, version);
+    const root = path.join(scratch, 'root');
+    await mkdir(root);
+    const active = Buffer.from('previous-version-must-remain\r\n');
+    await writeFile(path.join(root, 'current'), active);
+    const failure = Object.assign(new Error('Persistent sharing violation'), { code: 'EPERM' });
+    let attempts = 0;
+    interceptActivation(t, async () => {
+      attempts += 1;
+      throw failure;
+    });
+    await assert.rejects(
+      () => installBundle({ root, bundle, target }),
+      (error) => error === failure,
+    );
+    assert.ok(attempts > 1 && attempts <= 8, `bounded attempts: ${attempts}`);
+    assert.deepEqual(await readFile(path.join(root, 'current')), active);
+    assert.deepEqual(await readdir(path.join(root, 'versions')), []);
+  },
+);
+
+test('activation does not retry an unrelated filesystem error', async (t) => {
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-activation-error-'));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const version = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8')).version;
+  const { bundle, target } = await fixtureBundle(scratch, version);
+  const failure = Object.assign(new Error('Read-only filesystem'), { code: 'EROFS' });
+  let attempts = 0;
+  interceptActivation(t, async () => {
+    attempts += 1;
+    throw failure;
+  });
+  await assert.rejects(
+    () => installBundle({ root: path.join(scratch, 'root'), bundle, target }),
+    (error) => error === failure,
+  );
+  assert.equal(attempts, 1);
+});
 
 async function runWithInput(command, args, input) {
   return new Promise((resolve, reject) => {

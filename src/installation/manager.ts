@@ -559,6 +559,35 @@ export async function createStableHookLaunchers(
   return [path.join(root, 'bin', 'latchkit-hook')];
 }
 
+async function promoteStagedVersion(root: string, staged: string, destination: string) {
+  // A just-exited private Node process or a Windows scanner can briefly retain
+  // a handle in the staged directory. Retry only these bounded sharing failures.
+  const delays = [50, 100, 200, 400, 400, 400];
+  for (let attempt = 0; ; attempt += 1) {
+    await rejectSymlinksWithin(root, staged);
+    await rejectSymlinksWithin(root, destination);
+    try {
+      await lstat(destination);
+      throw new Error('Installation destination became occupied during activation.');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    try {
+      await rename(staged, destination);
+      return;
+    } catch (error) {
+      const delay = delays[attempt];
+      if (
+        process.platform !== 'win32' ||
+        delay === undefined ||
+        !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')
+      )
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 export async function installBundle(
   request: Omit<InstallationRequest, 'command'>,
 ): Promise<InstallationInspection> {
@@ -607,7 +636,7 @@ export async function installBundle(
       if (!target.startsWith('win32-')) await chmod(path.join(staged, 'runtime', 'node'), 0o755);
       await smoke(staged, manifest.version);
       await createStableLaunchers(root, target);
-      await rename(staged, destination);
+      await promoteStagedVersion(root, staged, destination);
       await createStableHookLaunchers(root, target, DEFAULT_HOOKS);
       await writeAtomic(root, ACTIVE, `${key}\n`);
     } catch (error) {
