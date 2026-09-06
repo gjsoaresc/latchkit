@@ -7,6 +7,8 @@
 import { randomUUID } from 'node:crypto';
 import { rename, rm, writeFile } from 'node:fs/promises';
 
+export type ArchiveSidecar = { path: string; bytes: string | Uint8Array };
+
 // Publishes `finalArchive` (already staged at `stagedArchivePath`, typically
 // by an external compression tool) plus its sidecar files as close to a
 // single atomic set as plain filesystem renames allow. Each file is renamed
@@ -25,7 +27,11 @@ import { rename, rm, writeFile } from 'node:fs/promises';
 // committed is removed before the error is rethrown, so a previously
 // published, distinct artifact elsewhere in the same directory is never
 // touched. Returns the list of committed final paths on success.
-export async function publishArchiveSet(finalArchive, stagedArchivePath, sidecars) {
+export async function publishArchiveSet(
+  finalArchive: string,
+  stagedArchivePath: string,
+  sidecars: readonly ArchiveSidecar[],
+): Promise<string[]> {
   const token = randomUUID();
   const committed = [];
   try {

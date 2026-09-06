@@ -1,4 +1,5 @@
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
 import { readOptional, writeAtomic } from '../storage.js';
 import { redact } from '../diagnostics/redact.js';
@@ -14,6 +15,12 @@ import type { ProviderContract } from '../providers/contracts.js';
 import type { SourceSnapshot } from '../task-state/contracts.js';
 import { errorCode, errorMessage, isRecord } from '../types.js';
 import { observeProviderInvocation } from '../usage/observe.js';
+import {
+  DEFAULT_REVIEW_CONCURRENCY,
+  MAX_REVIEW_ASSIGNMENTS,
+  inspectReviewAdmission,
+  reserveReviewInvocation,
+} from './admission.js';
 
 export const REVIEW_SCHEMA_VERSION = 1;
 export const REVIEW_STATE_PATH = '.latchkit/reviews/state-v1.json';
@@ -50,6 +57,7 @@ type Review = {
   id: string;
   schemaVersion: number;
   taskId: string;
+  parentRunId: string;
   state: 'running' | 'completed' | 'failed' | 'cancelled';
   independent: true;
   sourceSnapshot: SourceSnapshot;
@@ -58,14 +66,20 @@ type Review = {
   reviewers: ReviewItem[];
   createdAt: string;
   updatedAt: string;
+  owner?: { controllerId: string; pid: number; hostname: string };
+  cancelRequestedAt?: string;
   findings?: Finding[];
 };
 type ReviewState = { schemaVersion: number; reviews: Review[] };
 type ReviewLimits = {
   maxReviewers: number;
   concurrency: number;
+  admissionConcurrency: number;
   timeoutMs: number;
   maxIterations: number;
+  tokenBudget?: number;
+  spendBudgetUsd?: number;
+  spendingGuarantee: 'advisory' | 'unsupported-hard-request';
 };
 type Adapter = {
   contract: Readonly<ProviderContract>;
@@ -83,6 +97,7 @@ type WorkspaceFactory = (root: string, input?: { taskId?: string }) => Promise<u
 type Source = (root: string) => Promise<SourceSnapshot>;
 type RunInput = {
   taskId?: unknown;
+  parentRunId?: unknown;
   reviewers?: unknown;
   executionAuthorized?: boolean;
   sandbox?: unknown;
@@ -104,7 +119,6 @@ const adapters = new Map<string, unknown>([
   ['claude', CLAUDE_ADAPTER],
   ['codex', codexAdapter],
 ]);
-const ACTIVE = new Map<string, AbortController>();
 const REVIEW_RESULT_INSTRUCTIONS = `Return exactly one JSON object with this shape and no prose or code fence: {"schemaVersion":1,"state":"completed","findings":[{"severity":"blocker|high|medium|low|info","title":"non-empty title","detail":"non-empty detail","path":"optional repository-relative path"}],"summary":"optional summary"}. Use an empty findings array when no issues exist. The state must be one of completed, failed, timed-out, cancelled, or unavailable.`;
 
 export class ReviewOrchestrationError extends Error {
@@ -244,10 +258,34 @@ async function saveState(root: string, review: Review): Promise<Review> {
     const state = await readState(root);
     const index = state.reviews.findIndex((item) => item.id === review.id);
     if (index < 0) state.reviews.push(review);
-    else state.reviews[index] = review;
+    else {
+      // A cancellation request may have been submitted from another CLI or
+      // server process while this owner was awaiting its provider. Never
+      // overwrite that durable request with this controller's stale object.
+      const previous = state.reviews[index];
+      if (previous?.cancelRequestedAt && !review.cancelRequestedAt)
+        review.cancelRequestedAt = previous.cancelRequestedAt;
+      // A request accepted while the owner was completing must win the
+      // terminal transition. A later request is refused because the persisted
+      // review is no longer running, so this only covers the admitted race.
+      if (previous?.state === 'running' && previous.cancelRequestedAt && review.state !== 'running')
+        review.state = 'cancelled';
+      state.reviews[index] = review;
+    }
     await writeAtomic(root, REVIEW_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`, 0o600);
     return review;
   });
+}
+
+function ownerIsProvablyDead(owner: Review['owner']): boolean {
+  if (!owner || owner.hostname !== os.hostname() || !Number.isInteger(owner.pid) || owner.pid <= 0)
+    return false;
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error: unknown) {
+    return isRecord(error) && error.code === 'ESRCH';
+  }
 }
 
 function dedupe(findings: Finding[]): Finding[] {
@@ -311,13 +349,24 @@ function parseLimits(value: unknown, reviewerCount: number): ReviewLimits {
   const limits = isRecord(value) ? value : {};
   const maxReviewers = positiveLimit(limits.maxReviewers, 4);
   const concurrency = positiveLimit(limits.concurrency, Math.min(2, maxReviewers));
+  const admissionConcurrency = positiveLimit(
+    limits.admissionConcurrency,
+    DEFAULT_REVIEW_CONCURRENCY,
+  );
   const timeoutMs = positiveLimit(limits.timeoutMs, 120000);
   const maxIterations = positiveLimit(limits.maxIterations, 1);
+  const tokenBudget =
+    limits.tokenBudget === undefined ? undefined : positiveLimit(limits.tokenBudget, 0);
+  const spendBudgetUsd = limits.spendBudgetUsd === undefined ? undefined : limits.spendBudgetUsd;
+  const hardSpending = limits.hardSpendingGuarantee === true || limits.spendingGuarantee === 'hard';
   if (
-    ![maxReviewers, concurrency, timeoutMs, maxIterations].every(
+    ![maxReviewers, concurrency, admissionConcurrency, timeoutMs, maxIterations].every(
       (item) => typeof item === 'number' && Number.isInteger(item) && item > 0,
     ) ||
     maxIterations !== 1 ||
+    maxReviewers > MAX_REVIEW_ASSIGNMENTS ||
+    reviewerCount > MAX_REVIEW_ASSIGNMENTS ||
+    admissionConcurrency > MAX_REVIEW_ASSIGNMENTS ||
     reviewerCount > maxReviewers ||
     concurrency > maxReviewers
   )
@@ -325,7 +374,34 @@ function parseLimits(value: unknown, reviewerCount: number): ReviewLimits {
       'Review limits are invalid or exceeded.',
       'REVIEW_BUDGET_EXCEEDED',
     );
-  return { maxReviewers, concurrency, timeoutMs, maxIterations };
+  if (tokenBudget !== undefined && (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1))
+    throw new ReviewOrchestrationError(
+      'tokenBudget must be a positive integer.',
+      'REVIEW_BUDGET_INVALID',
+    );
+  if (
+    spendBudgetUsd !== undefined &&
+    (typeof spendBudgetUsd !== 'number' || !Number.isFinite(spendBudgetUsd) || spendBudgetUsd < 0)
+  )
+    throw new ReviewOrchestrationError(
+      'spendBudgetUsd must be a non-negative number.',
+      'REVIEW_BUDGET_INVALID',
+    );
+  if (hardSpending)
+    throw new ReviewOrchestrationError(
+      'A hard spending guarantee was requested, but provider billing limits are not enforceable by Latchkit.',
+      'REVIEW_HARD_SPEND_UNSUPPORTED',
+    );
+  return {
+    maxReviewers,
+    concurrency,
+    admissionConcurrency,
+    timeoutMs,
+    maxIterations,
+    ...(tokenBudget === undefined ? {} : { tokenBudget }),
+    ...(spendBudgetUsd === undefined ? {} : { spendBudgetUsd }),
+    spendingGuarantee: 'advisory',
+  };
 }
 
 export function createReviewOrchestrator({
@@ -339,8 +415,46 @@ export function createReviewOrchestrator({
   if (!root || typeof launch !== 'function' || typeof workspace !== 'function')
     throw new TypeError('Review root and execution functions are required.');
   const projectRoot = path.resolve(root);
+  const controllerId = randomUUID();
+  const active = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  let reconciled: Promise<void> | undefined;
+  const reconcileInterrupted = () =>
+    (reconciled ??= (async () => {
+      // Inspection of an unused controller must remain non-mutating. Avoid
+      // acquiring the task-state lock (which creates its parent directory)
+      // until a review state file actually exists.
+      if ((await readOptional(projectRoot, REVIEW_STATE_PATH)) === null) return;
+      await withTaskStateLock(projectRoot, async () => {
+        const state = await readState(projectRoot);
+        let changed = false;
+        for (const review of state.reviews) {
+          if (review.state !== 'running' || !ownerIsProvablyDead(review.owner)) continue;
+          changed = true;
+          review.state = 'failed';
+          review.updatedAt = clock().toISOString();
+          for (const item of review.reviewers) {
+            if (item.state !== 'running') continue;
+            item.state = 'failed';
+            item.result = { schemaVersion: REVIEW_SCHEMA_VERSION, state: 'failed', findings: [] };
+            item.error = {
+              code: 'REVIEW_INTERRUPTED',
+              message: 'Review was interrupted by process restart.',
+            };
+            item.finishedAt = review.updatedAt;
+          }
+        }
+        if (changed)
+          await writeAtomic(
+            projectRoot,
+            REVIEW_STATE_PATH,
+            `${JSON.stringify(state, null, 2)}\n`,
+            0o600,
+          );
+      });
+    })());
   async function run({
     taskId,
+    parentRunId: requestedParentRunId,
     reviewers,
     executionAuthorized = false,
     sandbox,
@@ -349,7 +463,12 @@ export function createReviewOrchestrator({
     depth = 0,
     signal,
   }: RunInput = {}) {
+    await reconcileInterrupted();
     const task = text(taskId, 'taskId');
+    const parentRunId =
+      requestedParentRunId === undefined
+        ? `legacy-task:${task}`
+        : text(requestedParentRunId, 'parentRunId');
     if (executionAuthorized !== true)
       throw new ReviewOrchestrationError(
         'Reviews require explicit host-local execution authorization.',
@@ -384,6 +503,7 @@ export function createReviewOrchestrator({
       id: `review_${randomUUID()}`,
       schemaVersion: REVIEW_SCHEMA_VERSION,
       taskId: task,
+      parentRunId,
       state: 'running',
       independent: true,
       sourceSnapshot: snapshot,
@@ -396,13 +516,26 @@ export function createReviewOrchestrator({
       reviewers: [],
       createdAt: clock().toISOString(),
       updatedAt: clock().toISOString(),
+      owner: { controllerId, pid: process.pid, hostname: os.hostname() },
     };
     await saveState(projectRoot, review);
     const abort = new AbortController();
     const externalAbort = () => abort.abort();
     if (signal?.aborted) abort.abort();
     else signal?.addEventListener('abort', externalAbort, { once: true });
-    ACTIVE.set(review.id, abort);
+    let finishActive!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finishActive = resolve;
+    });
+    active.set(review.id, { controller: abort, done });
+    const cancellationPoll = setInterval(() => {
+      void readState(projectRoot)
+        .then((state) => state.reviews.find((item) => item.id === review.id)?.cancelRequestedAt)
+        .then((requested) => {
+          if (requested) abort.abort();
+        })
+        .catch(() => {});
+    }, 100);
     let cursor = 0;
     const results: ReviewItem[] = [];
     const worker = async () => {
@@ -475,21 +608,37 @@ export function createReviewOrchestrator({
               'Review was cancelled before launch.',
               'REVIEW_CANCELLED',
             );
-          const processResult = await observeProviderInvocation({
+          const reservation = await reserveReviewInvocation({
             root: projectRoot,
-            providerId: item.providerId,
-            taskId: task,
-            invocationId: item.id,
-            launch,
+            reviewId: review.id,
+            assignmentId: item.id,
+            parentTaskId: parentRunId,
+            controllerId,
+            limit: budget.admissionConcurrency,
+            maxAssignments: MAX_REVIEW_ASSIGNMENTS,
+            signal: abort.signal,
             clock,
-            input: {
-              provider: adapter.contract,
-              plan,
-              executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
-              timeoutMs: budget.timeoutMs,
-              signal: abort.signal,
-            },
           });
+          let processResult: ProcessRunResult;
+          try {
+            processResult = await observeProviderInvocation({
+              root: projectRoot,
+              providerId: item.providerId,
+              taskId: task,
+              invocationId: item.id,
+              launch,
+              clock,
+              input: {
+                provider: adapter.contract,
+                plan,
+                executionProfile: HOST_LOCAL_EXECUTION_PROFILE,
+                timeoutMs: budget.timeoutMs,
+                signal: abort.signal,
+              },
+            });
+          } finally {
+            await reservation.release();
+          }
           item.process = redact(processResult);
           item.state =
             processResult.status === 'cancelled'
@@ -550,20 +699,50 @@ export function createReviewOrchestrator({
       await saveState(projectRoot, review);
       return review;
     } finally {
-      ACTIVE.delete(review.id);
+      active.delete(review.id);
+      finishActive();
+      clearInterval(cancellationPoll);
       signal?.removeEventListener('abort', externalAbort);
     }
   }
   async function cancel({ reviewId }: { reviewId?: unknown } = {}) {
+    await reconcileInterrupted();
     const id = text(reviewId, 'reviewId');
-    const controller = ACTIVE.get(id);
-    if (!controller)
-      throw new ReviewOrchestrationError(
-        'Review is not active in this process.',
-        'REVIEW_NOT_ACTIVE',
-      );
-    controller.abort();
+    const entry = active.get(id);
+    if (entry) entry.controller.abort();
+    else {
+      await withTaskStateLock(projectRoot, async () => {
+        const state = await readState(projectRoot);
+        const review = state.reviews.find((item) => item.id === id);
+        if (!review || review.state !== 'running')
+          throw new ReviewOrchestrationError('Review is not active.', 'REVIEW_NOT_ACTIVE');
+        review.cancelRequestedAt = clock().toISOString();
+        review.updatedAt = clock().toISOString();
+        await writeAtomic(
+          projectRoot,
+          REVIEW_STATE_PATH,
+          `${JSON.stringify(state, null, 2)}\n`,
+          0o600,
+        );
+      });
+    }
     return { reviewId: id, state: 'cancelling' };
   }
-  return Object.freeze({ run, cancel, inspect: () => readState(projectRoot) });
+  async function shutdown() {
+    for (const entry of active.values()) entry.controller.abort();
+    await Promise.all([...active.values()].map((entry) => entry.done));
+  }
+  return Object.freeze({
+    run,
+    cancel,
+    shutdown,
+    inspect: async () => {
+      await reconcileInterrupted();
+      const [state, admission] = await Promise.all([
+        readState(projectRoot),
+        inspectReviewAdmission(projectRoot),
+      ]);
+      return { ...state, admission };
+    },
+  });
 }

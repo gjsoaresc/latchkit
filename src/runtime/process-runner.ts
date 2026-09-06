@@ -187,6 +187,12 @@ export async function runProviderProcess({
       const { assertManagedMcpRuntime } = await import('../integrations/mcp/managed.js');
       await assertManagedMcpRuntime(command.cwd ?? process.cwd(), contract, environment);
     }
+    if (contract.id === 'codex') {
+      const { assertCodexManagedMcpRuntime } = await import('../integrations/mcp/codex.js');
+      await assertCodexManagedMcpRuntime(command.cwd ?? process.cwd(), {
+        executable: command.executable,
+      });
+    }
   } catch {
     return result('refused', {
       code: 'MCP_RUNTIME_DENIED',

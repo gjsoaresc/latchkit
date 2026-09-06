@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,12 +10,19 @@ import { verifyReleaseArtifacts } from './release-artifacts.js';
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
-const option = (name) => {
+type Manifest = { archive: string; sha256: string; target: string; version: string };
+type StableHookDuration = { phase: string; version: string; durationMs: number };
+type InstallationRequest = {
+  command: 'install' | 'upgrade' | 'rollback' | 'uninstall';
+  bundle?: string;
+  version?: string;
+};
+const option = (name: string): string | undefined => {
   const index = args.indexOf(name);
   return index < 0 ? undefined : args[index + 1];
 };
 
-async function extract(archive, destination, scratch) {
+async function extract(archive: string, destination: string, scratch: string): Promise<void> {
   await mkdir(destination, { recursive: true });
   if (archive.endsWith('.zip')) {
     const script = path.join(scratch, 'extract.ps1');
@@ -31,8 +38,8 @@ async function extract(archive, destination, scratch) {
   } else await run('tar', ['-xzf', archive, '-C', destination], { timeout: 120_000 });
 }
 
-async function hook(node, file, hookArgs = []) {
-  await new Promise((resolve, reject) => {
+async function hook(node: string, file: string, hookArgs: string[] = []): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
     const child = spawn(node, [file, ...hookArgs], {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -43,10 +50,10 @@ async function hook(node, file, hookArgs = []) {
     }, 10_000);
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk;
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk;
     });
     child.once('error', reject);
@@ -66,11 +73,11 @@ async function hook(node, file, hookArgs = []) {
   });
 }
 
-async function terminateOwnedHook(child) {
+async function terminateOwnedHook(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (process.platform === 'win32' && child.pid) {
     try {
       await run(
-        path.join(process.env.SystemRoot, 'System32', 'taskkill.exe'),
+        path.join(process.env.SystemRoot ?? 'C:/Windows', 'System32', 'taskkill.exe'),
         ['/pid', String(child.pid), '/t', '/f'],
         { windowsHide: true, timeout: 5_000 },
       );
@@ -80,14 +87,23 @@ async function terminateOwnedHook(child) {
   } else child.kill('SIGKILL');
 }
 
-async function stableHook(command, hookArgs = [], label) {
-  return new Promise((resolve, reject) => {
+async function stableHook(
+  command: string,
+  hookArgs: string[] = [],
+  label: string,
+): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
     const child = spawn(command, hookArgs, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const startedAt = performance.now();
     let settled = false;
     let timedOut = false;
-    let timer;
-    const finish = (outcome, value) => {
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void terminateOwnedHook(child).finally(() => {
+        reject(new Error(`Stable hook ${label} did not exit within 30 seconds.`));
+      });
+    }, 30_000);
+    const finish = (outcome: (value: number) => void, value: number) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
@@ -95,34 +111,31 @@ async function stableHook(command, hookArgs = [], label) {
     };
     let stdout = '';
     let stderr = '';
-    timer = setTimeout(() => {
-      timedOut = true;
-      void terminateOwnedHook(child).finally(() => {
-        finish(reject, new Error(`Stable hook ${label} did not exit within 30 seconds.`));
-      });
-    }, 30_000);
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk;
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk;
     });
-    child.once('error', (error) => {
-      if (!timedOut) finish(reject, error);
+    child.once('error', (error: Error) => {
+      if (!timedOut) reject(error);
     });
     child.once('close', (code) => {
       if (timedOut) return;
-      if (code !== 0) finish(reject, new Error(`Stable hook ${label} failed: ${stderr}`));
+      if (code !== 0) reject(new Error(`Stable hook ${label} failed: ${stderr}`));
       else {
         try {
-          const event = JSON.parse(stdout);
+          const event = JSON.parse(stdout) as {
+            kind?: string;
+            payload?: { session_id?: string };
+            eventId?: string;
+          };
           assert.equal(event.kind, 'turn-completed');
-          assert.equal(event.payload.session_id, 'bundle-smoke');
-          assert.match(event.eventId, /^bundle-smoke:Stop:/);
+          assert.equal(event.payload?.session_id, 'bundle-smoke');
+          assert.match(event.eventId ?? '', /^bundle-smoke:Stop:/);
           finish(resolve, Math.round(performance.now() - startedAt));
         } catch (error) {
-          finish(
-            reject,
+          reject(
             new Error('Stable hook did not preserve handler arguments or stdin.', { cause: error }),
           );
         }
@@ -202,7 +215,7 @@ async function main() {
         : tools;
     if (process.platform === 'win32')
       process.env.PSModulePath = path.join(
-        process.env.SystemRoot,
+        process.env.SystemRoot ?? 'C:/Windows',
         'System32/WindowsPowerShell/v1.0/Modules',
       );
     for (const name of ['NODE_PATH', 'NODE_OPTIONS']) delete process.env[name];
@@ -244,7 +257,7 @@ async function main() {
     await assertArtifact(path.join(scratch, 'project'), executable, entry, 'standalone');
     if (option('--mounted-project'))
       await assertArtifact(
-        path.resolve(option('--mounted-project')),
+        path.resolve(option('--mounted-project') as string),
         executable,
         entry,
         'WSL mounted drive',
@@ -253,10 +266,10 @@ async function main() {
       ['codex-handler.js', []],
       ['claude-hook.js', ['--event', 'Stop']],
       ['cursor-ide-hook.cjs', []],
-    ])
+    ] as [string, string[]][])
       await hook(executable, path.join(app, 'dist/src/providers', file), hookArgs);
     const installRoot = path.join(scratch, 'installed versions é');
-    const manage = async (request) =>
+    const manage = async (request: InstallationRequest): Promise<unknown> =>
       JSON.parse(
         (
           await run(
@@ -272,12 +285,19 @@ async function main() {
           )
         ).stdout,
       );
-    const bootstrap = async (releaseDirectory, releaseManifest, destination) => {
+    const bootstrap = async (
+      releaseDirectory: string,
+      releaseManifest: Manifest,
+      destination: string,
+    ): Promise<void> => {
       const archive = path.join(releaseDirectory, releaseManifest.archive);
       const checksum = path.join(releaseDirectory, `${releaseManifest.archive}.sha256`);
       if (process.platform === 'win32') {
         await run(
-          path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+          path.join(
+            process.env.SystemRoot ?? 'C:/Windows',
+            'System32/WindowsPowerShell/v1.0/powershell.exe',
+          ),
           [
             '-NoProfile',
             '-NonInteractive',
@@ -309,7 +329,7 @@ async function main() {
       }
     };
     if (previousManifest)
-      await bootstrap(path.resolve(previousDirectory), previousManifest, installRoot);
+      await bootstrap(path.resolve(previousDirectory as string), previousManifest, installRoot);
     await bootstrap(directory, manifest, installRoot);
     const active = await readFile(path.join(installRoot, 'current'), 'utf8');
     const hookLauncher =
@@ -331,18 +351,21 @@ async function main() {
             'Stop',
           ]
         : ['--version', active.trim(), '--handler', 'claude', '--event', 'Stop'];
-    const stableHookDurations = [];
-    const runStableHook = async (phase, hookArgs) => {
+    const stableHookDurations: StableHookDuration[] = [];
+    const runStableHook = async (phase: string, hookArgs: string[]): Promise<void> => {
       const durationMs = await stableHook(
         process.platform === 'win32'
-          ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
+          ? path.join(
+              process.env.SystemRoot ?? 'C:/Windows',
+              'System32/WindowsPowerShell/v1.0/powershell.exe',
+            )
           : hookLauncher,
         hookArgs,
-        `${phase} for ${hookArgs[hookArgs.indexOf('--version') + 1]}`,
+        `${phase} for ${hookArgs[hookArgs.indexOf('--version') + 1] ?? 'unknown'}`,
       );
       stableHookDurations.push({
         phase,
-        version: hookArgs[hookArgs.indexOf('--version') + 1],
+        version: hookArgs[hookArgs.indexOf('--version') + 1] ?? 'unknown',
         durationMs,
       });
     };
@@ -356,7 +379,10 @@ async function main() {
     const launched =
       process.platform === 'win32'
         ? await run(
-            path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+            path.join(
+              process.env.SystemRoot ?? 'C:/Windows',
+              'System32/WindowsPowerShell/v1.0/powershell.exe',
+            ),
             ['-NoProfile', '-NonInteractive', '-File', launcher, '--version'],
             { windowsHide: true, timeout: 30_000 },
           )

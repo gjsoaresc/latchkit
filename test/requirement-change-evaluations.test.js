@@ -89,7 +89,7 @@ test('unknown-impact dependency is flagged, not resolved, and never coerced to a
   );
 });
 
-test('reconciliation arm exercises #110/#111 and marks only #112 resume context unavailable', async () => {
+test('reconciliation arm exercises #110-#112 and hands the real context brief to its next controller', async () => {
   const scenario = await loadScenario('export-visibility');
   const result = await runRequirementChangeScenario({
     spec: scenario,
@@ -104,9 +104,38 @@ test('reconciliation arm exercises #110/#111 and marks only #112 resume context 
   assert.equal(reconciliation.reconciliationEvidence.stalePreviewRejected, true);
   assert.equal(reconciliation.reconciliationEvidence.unknownImpactExplicit, true);
   assert.equal(reconciliation.reconciliationEvidence.preservedArtifacts, true);
-  assert.equal(reconciliation.reconciliationEvidence.resumeContext.status, 'unavailable');
-  assert.match(reconciliation.reconciliationEvidence.resumeContext.reason, /#112/);
+  const resumeContext = reconciliation.reconciliationEvidence.resumeContext;
+  assert.equal(resumeContext.status, 'delivered');
+  assert.match(resumeContext.digest, /^[a-f0-9]{64}$/);
+  assert.equal(resumeContext.schemaVersion, 1);
+  assert.ok(resumeContext.bytes > 0);
+  assert.equal(resumeContext.nextAction, 'ordinary-task');
+  assert.equal(resumeContext.delivery, 'scripted-controller-handoff');
   assert.equal(unavailableReconciliationArm().arm, 'reconciliation');
+});
+
+test('reconciliation passes the current #112 projection into the scripted-controller handoff', async () => {
+  const scenario = await loadScenario('export-visibility');
+  let delivered;
+  await runRequirementChangeScenario({
+    spec: scenario,
+    fixturesRoot,
+    now: fixedNow,
+    applyChange: async (input) => {
+      delivered = input.resumeContext;
+      return realApplyChange(input);
+    },
+  });
+  assert.ok(delivered);
+  assert.equal(delivered.nextAction.kind, 'ordinary-task');
+  assert.ok(
+    delivered.acceptedDecisions.some((item) => item.text === scenario.changedRequirement),
+    'the handoff must project the reconciled requirement rather than the superseded one',
+  );
+  assert.ok(
+    delivered.openQuestions.some((item) => item.text.includes('Shared order-listing helper')),
+    'the handoff must retain the unresolved dependency question',
+  );
 });
 
 test('reconciliation evidence does not claim unknown impact without the seeded dependency proof', async () => {
@@ -307,7 +336,7 @@ test('suite run reports the full scenario denominator, redacts metadata, and pro
   assert.ok(result.denominator > 0);
   assert.equal(result.metadata.token, '[REDACTED]');
   assert.equal(result.metadata.note, 'offline harness run');
-  assert.equal(result.metricDefinitions.length, 13);
+  assert.equal(result.metricDefinitions.length, 14);
   const validated = validateRequirementChangeResult(result);
   assert.equal(validated.scenarios.length, 2);
   const markdown = renderRequirementChangeMarkdown(result);

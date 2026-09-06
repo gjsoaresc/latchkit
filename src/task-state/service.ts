@@ -14,6 +14,7 @@ import {
 import { cleanupTaskStateTemps, readTaskState, writeTaskState } from './store.js';
 import { withTaskStateLock } from './lock.js';
 import { isVerificationMode } from '../verification/contracts.js';
+import { validateAcceptanceDocument } from '../acceptance/contracts.js';
 import type {
   Authorization,
   Criterion,
@@ -118,6 +119,7 @@ export type EnhancedCheckInput = {
   id: string;
   criterionId: string;
   type: 'cli' | 'http' | 'browser' | 'manual';
+  definition?: Record<string, unknown>;
 };
 export type EnhancedWorkflowInput = TaskMutationInput & {
   criteria?: CriterionInput[];
@@ -135,6 +137,7 @@ export type EvidenceInput = TaskMutationInput & {
   command?: string;
   environmentDetails?: string;
   artifact?: string;
+  enhanced?: { workflowRevision: number; definitionSha256: string };
 };
 type MutationContext = {
   state: TaskState;
@@ -164,6 +167,9 @@ function canonical(value: unknown): string | undefined {
       .join(',')}}`;
   }
   return JSON.stringify(value);
+}
+export function canonicalSha256(value: unknown): string {
+  return digest(canonical(value)!);
 }
 
 function requestHash(value: object) {
@@ -659,9 +665,35 @@ export async function registerEnhancedWorkflow(
             'TASK_ENHANCED_WORKFLOW_INVALID',
             `${at}.type`,
           );
+        if (
+          check.definition !== undefined &&
+          (!check.definition ||
+            typeof check.definition !== 'object' ||
+            Array.isArray(check.definition))
+        )
+          throw new TaskStateError(
+            'Enhanced check definition must be an object.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            `${at}.definition`,
+          );
+        if (
+          check.definition !== undefined &&
+          (check.definition.id !== check.id ||
+            check.definition.criterionId !== check.criterionId ||
+            check.definition.type !== check.type)
+        )
+          throw new TaskStateError(
+            'Enhanced check definition must match its mapping.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            `${at}.definition`,
+          );
+        const definition = check.definition
+          ? validateAcceptanceDocument({ schemaVersion: 1, checks: [check.definition] }).checks[0]
+          : undefined;
         return {
           ...check,
-          definitionSha256: digest(canonical(check)!),
+          ...(definition ? { definition: structuredClone(definition) } : {}),
+          definitionSha256: canonicalSha256(definition ?? check),
         };
       });
       for (const criterion of required) {
@@ -1044,6 +1076,7 @@ export async function recordEvidence(
         source: await captureSource(projectRoot),
         authorizationId,
         createdAt: iso(clock),
+        ...(input.enhanced ? { enhanced: input.enhanced } : {}),
       });
       commitEvent(state, task, {
         mutationId,
@@ -1173,6 +1206,13 @@ function verificationFailures(task: Task, source: SourceSnapshot): VerificationF
             criterionId: criterion.id,
             reason: `check-${check.id}-outcome-${evidence.outcome}`,
           });
+        else if (
+          (check.definition !== undefined &&
+            evidence.enhanced?.workflowRevision !== task.enhancedWorkflow.revision) ||
+          (check.definition !== undefined &&
+            evidence.enhanced?.definitionSha256 !== check.definitionSha256)
+        )
+          failures.push({ criterionId: criterion.id, reason: `stale-check:${check.id}` });
       }
     }
   }

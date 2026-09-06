@@ -78,7 +78,7 @@ npm run check
 npm test
 npx playwright test --project=chromium
 npm run release:artifacts
-node scripts/bundle-smoke.js --directory release-artifacts
+npm run smoke:bundle -- --directory release-artifacts
 ```
 
 `npm run release:artifacts` stages the matching `install.ps1` into the output

@@ -78,3 +78,24 @@ planning, strict parsing, version drift, and task-controller persistence. It
 does not establish live authentication, real resume behavior, Windows hook
 execution, or qualification on another OS. Issue #76 remains open for those
 remaining integration and observed-evidence requirements.
+
+## Native Windows evidence harness
+
+`scripts/antigravity-native-evidence.ts` is a strict-TypeScript, explicitly
+authorized harness for one disposable native-Windows project. It installs the
+managed `PostToolUse` hook through the registered-resource transaction layer,
+then permits exactly one initial print-mode turn and one `--conversation`
+resume, each limited to 90 seconds. It only passes when the exact-version
+parser observes the same conversation identity, the opt-in hook receipt occurs
+for both explicit `view_file` turns, each zero-exit turn independently returns
+its own fresh immutable fixture marker, and the second receipt occurs after the
+first turn's receipt. Exit status alone cannot pass the harness.
+
+The receipt environment variable is used only by this local evidence harness
+and writes only an event name, opaque nonce, step index, and operation digest;
+it never retains tool payloads, paths, or provider text. Its
+sanitized report contains hashes and booleans only; the disposable fixture and
+raw diagnostics remain private on failure. A missing hook receipt or a
+headless permission denial is failed evidence, not a retry opportunity or a
+claim that hook execution works. It never adds permission-bypass flags, edits
+provider configuration, or claims a Windows sandbox.

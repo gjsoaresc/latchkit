@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runProviderProcess } from '../dist/src/runtime/process-runner.js';
 import { inspectTask } from '../dist/src/task-state/service.js';
+import { readEvents } from '../dist/src/diagnostics/logger.js';
 import { scheduleDefinitionDigest } from '../dist/src/scheduler/contracts.js';
 const executeFile = promisify(execFile);
 import {
@@ -176,6 +177,21 @@ test('does not launch without explicit host-local authorization and persists blo
   }).tick();
   assert.equal(calls, 0);
   assert.equal((await inspectSchedule(root, schedule.id, { clock })).runs[0].state, 'blocked');
+  const events = await readEvents(root);
+  assert.deepEqual(
+    events.filter((event) => event.type === 'scheduler-run-state').map((event) => event.state),
+    ['blocked'],
+  );
+  assert.equal(
+    events.some((event) => JSON.stringify(event).includes('inspect only')),
+    false,
+  );
+  // The persisted disabled schedule makes subsequent idle ticks notification-free.
+  await createForegroundScheduler({ root, clock }).tick();
+  assert.equal(
+    (await readEvents(root)).filter((event) => event.type === 'scheduler-run-state').length,
+    1,
+  );
 });
 
 test('duplicate foreground schedulers prevent overlap, cancellation owns only its run, and late result cannot complete it', async (t) => {

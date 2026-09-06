@@ -93,7 +93,7 @@ test('authorization binds exact configuration and runtime policy; unsupported na
   );
   assert.equal(
     (await planManagedMcp(root, [{ ...initial, providers: ['codex'] }])).diagnostics[0].code,
-    'MCP_PROVIDER_UNSUPPORTED',
+    'MCP_RUNTIME_DENIED',
   );
 });
 

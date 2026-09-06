@@ -8,12 +8,37 @@ import { promisify } from 'node:util';
 import { publishArchiveSet } from './atomic-publish.js';
 
 const run = promisify(execFile);
-const repository = path.resolve(import.meta.dirname, '..');
-const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const json = async (file) => JSON.parse(await readFile(file, 'utf8'));
+const repository = path.resolve(import.meta.dirname, '..', '..');
+type JsonObject = Record<string, unknown>;
+type InventoryFile = { path: string; bytes: number; sha256: string };
+type DependencyPackage = { name: string; version: string; license: string; path: string };
+type RuntimePin = { archive: string; executable: string; sha256: string };
+type RuntimePins = { nodeVersion: string; targets: Record<string, RuntimePin> };
+type PackageMetadata = JsonObject & {
+  version: string;
+  license: string;
+  dependencies?: Record<string, string>;
+};
+type PackageLock = JsonObject & {
+  version: string;
+  packages: Record<string, JsonObject & { version: string }>;
+};
+type BrowserDependency = { name: string; version: string; license: string; path: string };
+export type BundleResult = {
+  archive: string;
+  sha256: string;
+  version: string;
+  target: string;
+  commit: string;
+  dirty: boolean;
+};
+export type BuildBundleOptions = { output?: string; version?: string; target?: string };
+const hash = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
+const json = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, 'utf8')) as T;
+const errnoCode = (error: unknown): string | undefined => (error as NodeJS.ErrnoException).code;
 
-async function inventory(directory, prefix = '') {
-  const files = [];
+async function inventory(directory: string, prefix = ''): Promise<InventoryFile[]> {
+  const files: InventoryFile[] = [];
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
     a.name.localeCompare(b.name),
   )) {
@@ -29,9 +54,9 @@ async function inventory(directory, prefix = '') {
   return files;
 }
 
-async function dependencyPackages(app) {
-  const packages = [];
-  async function visit(modules) {
+async function dependencyPackages(app: string): Promise<DependencyPackage[]> {
+  const packages: DependencyPackage[] = [];
+  async function visit(modules: string): Promise<void> {
     for (const entry of await readdir(modules, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
       const location = path.join(modules, entry.name);
@@ -39,7 +64,7 @@ async function dependencyPackages(app) {
         await visit(location);
         continue;
       }
-      const metadata = await json(path.join(location, 'package.json'));
+      const metadata = await json<DependencyPackage>(path.join(location, 'package.json'));
       packages.push({
         name: metadata.name,
         version: metadata.version,
@@ -49,14 +74,14 @@ async function dependencyPackages(app) {
       try {
         await visit(path.join(location, 'node_modules'));
       } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
+        if (errnoCode(error) !== 'ENOENT') throw error;
       }
     }
   }
   try {
     await visit(path.join(app, 'node_modules'));
   } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
+    if (errnoCode(error) !== 'ENOENT') throw error;
   }
   return packages.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -65,18 +90,22 @@ export async function buildBundle({
   output = path.join(repository, 'release-artifacts'),
   version,
   target = `${process.platform}-${process.arch}`,
-} = {}) {
-  const pins = await json(path.join(repository, 'scripts/runtime-pins.json'));
+}: BuildBundleOptions = {}): Promise<BundleResult> {
+  const pins = await json<RuntimePins>(path.join(repository, 'scripts/runtime-pins.json'));
   const pin = pins.targets[target];
   if (!pin || target !== `${process.platform}-${process.arch}`)
     throw new Error('Build each supported native bundle on its matching host.');
-  if (process.platform === 'linux' && !process.report.getReport().header.glibcVersionRuntime)
+  const report = process.report.getReport();
+  if (
+    process.platform === 'linux' &&
+    !('glibcVersionRuntime' in ((report as { header?: object }).header ?? {}))
+  )
     throw new Error('Linux bundles require glibc.');
-  const metadata = await json(path.join(repository, 'package.json'));
+  const metadata = await json<PackageMetadata>(path.join(repository, 'package.json'));
   version ??= metadata.version;
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version))
     throw new Error('Invalid bundle version.');
-  const lock = await json(path.join(repository, 'package-lock.json'));
+  const lock = await json<PackageLock>(path.join(repository, 'package-lock.json'));
   output = path.resolve(output);
   await mkdir(output, { recursive: true });
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'latchkit-bundle-'));
@@ -92,7 +121,9 @@ export async function buildBundle({
     await cp(path.join(repository, 'README.md'), path.join(app, 'README.md'));
     metadata.version = version;
     lock.version = version;
-    lock.packages[''].version = version;
+    const rootPackage = lock.packages[''];
+    if (!rootPackage) throw new Error('package-lock.json lacks a root package entry.');
+    rootPackage.version = version;
     await writeFile(path.join(app, 'package.json'), `${JSON.stringify(metadata, null, 2)}\n`);
     await writeFile(path.join(app, 'dist/package.json'), `${JSON.stringify(metadata, null, 2)}\n`);
     await writeFile(path.join(app, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
@@ -118,7 +149,9 @@ export async function buildBundle({
       );
     }
     const dependencies = await dependencyPackages(app);
-    const browserDependencies = await json(path.join(app, 'dist/web/licenses/manifest.json'));
+    const browserDependencies = await json<BrowserDependency[]>(
+      path.join(app, 'dist/web/licenses/manifest.json'),
+    );
     const nodeUrl = `https://nodejs.org/dist/v${pins.nodeVersion}/${pin.archive}`;
     const response = await fetch(nodeUrl, { signal: AbortSignal.timeout(120_000) });
     if (!response.ok) throw new Error(`Node download failed: HTTP ${response.status}`);

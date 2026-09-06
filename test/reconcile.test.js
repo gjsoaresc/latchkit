@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/p
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { listFiles, reconcileDirectory } from '../scripts/reconcile.js';
+import { listFiles, reconcileDirectory } from '../dist/scripts/reconcile.js';
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-reconcile-'));

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { collectBrowserLicenses } from '../scripts/browser-licenses.js';
+import { collectBrowserLicenses } from '../dist/scripts/browser-licenses.js';
 
 test('built browser distribution includes full dependency notices and SBOM metadata', async () => {
   const root = path.resolve(import.meta.dirname, '..');

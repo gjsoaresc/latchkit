@@ -26,6 +26,7 @@
     "scripts/qualify-fcc-nim-live.ts",
     "scripts/qualification-classification.ts",
     "scripts/qualification-guards.ts",
+    "scripts/antigravity-native-evidence.ts",
     "test/benchmarks.test.ts"
   ],
   "exclude": ["dist", "node_modules"]

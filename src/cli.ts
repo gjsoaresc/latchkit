@@ -79,7 +79,7 @@ import {
   formatDecisionComparisonText,
   inspectDecisionComparison,
 } from './reviews/decision-comparison.js';
-import { createAcceptanceVerifier } from './acceptance/service.js';
+import { createAcceptanceVerifier, runEnhancedWorkflowChecks } from './acceptance/service.js';
 import {
   addProjectMemory,
   deleteProjectMemory,
@@ -138,6 +138,19 @@ import {
 } from './spec-imports/registration-service.js';
 import { buildContextBrief } from './context-brief/service.js';
 import type { ContextBrief } from './context-brief/contracts.js';
+import {
+  exploreCodegraph,
+  inspectCodegraph,
+  readCodegraphSettings,
+  saveCodegraphSettings,
+  syncCodegraph,
+} from './integrations/codegraph/service.js';
+import {
+  createContractAssociation,
+  acknowledgeContractReceipt,
+  inspectContractImpact,
+  proposeContractRevision,
+} from './task-state/contract-coordination.js';
 
 function requiredOption(value: string | undefined, name: string): string {
   if (!value) throw new Error('--' + name + ' is required.');
@@ -344,6 +357,7 @@ Usage: latchkit <command> [options]
              previewed entry into existing task state (an ordinary task plus one imported
              observation record), reinspect its registered snapshot, or remove only
              Latchkit's association — never the source file
+  codegraph Inspect, enable/disable, or run a bounded advisory CodeGraph exploration
   ui         Start the local configuration console (Ctrl+C to stop)
 
 Options:
@@ -458,6 +472,7 @@ Options:
                        for --entry from that same preview
   --expected-task-revision <n> spec-import register: required when updating an
                        already-registered entry (see spec-import reinspect)
+  --review-id <id>    review inspect/cancel: review ID
   --format <kind>     review compare: json (default) or text
   --baseline-revision <n> review compare: an explicitly selected retained task revision to
                       compare against, in place of the derived previously reviewed snapshot
@@ -490,6 +505,7 @@ try {
       revision: { type: 'string' },
       mode: { type: 'string' },
       'verification-mode': { type: 'string' },
+      route: { type: 'string' },
       'worktree-root': { type: 'string' },
       'workspace-choice': { type: 'string' },
       execution: { type: 'string' },
@@ -499,6 +515,7 @@ try {
       prompt: { type: 'string' },
       session: { type: 'string' },
       'host-local-authorized': { type: 'boolean' },
+      query: { type: 'string' },
       help: { type: 'boolean' },
       version: { type: 'boolean' },
       export: { type: 'boolean' },
@@ -563,8 +580,18 @@ try {
       'expected-task-revision': { type: 'string' },
       format: { type: 'string' },
       'baseline-revision': { type: 'string' },
+      'review-id': { type: 'string' },
       'since-digest': { type: 'string' },
       'byte-budget': { type: 'string' },
+      'producer-task': { type: 'string' },
+      'consumer-task': { type: 'string' },
+      'producer-record': { type: 'string' },
+      'consumer-record': { type: 'string' },
+      'producer-revision': { type: 'string' },
+      'consumer-revision': { type: 'string' },
+      'criterion-ids': { type: 'string' },
+      'association-id': { type: 'string' },
+      'contract-digest': { type: 'string' },
     },
   });
   cliValues = values;
@@ -633,6 +660,15 @@ try {
         'since-digest',
         'byte-budget',
         'format',
+        'producer-task',
+        'consumer-task',
+        'producer-record',
+        'consumer-record',
+        'producer-revision',
+        'consumer-revision',
+        'criterion-ids',
+        'association-id',
+        'contract-digest',
       ],
       task: [
         'project',
@@ -701,6 +737,7 @@ try {
         'host-local-authorized',
         'format',
         'baseline-revision',
+        'review-id',
       ],
       diff: [
         'project',
@@ -785,6 +822,7 @@ try {
         'id',
         'expected-revision',
       ],
+      codegraph: ['project', 'query'],
     };
     const allowed = allowedByCommand[command];
     if (!allowed) throw new Error(`Unknown command: ${command}. Run latchkit --help.`);
@@ -969,6 +1007,21 @@ try {
                 !['fast', 'standard'].includes(values['verification-mode'])
               )
                 throw new Error('--verification-mode must be fast or standard.');
+              if (
+                values.route !== undefined &&
+                ![
+                  'answer-only',
+                  'documentation',
+                  'visual-local',
+                  'bug-fix',
+                  'feature',
+                  'refactor',
+                  'maintenance',
+                  'high-impact',
+                  'investigate',
+                ].includes(values.route)
+              )
+                throw new Error('--route must be a supported route ID.');
               result = await controller.run({
                 ...common,
                 taskId: values.task,
@@ -978,6 +1031,9 @@ try {
                 executionAuthorized: values['host-local-authorized'] === true,
                 ...(values['verification-mode']
                   ? { verificationMode: values['verification-mode'] as 'fast' | 'standard' }
+                  : {}),
+                ...(values.route
+                  ? { route: values.route as import('./workflows/routing.js').RouteId }
                   : {}),
                 ...(values.file
                   ? {
@@ -1013,6 +1069,7 @@ try {
                 expectedRevision: expectedRevision!,
                 taskId: requiredOption(values.task, 'task'),
                 prompt: values.prompt,
+                reviewProviderId: values['review-provider'],
                 executionAuthorized: values['host-local-authorized'] === true,
                 ...(decision
                   ? {
@@ -1070,6 +1127,10 @@ try {
         'reconcile-preview',
         'reconcile-apply',
         'context-preview',
+        'contract-link',
+        'contract-impact',
+        'contract-revise',
+        'contract-acknowledge',
       ];
       if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
         throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
@@ -1376,6 +1437,66 @@ try {
           ...(values['since-digest'] !== undefined ? { sinceDigest: values['since-digest'] } : {}),
           format: requireContextBriefFormat(values.format),
         });
+      } else if (action === 'contract-link') {
+        const producerRevision = Number(
+          requiredOption(values['producer-revision'], 'producer-revision'),
+        );
+        const consumerRevision = Number(
+          requiredOption(values['consumer-revision'], 'consumer-revision'),
+        );
+        if (!Number.isInteger(producerRevision) || !Number.isInteger(consumerRevision))
+          throw new Error('Producer and consumer revisions must be integers.');
+        print(
+          await createContractAssociation(root, {
+            producerTaskId: requiredOption(values['producer-task'], 'producer-task'),
+            consumerTaskId: requiredOption(values['consumer-task'], 'consumer-task'),
+            producerRecordId: requiredOption(values['producer-record'], 'producer-record'),
+            consumerRecordId: requiredOption(values['consumer-record'], 'consumer-record'),
+            criterionIds: requiredOption(values['criterion-ids'], 'criterion-ids')
+              .split(',')
+              .filter(Boolean),
+            expectedProducerRevision: producerRevision,
+            expectedConsumerRevision: consumerRevision,
+            provenance: requiredOption(values.reference, 'reference'),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (action === 'contract-impact') {
+        print(
+          await inspectContractImpact(root, {
+            producerTaskId: requiredOption(values['producer-task'], 'producer-task'),
+            producerRecordId: requiredOption(values['producer-record'], 'producer-record'),
+          }),
+        );
+      } else if (action === 'contract-revise') {
+        const producerRevision = Number(
+          requiredOption(values['producer-revision'], 'producer-revision'),
+        );
+        if (!Number.isInteger(producerRevision))
+          throw new Error('--producer-revision must be an integer.');
+        print(
+          await proposeContractRevision(root, {
+            associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedAssociationRevision: Number(requiredOption(values.revision, 'revision')),
+            expectedProducerRevision: producerRevision,
+            provenance: requiredOption(values.reference, 'reference'),
+            ...(values.status === 'pending' ? { accept: false } : {}),
+          }),
+        );
+      } else if (action === 'contract-acknowledge') {
+        const consumerRevision = Number(
+          requiredOption(values['consumer-revision'], 'consumer-revision'),
+        );
+        if (!Number.isInteger(consumerRevision))
+          throw new Error('--consumer-revision must be an integer.');
+        print(
+          await acknowledgeContractReceipt(root, {
+            associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedAssociationRevision: Number(requiredOption(values.revision, 'revision')),
+            expectedConsumerRevision: consumerRevision,
+            contractDigest: requiredOption(values['contract-digest'], 'contract-digest'),
+          }),
+        );
       } else {
         const hasAuthorization =
           values['authorization-scope'] !== undefined ||
@@ -1424,6 +1545,7 @@ try {
         'inspect',
         'migrate',
         'verify',
+        'run',
         'decision-present',
         'decision-approve',
         'decision-notes',
@@ -1512,6 +1634,13 @@ try {
               ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
             }),
           );
+        else if (action === 'run')
+          print(
+            await runEnhancedWorkflowChecks(root, {
+              taskId: requiredOption(values.task, 'task'),
+              executionAuthorized: values['host-local-authorized'] === true,
+            }),
+          );
         else {
           const bytes = await readFile(path.resolve(requiredOption(values.file, 'file')));
           if (bytes.byteLength > 64 * 1024)
@@ -1538,8 +1667,8 @@ try {
         }
       }
     } else if (command === 'review') {
-      if (extra.length !== 1 || !['run', 'compare'].includes(extra[0] ?? ''))
-        throw new Error('Usage: latchkit review <run|compare> [options].');
+      if (extra.length !== 1 || !['run', 'compare', 'inspect', 'cancel'].includes(extra[0] ?? ''))
+        throw new Error('Usage: latchkit review <run|compare|inspect|cancel> [options].');
       if (extra[0] === 'compare') {
         // Issue #113: a read-only, non-mutating comparison of changed decisions and their
         // consequences for one task. Never launches a provider, never refreshes evidence.
@@ -1560,6 +1689,14 @@ try {
         });
         if (values.format === 'text') console.log(formatDecisionComparisonText(report));
         else print(report);
+      } else if (extra[0] === 'inspect') {
+        print(await createReviewOrchestrator({ root }).inspect());
+      } else if (extra[0] === 'cancel') {
+        print(
+          await createReviewOrchestrator({ root }).cancel({
+            reviewId: requiredOption(values['review-id'], 'review-id'),
+          }),
+        );
       } else {
         if (!values.task || !values.provider)
           throw new Error('review run requires --task and --provider.');
@@ -1570,6 +1707,7 @@ try {
               { id: values.provider, providerId: values.provider, prompt: values.prompt },
             ],
             executionAuthorized: values['host-local-authorized'] === true,
+            sandbox: 'read-only',
           }),
         );
       }
@@ -2109,6 +2247,24 @@ try {
           }),
         );
       else print(await removeProject(registryRoot, requiredOption(values.id, 'id')));
+    } else if (command === 'codegraph') {
+      const action = extra[0];
+      if (
+        extra.length !== 1 ||
+        !action ||
+        !['inspect', 'enable', 'disable', 'sync', 'explore'].includes(action)
+      )
+        throw new Error(
+          'Usage: latchkit codegraph <inspect|enable|disable|sync|explore> [--query <text>].',
+        );
+      if (action === 'inspect') print(await inspectCodegraph(root));
+      else if (action === 'sync') print(await syncCodegraph(root));
+      else if (action === 'explore')
+        print(await exploreCodegraph(root, requiredOption(values.query, 'query')));
+      else {
+        const settings = await readCodegraphSettings(root);
+        print(await saveCodegraphSettings(root, { ...settings, enabled: action === 'enable' }));
+      }
     } else if (command === 'spec-import') {
       const specImportActions = ['discover', 'preview', 'register', 'reinspect', 'detach'];
       const action = extra[0];

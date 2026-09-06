@@ -17,11 +17,11 @@
 // test/installation.test.js). The unsupported-OS/architecture tests do use
 // the genuine, unmodified install.sh gate and require no stub.
 //
-// install.sh needs a POSIX `sh` plus coreutils (mktemp, sha256sum, tar, awk,
-// cp, mkdir, rm, uname). On non-Windows hosts these are assumed to be the
-// system's own. On Windows this suite looks for Git for Windows' bundled
-// MSYS `sh.exe`/coreutils and skips the install.sh tests with an explicit
-// reason if it is not present.
+// install.sh needs a POSIX `sh` plus coreutils (mktemp, sha256sum, tar, gzip,
+// awk, cp, mkdir, rm, uname, sleep). On non-Windows hosts these are assumed to
+// be the system's own. On Windows this suite supplies Git for Windows' bundled
+// MSYS toolchain only to its child processes, and skips the install.sh tests
+// with an explicit reason if that complete fixture capability is unavailable.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -56,22 +56,58 @@ async function exists(file) {
   }
 }
 
+function toMsysPath(value) {
+  const normalized = value.replaceAll('\\', '/');
+  const drive = /^([A-Za-z]):(\/.*)$/.exec(normalized);
+  return drive ? `/${drive[1].toLowerCase()}${drive[2]}` : normalized;
+}
+
+function posixPath(...directories) {
+  if (process.platform !== 'win32') return directories.join(path.delimiter);
+  return directories.map(toMsysPath).join(':');
+}
+
+function posixEnvironment(...directories) {
+  return {
+    ...process.env,
+    PATH:
+      process.platform === 'win32'
+        ? posixPath(...directories, GIT_USR_BIN)
+        : posixPath(...directories, process.env.PATH ?? ''),
+  };
+}
+
 async function findPosixShell() {
   if (process.platform !== 'win32') return '/bin/sh';
   const candidate = path.join(GIT_USR_BIN, 'sh.exe');
-  return (await exists(candidate)) ? candidate : null;
+  if (!(await exists(candidate))) return null;
+  const required = [
+    'uname',
+    'mktemp',
+    'sha256sum',
+    'tar',
+    'gzip',
+    'awk',
+    'cp',
+    'mkdir',
+    'rm',
+    'sleep',
+  ];
+  try {
+    await run(candidate, ['-c', `command -v ${required.join(' ')} >/dev/null`], {
+      env: posixEnvironment(),
+      timeout: 15_000,
+    });
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 const posixShell = await findPosixShell();
 const skipPosix = posixShell
   ? false
-  : 'requires a POSIX sh (Git for Windows was not found at the conventional path)';
-
-function posixPath() {
-  return process.platform === 'win32'
-    ? `${GIT_USR_BIN}${path.delimiter}${process.env.PATH ?? ''}`
-    : (process.env.PATH ?? '');
-}
+  : 'requires a POSIX sh and the complete fixture toolchain (Git for Windows at the conventional path is absent or incomplete)';
 
 async function writeFakeUname(directory, { s, m }) {
   await mkdir(directory, { recursive: true });
@@ -82,6 +118,26 @@ async function writeFakeUname(directory, { s, m }) {
   );
   await chmod(script, 0o755);
   return directory;
+}
+
+async function writeFailingRm(directory) {
+  const script = path.join(directory, 'rm');
+  await writeFile(
+    script,
+    [
+      '#!/bin/sh',
+      'state=${LATCHKIT_TEST_RM_STATE:?missing cleanup state}',
+      'failures=${LATCHKIT_TEST_RM_FAILURES:-0}',
+      'count=0',
+      '[ -f "$state" ] && count=$(cat "$state")',
+      'count=$((count + 1))',
+      'printf "%s" "$count" > "$state"',
+      '[ "$count" -le "$failures" ] && exit 1',
+      'exec /usr/bin/rm "$@"',
+      '',
+    ].join('\n'),
+  );
+  await chmod(script, 0o755);
 }
 
 async function inventory(directory, prefix = '') {
@@ -180,6 +236,7 @@ async function tarGzBundle(bundleDirectory, archive) {
   const tool = process.platform === 'win32' ? path.join(GIT_USR_BIN, 'tar.exe') : 'tar';
   const forceLocal = process.platform === 'win32' ? ['--force-local'] : [];
   await run(tool, [...forceLocal, '-czf', archive, '-C', bundleDirectory, '.'], {
+    env: posixEnvironment(),
     timeout: 60_000,
   });
 }
@@ -208,7 +265,10 @@ test(
         ],
         {
           windowsHide: true,
-          timeout: 30_000,
+          // Windows Defender and concurrent CI process creation can delay even
+          // this refusal-only PowerShell child. Keep the test bounded without
+          // mistaking transient startup delay for a missing refusal.
+          timeout: 60_000,
           env: { ...process.env, PROCESSOR_ARCHITECTURE: 'ARM64' },
         },
       ),
@@ -377,7 +437,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--root', targetRoot], {
         timeout: 30_000,
-        env: { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` },
+        env: posixEnvironment(fakebin),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Unsupported operating system/);
@@ -399,7 +459,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--root', targetRoot], {
         timeout: 30_000,
-        env: { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` },
+        env: posixEnvironment(fakebin),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Unsupported architecture/);
@@ -424,7 +484,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--root', targetRoot], {
         timeout: 30_000,
-        env: { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` },
+        env: posixEnvironment(fakebin),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Unsupported target: linux-arm64/);
@@ -445,7 +505,7 @@ test(
       s: 'Darwin',
       m: 'x86_64',
     });
-    const env = { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` };
+    const env = posixEnvironment(fakebin);
     const version = '9.9.9-fixture';
     const target = 'darwin-x64';
     const bundle = await stubPosixBundle(scratch, version, target);
@@ -491,7 +551,7 @@ test(
       s: 'Darwin',
       m: 'x86_64',
     });
-    const env = { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` };
+    const env = posixEnvironment(fakebin);
     const target = 'darwin-x64';
     const root = path.join(scratch, 'root');
 
@@ -555,13 +615,116 @@ test(
 );
 
 test(
+  'install.sh retries owned temporary cleanup without changing a successful install result',
+  { skip: skipPosix },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-install-sh-cleanup-success-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const fakebin = await writeFakeUname(path.join(scratch, 'fakebin'), {
+      s: 'Darwin',
+      m: 'x86_64',
+    });
+    await writeFailingRm(fakebin);
+    const version = '9.9.9-fixture';
+    const target = 'darwin-x64';
+    const bundle = await stubPosixBundle(scratch, version, target);
+    const archive = path.join(scratch, 'bundle.tar.gz');
+    await tarGzBundle(bundle, archive);
+    await writeChecksumSidecar(archive);
+    const cleanupState = path.join(scratch, 'cleanup-state');
+
+    const result = await run(
+      posixShell,
+      [
+        path.join(repository, 'install.sh'),
+        '--version',
+        version,
+        '--root',
+        path.join(scratch, 'root'),
+        '--artifact',
+        archive,
+        '--checksum',
+        `${archive}.sha256`,
+      ],
+      {
+        timeout: 60_000,
+        env: {
+          ...posixEnvironment(fakebin),
+          LATCHKIT_TEST_RM_STATE: toMsysPath(cleanupState),
+          LATCHKIT_TEST_RM_FAILURES: '2',
+        },
+      },
+    );
+
+    assert.match(result.stdout, /Use .*bin\/latchkit or add its bin directory to PATH/);
+    assert.equal(await readFile(cleanupState, 'utf8'), '3');
+  },
+);
+
+test(
+  'install.sh warns about permanent owned temporary cleanup failure without hiding the installer failure',
+  { skip: skipPosix },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-install-sh-cleanup-failure-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const fakebin = await writeFakeUname(path.join(scratch, 'fakebin'), {
+      s: 'Darwin',
+      m: 'x86_64',
+    });
+    await writeFailingRm(fakebin);
+    const version = '9.9.9-fixture';
+    const target = 'darwin-x64';
+    const bundle = await stubPosixBundle(scratch, version, target);
+    const archive = path.join(scratch, 'bundle.tar.gz');
+    await tarGzBundle(bundle, archive);
+    await writeChecksumSidecar(archive, { correct: false });
+    const cleanupState = path.join(scratch, 'cleanup-state');
+
+    await assert.rejects(
+      run(
+        posixShell,
+        [
+          path.join(repository, 'install.sh'),
+          '--version',
+          version,
+          '--root',
+          path.join(scratch, 'root'),
+          '--artifact',
+          archive,
+          '--checksum',
+          `${archive}.sha256`,
+        ],
+        {
+          timeout: 60_000,
+          env: {
+            ...posixEnvironment(fakebin),
+            LATCHKIT_TEST_RM_STATE: toMsysPath(cleanupState),
+            LATCHKIT_TEST_RM_FAILURES: '3',
+          },
+        },
+      ),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(String(error.stderr ?? error.message), /Archive SHA-256 verification failed/);
+        assert.match(
+          String(error.stderr ?? error.message),
+          /could not remove installer temporary directory/,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(cleanupState, 'utf8'), '3');
+  },
+);
+
+test(
   'install.sh usage error for an unknown flag names the correct exit path',
   { skip: skipPosix },
   async () => {
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--bogus-flag'], {
         timeout: 15_000,
-        env: { ...process.env, PATH: posixPath() },
+        env: posixEnvironment(),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Usage: install\.sh/);

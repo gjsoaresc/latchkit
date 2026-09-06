@@ -4,8 +4,9 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 const command = promisify(execFile);
+type TarTool = { tool: string; prefixArgs: string[] };
 
-let resolved;
+let resolved: TarTool | undefined;
 
 /**
  * Resolve a `tar` invocation that accepts absolute archive paths on every supported platform.
@@ -34,7 +35,7 @@ export async function resolveTar() {
   return resolved;
 }
 
-async function isGnuTar(tool) {
+async function isGnuTar(tool: string): Promise<boolean> {
   try {
     const { stdout } = await command(tool, ['--version'], { windowsHide: true, timeout: 10_000 });
     return /GNU tar/i.test(stdout);
@@ -44,7 +45,7 @@ async function isGnuTar(tool) {
 }
 
 /** Run `tar` with the resolved tool and platform prefix arguments. */
-export async function tar(args, options = {}) {
+export async function tar(args: string[], options: Parameters<typeof command>[2] = {}) {
   const { tool, prefixArgs } = await resolveTar();
   return command(tool, [...prefixArgs, ...args], { windowsHide: true, ...options });
 }

@@ -8,8 +8,8 @@ what is documented here.
 
 | Location | Owner | Lifetime | Retention | Cleanup entrypoint |
 | --- | --- | --- | --- | --- |
-| `dist/` | `npm run build` (`scripts/build.js`) | Until the next build or cleanup | None; fully regenerated from source | `npm run build` (reconciles in place) or `npm run clean --scope dist --apply` |
-| `dist/web/licenses/<package>@<version>/` | `scripts/browser-licenses.js`, invoked from `scripts/build.js` | One build | None; a package that stops contributing bytes has its directory reclaimed automatically on the next build | Automatic (`npm run build`); not a separate `npm run clean` scope |
+| `dist/` | `npm run build` (`scripts/build.ts`) | Until the next build or cleanup | None; fully regenerated from source | `npm run build` (reconciles in place) or `npm run clean --scope dist --apply` |
+| `dist/web/licenses/<package>@<version>/` | `scripts/browser-licenses.ts`, invoked from `scripts/build.ts` | One build | None; a package that stops contributing bytes has its directory reclaimed automatically on the next build | Automatic (`npm run build`); not a separate `npm run clean` scope |
 | `test-results/` (Playwright's output directory, including the `acceptance-<browser>-<uuid>` and `browser-crash-<browser>-<uuid>` fixtures created by `test/browser/acceptance-evidence.spec.js`) | `npm run test:browser` | One test run; each fixture is uniquely named and never referenced again | None; safe to remove at any time | `npm run clean` (default scope) or `npm run clean --scope test-results --apply` |
 | `coverage/` | Reserved for a future coverage tool; not currently produced by any tracked command | N/A | None | `npm run clean` (default scope; a no-op today) |
 | `.latchkit-typecheck.log` | Ad hoc: a developer manually redirecting `tsc`/`npm run typecheck` output | Until manually removed | None; not produced by any tracked command | `npm run clean` (default scope) |
@@ -24,18 +24,18 @@ Two different mechanisms cooperate to keep generated output from
 accumulating, and they are not interchangeable:
 
 - **Build reconciliation** happens automatically inside `npm run build`
-  every time it runs, without a separate `--clean` flag. `scripts/build.js`
+  every time it runs, without a separate `--clean` flag. `scripts/build.ts`
   now captures the exact set of files `tsc` reports emitting
   (`--listEmittedFiles`), copies the current `skills/` and `schemas/` source
   trees before comparing them against what is already in `dist/`, and asks
-  `scripts/browser-licenses.js` to reconcile its own destination against the
+  `scripts/browser-licenses.ts` to reconcile its own destination against the
   packages that actually contributed bytes this run. Anything left over from
   a source file that was deleted or renamed since the previous build --
   a stale compiled module, an orphaned skill or schema file, or a browser
   dependency's old version-keyed license directory -- is removed as part of
   the same build, not left to silently coexist with the current output.
   This is implemented with the shared `listFiles`/`reconcileDirectory`
-  helpers in `scripts/reconcile.js` (covered by `test/reconcile.test.js`,
+  helpers in `scripts/reconcile.ts` (covered by `test/reconcile.test.js`,
   `test/browser-licenses.test.js`).
 - **`npm run clean`** is a standalone, cleanup-only command
   (`scripts/clean.js`) for the locations in the table above. It never
@@ -57,13 +57,13 @@ accumulating, and they are not interchangeable:
 
 ## Release archive publication
 
-`scripts/bundle.js` stages the release archive next to its final name in
+Emitted `dist/scripts/bundle.js` stages the release archive next to its final name in
 `release-artifacts/` (or the configured `--output` directory) before
 touching that directory for real, then publishes the archive and its three
 sidecars (`.sha256`, `.spdx.json`, `.manifest.json`) through
-`scripts/atomic-publish.js`: each file is written to a same-directory
+`dist/scripts/atomic-publish.js`: each file is written to a same-directory
 temporary name and renamed into place, and the manifest is committed last
-because `verifyReleaseArtifacts`/`bundle-smoke.js` discover a published
+because `verifyReleaseArtifacts`/emitted `bundle-smoke.js` discover a published
 artifact by the presence of its `*.manifest.json` file. If any step fails --
 including a locked file, a full disk, or the sidecar write itself -- every
 file this operation staged or already committed is removed before the error

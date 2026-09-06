@@ -14,6 +14,23 @@ requirements → plan approval → implementation → verification
 → independent review → handoff
 ```
 
+That is the retained sequence for workflows created before route selection.
+New workflows persist a versioned, inspectable
+route before execution. A local visual, documentation, or reproducible
+low-impact fix can run implementation and its exact focused checks without a
+separate requirements, planning, review, or handoff provider session. Features,
+refactors, maintenance, and high-impact changes add stages proportionally; an
+authorization, migration, credential, destructive, or other high-impact signal
+overrides a lighter requested route. Unknown material impact stops after
+bounded requirements investigation rather than inventing a full plan.
+
+The route is distinct from `fast`/`standard` verification. Route selection
+establishes the initial applicable check set before any evidence can be reused;
+the verification mode then controls reuse and bounds only within that set.
+Supply an exact accepted check document for a lightweight route, for example
+with `--file checks.json`. `--route <id>` selects a supported route explicitly,
+but cannot lower a high-impact route or waive applicable project policy.
+
 The requirements and exact plan produce versioned acceptance checks. A user
 must approve the exact requirements, plan, checks, and authorization scope
 before implementation starts. The approval is digest-bound, so changed

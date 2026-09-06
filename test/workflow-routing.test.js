@@ -8,7 +8,7 @@ test('routing keeps a local button colour edit lightweight without relying on si
     changedPaths: ['web/settings.tsx'],
   });
   assert.equal(route.id, 'visual-local');
-  assert.deepEqual(route.phases, ['implementation', 'verification', 'handoff']);
+  assert.deepEqual(route.phases, ['implementation', 'verification']);
   assert.equal(route.requiresIndependentReview, false);
   assert.equal(route.policyVersion, ROUTING_POLICY_VERSION);
 });
@@ -26,7 +26,6 @@ test('routing overlays high-impact authorization changes over an explicit lightw
     'implementation',
     'verification',
     'review',
-    'handoff',
   ]);
 });
 
@@ -35,4 +34,20 @@ test('routing records unknown source scope as bounded investigation rather than 
   assert.equal(route.id, 'investigate');
   assert.equal(route.phases[0], 'requirements');
   assert.ok(route.unknowns.length);
+});
+
+test('a changed authorization path overlays a benign local request', () => {
+  const route = selectRoute({
+    request: 'Adjust button spacing.',
+    changedPaths: ['src/authorization/policy.ts'],
+  });
+  assert.equal(route.id, 'high-impact');
+  assert.equal(route.requiresApproval, true);
+  assert.equal(route.requiresIndependentReview, true);
+});
+
+test('read-only requests select a no-execution route', () => {
+  const route = selectRoute({ request: 'Explain the export flow.', changedPaths: [] });
+  assert.equal(route.id, 'answer-only');
+  assert.deepEqual(route.phases, []);
 });

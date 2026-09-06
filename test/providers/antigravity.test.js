@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,13 +26,14 @@ const temporaryRoot = async (t) => {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 };
-const runHook = (root, event, input) =>
+const runHook = (root, event, input, env = process.env) =>
   new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
       [path.join(root, ANTIGRAVITY_HANDLER_PATH), '--event', event],
       {
         cwd: root,
+        env,
         stdio: ['pipe', 'pipe', 'pipe'],
       },
     );
@@ -175,6 +177,28 @@ test('Antigravity hook registration is explicit, reversible, and preserves unrel
     JSON.stringify({ conversationId: 'opaque-id', toolCall: { name: 'read_file' }, stepIdx: 0 }),
   );
   assert.deepEqual(post, { exitCode: 0, stdout: '{}\n', stderr: '' });
+  const receipt = path.join(root, '.latchkit', 'live-hook-receipt.ndjson');
+  const receiptNonce = 'receipt-test-nonce';
+  const target = path.join(root, 'fixture.txt');
+  const receipted = await runHook(
+    root,
+    'PostToolUse',
+    JSON.stringify({ toolCall: { name: 'view_file', args: { AbsolutePath: target } }, stepIdx: 1 }),
+    {
+      ...process.env,
+      LATCHKIT_ANTIGRAVITY_HOOK_RECEIPT: receipt,
+      LATCHKIT_ANTIGRAVITY_HOOK_NONCE: receiptNonce,
+    },
+  );
+  assert.deepEqual(receipted, { exitCode: 0, stdout: '{}\n', stderr: '' });
+  assert.deepEqual(JSON.parse(await fs.readFile(receipt, 'utf8')), {
+    event: 'PostToolUse',
+    stepIdx: 1,
+    nonce: receiptNonce,
+    operationDigest: createHash('sha256')
+      .update(JSON.stringify({ tool: 'view_file', target }))
+      .digest('hex'),
+  });
   for (const event of ['PreToolUse', 'PreInvocation', 'PostInvocation', 'Stop']) {
     const refused = await runHook(root, event, '{}');
     assert.equal(refused.exitCode, 1);

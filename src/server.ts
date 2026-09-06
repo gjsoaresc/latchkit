@@ -45,7 +45,7 @@ import {
   approveResultDecision,
 } from './workflows/result-decision-service.js';
 import { addSpecDecisionNotes, approveSpecDecision } from './workflows/spec-decision-service.js';
-import { createAcceptanceVerifier } from './acceptance/service.js';
+import { createAcceptanceVerifier, runEnhancedWorkflowChecks } from './acceptance/service.js';
 import {
   inspectTask,
   listTasks,
@@ -344,6 +344,8 @@ async function readJson<T = Record<string, unknown>>(req: http.IncomingMessage):
 
 export interface StartServerOptions {
   port?: number;
+  /** Trusted test injection for deterministic reviewer lifecycle fixtures. */
+  reviewOrchestrator?: ReturnType<typeof createReviewOrchestrator>;
   /** Issue #139 slice 2: overrides for the console updater's installation
    * identity, injectable only by a trusted caller (the CLI, or a test
    * fixture) — never by request/browser input. Default to this process's
@@ -384,7 +386,7 @@ export async function startServer(root: string, options: StartServerOptions = {}
     }
   >();
   const taskController = createTaskController({ root });
-  const reviewOrchestrator = createReviewOrchestrator({ root });
+  const reviewOrchestrator = options.reviewOrchestrator ?? createReviewOrchestrator({ root });
   const acceptanceVerifier = createAcceptanceVerifier({ root });
   // Multi-project overview (issue #94): a user-local registry, independent of this server's
   // single fixed `root`. Failures here never block the console this project actually needs —
@@ -903,12 +905,17 @@ export async function startServer(root: string, options: StartServerOptions = {}
         } else if (pathname === '/api/spec/verify' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof verifyTask>[1]>(req);
           respond(res, 200, await serialize(() => verifyTask(root, body)));
+        } else if (pathname === '/api/spec/run' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof runEnhancedWorkflowChecks>[1]>(req);
+          respond(res, 200, await serialize(() => runEnhancedWorkflowChecks(root, body)));
+        } else if (pathname === '/api/reviews' && req.method === 'GET') {
+          respond(res, 200, await reviewOrchestrator.inspect());
         } else if (pathname === '/api/reviews' && req.method === 'POST') {
           const body = await readJson(req);
-          respond(res, 200, await serialize(() => reviewOrchestrator.run(body)));
+          respond(res, 200, await reviewOrchestrator.run(body));
         } else if (pathname === '/api/reviews/cancel' && req.method === 'POST') {
           const body = await readJson(req);
-          respond(res, 200, await serialize(() => reviewOrchestrator.cancel(body)));
+          respond(res, 200, await reviewOrchestrator.cancel(body));
         } else if (pathname === '/api/diff' && req.method === 'GET') {
           await pendingMutation;
           const taskId = requestUrl.searchParams.get('taskId');
@@ -1114,8 +1121,9 @@ export async function startServer(root: string, options: StartServerOptions = {}
   let shutdown: Promise<void> | undefined;
   const drain = () =>
     (shutdown ??= (async () => {
-      // A disconnected socket does not stop its asynchronous handler. Finish
-      // admitted requests before stopping workflows they may still schedule.
+      // A disconnected socket does not stop its asynchronous handler. Cancel
+      // owned reviews first so their long request handlers can drain.
+      await reviewOrchestrator.shutdown();
       await Promise.allSettled([...activeRequests]);
       await workflowController.shutdown();
     })());
@@ -1127,10 +1135,13 @@ export async function startServer(root: string, options: StartServerOptions = {}
   });
   const closeTransport = server.close;
   server.close = function (callback) {
+    // Start cancellation before closing the transport: Node waits for active
+    // sockets before invoking close's callback, including a long review POST.
+    const draining = drain();
     return closeTransport.call(this, function (this: http.Server | undefined, error) {
       // Preserve the native close event and return value; the callback also
       // guarantees that this server's requests and workflows have drained.
-      void drain().then(
+      void draining.then(
         () => callback?.call(this, error),
         (failure: unknown) =>
           callback?.call(

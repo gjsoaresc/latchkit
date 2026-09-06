@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { contractFreshness } from '../task-state/contract-coordination.js';
 import {
   MAX_RESULT_DECISION_TEXT_BYTES,
   ResultDecisionError,
@@ -220,6 +221,17 @@ export async function presentResultDecision(
   options: ResultDecisionMutationOptions = {},
 ): Promise<ResultDecisionRecord> {
   requireTaskId(input.taskId);
+  const freshness = await contractFreshness(root, input.taskId).catch(() => []);
+  if (
+    freshness.some(
+      (item) =>
+        item.expected !== item.actual || item.reconciliation !== 'current' || !item.acknowledged,
+    )
+  )
+    throw new ResultDecisionError(
+      'This result is retained but cannot be admitted as current: a declared producer contract changed or awaits reconciliation.',
+      'RESULT_DECISION_CONTRACT_STALE',
+    );
   requireDigest(input.resultDigest, 'resultDigest');
   requireText(input.resultRef, 'resultRef');
   requireText(input.summary, 'summary');

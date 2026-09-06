@@ -40,7 +40,7 @@ is real and what is a placeholder.
 ## Before this can be tapped for real
 
 1. Qualify and publish at least one macOS/Linux target archive (extends the
-   Windows-only release pipeline in `scripts/release-artifacts.js` and
+   Windows-only release pipeline in emitted `dist/scripts/release-artifacts.js` and
    `.github/workflows/release.yml` — out of scope for this change).
 2. Replace the placeholders in `latchkit.rb` with the exact version, URLs,
    and `sha256` values from that release.
