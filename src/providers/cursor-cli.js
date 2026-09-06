@@ -152,12 +152,14 @@ async function planRuleExport(options = {}) {
 
 function planInvocation(options = {}) {
   const args = [];
-  if (options.print === true) args.push('--print');
-  if (options.outputFormat !== undefined) {
-    if (options.print !== true) throw new TypeError('outputFormat requires print mode.');
-    if (!['text', 'json', 'stream-json'].includes(options.outputFormat))
+  const print = options.print ?? options.prompt !== undefined;
+  const outputFormat = options.outputFormat ?? (print ? 'json' : undefined);
+  if (print) args.push('--print');
+  if (outputFormat !== undefined) {
+    if (!print) throw new TypeError('outputFormat requires print mode.');
+    if (!['text', 'json', 'stream-json'].includes(outputFormat))
       throw new TypeError('outputFormat must be text, json, or stream-json.');
-    args.push('--output-format', options.outputFormat);
+    args.push('--output-format', outputFormat);
   }
   if (options.model !== undefined) args.push('--model', String(options.model));
   if (options.resume !== undefined) {
@@ -173,7 +175,8 @@ function planInvocation(options = {}) {
 }
 
 function planResume(options = {}) {
-  if (options.chatId !== undefined) return planInvocation({ ...options, resume: options.chatId });
+  const chatId = options.chatId ?? options.sessionId;
+  if (chatId !== undefined) return planInvocation({ ...options, resume: chatId });
   return validateCommandPlan({
     executable: executableFor(options),
     args: ['resume'],
