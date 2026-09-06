@@ -22,6 +22,10 @@
     "web/**/*.ts",
     "web/**/*.tsx",
     "scripts/benchmarks.ts",
+    "scripts/qualify-fcc-nim-deterministic.ts",
+    "scripts/qualify-fcc-nim-live.ts",
+    "scripts/qualification-classification.ts",
+    "scripts/qualification-guards.ts",
     "test/benchmarks.test.ts"
   ],
   "exclude": ["dist", "node_modules"]
