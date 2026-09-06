@@ -1,8 +1,5 @@
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, rename, unlink } from 'node:fs/promises';
-import { errorCode } from '../types.js';
-import { readOptional, safePath } from '../storage.js';
+import { readOptional, writeAtomic } from '../storage.js';
 import {
   parseUsageState,
   USAGE_PATH,
@@ -29,39 +26,7 @@ export async function readUsageState(root: string, { clock }: { clock?: () => Da
   const raw = await readOptional(root, USAGE_PATH);
   return raw === null ? emptyUsageState(clock) : parseUsageState(raw);
 }
-async function syncDirectory(directory: string) {
-  let handle;
-  try {
-    handle = await open(directory, 'r');
-    await handle.sync();
-  } catch (error) {
-    if (!['EINVAL', 'EISDIR', 'EPERM', 'EACCES', 'ENOTSUP'].includes(errorCode(error) ?? ''))
-      throw error;
-  } finally {
-    await handle?.close();
-  }
-}
 export async function writeUsageState(root: string, state: UsageState) {
   validateUsageState(state);
-  const target = await safePath(root, USAGE_PATH);
-  await mkdir(path.dirname(target), { recursive: true });
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  let committed = false;
-  try {
-    const handle = await open(temporary, 'wx', 0o600);
-    try {
-      await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rename(temporary, target);
-    committed = true;
-    await syncDirectory(path.dirname(target));
-  } finally {
-    if (!committed)
-      await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-  }
+  await writeAtomic(root, USAGE_PATH, `${JSON.stringify(state, null, 2)}\n`, 0o600);
 }

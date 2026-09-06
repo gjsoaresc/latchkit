@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { validateCommandPlan, validateLifecycleEnvelope } from '../providers/contracts.js';
 import type { LifecycleEnvelope, ProviderContract } from '../providers/contracts.js';
 import { CLAUDE_ADAPTER } from '../providers/claude.js';
@@ -32,6 +32,7 @@ import { withTaskStateLock } from '../task-state/lock.js';
 import type { Task } from '../task-state/contracts.js';
 import { recordProviderUsage } from '../usage/service.js';
 import { readUsageState } from '../usage/store.js';
+import { writeAtomic } from '../storage.js';
 
 export const TASK_SESSION_PATH = '.latchkit/tasks/sessions-v1.json';
 const SESSION_SCHEMA_VERSION = 1;
@@ -154,15 +155,7 @@ async function readSessions(root: string): Promise<SessionDocument> {
 }
 
 async function writeSessions(root: string, document: SessionDocument): Promise<void> {
-  const destination = path.join(root, TASK_SESSION_PATH);
-  await mkdir(path.dirname(destination), { recursive: true });
-  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, destination);
-  } finally {
-    await unlink(temporary).catch(() => {});
-  }
+  await writeAtomic(root, TASK_SESSION_PATH, `${JSON.stringify(document, null, 2)}\n`, 0o600);
 }
 
 function resultSummary(result: ProcessRunResult) {
@@ -368,6 +361,8 @@ export function createTaskController({
       await save(session);
       const abort = new AbortController();
       ACTIVE.set(key(root, taskId), { abort, sessionId: session.id, runId });
+      let pendingEventWrite: Promise<void> = Promise.resolve();
+      let eventWriteFailure: { error: unknown } | undefined;
       try {
         const processResult = await launch({
           provider,
@@ -383,9 +378,18 @@ export function createTaskController({
               platform: process.platform,
             };
             session.updatedAt = now();
-            void save(session);
+            // Observe rejection immediately and retain the drain promise. A
+            // failed ownership write must stop this child, not escape globally.
+            pendingEventWrite = save(structuredClone(session)).then(
+              () => {},
+              (error: unknown) => {
+                eventWriteFailure ??= { error };
+                abort.abort();
+              },
+            );
           },
         });
+        await pendingEventWrite;
         session.providerSessionId =
           providerSessionIdentity(
             providerId,
@@ -403,6 +407,7 @@ export function createTaskController({
           sessionId: session.providerSessionId,
           output: processResult.stdout ?? '',
         }).catch(() => {});
+        if (eventWriteFailure) throw eventWriteFailure.error;
         session.state = processResult.status === 'cancelled' ? 'cancelled' : 'finished';
         session.result = resultSummary(processResult);
         session.updatedAt = now();
@@ -418,6 +423,7 @@ export function createTaskController({
         }
         return { task: (await inspectTask(root, taskId)).task, session, process: processResult };
       } finally {
+        await pendingEventWrite;
         ACTIVE.delete(key(root, taskId));
       }
     } finally {
