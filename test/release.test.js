@@ -11,8 +11,8 @@ import {
   stageWindowsBootstrap,
   verifyEmbeddedArchive,
   verifyReleaseArtifacts,
-} from '../scripts/release-artifacts.js';
-import { tar } from '../scripts/archive-tool.js';
+} from '../dist/scripts/release-artifacts.js';
+import { tar } from '../dist/scripts/archive-tool.js';
 
 const run = promisify(execFile);
 const root = path.resolve(import.meta.dirname, '..');
@@ -382,7 +382,7 @@ test('publication requires Windows 11 exact native evidence', async (t) => {
 
 test('release preparation refuses a mismatched tag before building', async () => {
   await assert.rejects(
-    run(process.execPath, ['scripts/release-artifacts.js', '--tag', 'v99.0.0'], { cwd: root }),
+    run(process.execPath, ['dist/scripts/release-artifacts.js', '--tag', 'v99.0.0'], { cwd: root }),
     /does not match package version/,
   );
 });

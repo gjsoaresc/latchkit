@@ -10,8 +10,27 @@ import { resolveTar } from './archive-tool.js';
 import { buildBundle } from './bundle.js';
 
 const command = promisify(execFile);
-const repository = path.resolve(import.meta.dirname, '..');
-const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const repository = path.resolve(import.meta.dirname, '..', '..');
+type JsonRecord = Record<string, unknown>;
+type ArchiveFile = { path: string; bytes: number; sha256: string };
+type PackageEntry = { name: string; version: string; license: string; path: string };
+export type ReleaseManifest = JsonRecord & {
+  schemaVersion: number;
+  package: string;
+  version: string;
+  target: string;
+  nodeVersion: string;
+  commit: string;
+  dirty: boolean;
+  archive: string;
+  sha256: string;
+  files: ArchiveFile[];
+  packages: PackageEntry[];
+};
+type ReleaseVerificationOptions = { tag?: string; requireClean?: boolean; commit?: string };
+type BuildOptions = { output: string; version?: string; target?: string };
+type ArchiveTool = { tool: string; prefixArgs: string[] };
+const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 const requiredSmokeChecks = Object.freeze([
   'compiled workflow policy async exit',
   'CLI',
@@ -34,10 +53,10 @@ const requiredWorkflowPhases = Object.freeze([
   'handoff',
 ]);
 
-function safeArchivePath(value) {
+function safeArchivePath(value: unknown): value is string {
   return (
     typeof value === 'string' &&
-    value &&
+    Boolean(value) &&
     !value.includes('\\') &&
     !value.includes(':') &&
     !value.startsWith('/') &&
@@ -45,9 +64,9 @@ function safeArchivePath(value) {
   );
 }
 
-const canonical = (value) => JSON.stringify(value);
+const canonical = (value: unknown) => JSON.stringify(value);
 
-export async function stageWindowsBootstrap(directory, target) {
+export async function stageWindowsBootstrap(directory: string, target: string): Promise<void> {
   if (target !== 'win32-x64') return;
   const source = path.join(repository, 'install.ps1');
   const destination = path.join(directory, 'install.ps1');
@@ -59,14 +78,14 @@ export async function stageWindowsBootstrap(directory, target) {
     if (!existing.equals(bytes))
       throw new Error('Existing publication bootstrap differs from the reviewed install.ps1.');
   } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     await mkdir(directory, { recursive: true });
     await writeFile(destination, bytes, { flag: 'wx' });
   }
 }
 
 export async function prepareReleaseArtifacts(
-  { output, version, target = `${process.platform}-${process.arch}` },
+  { output, version, target = `${process.platform}-${process.arch}` }: BuildOptions,
   build = buildBundle,
 ) {
   // Refuse bootstrap conflicts before the builder can replace any archive or sidecar.
@@ -74,7 +93,7 @@ export async function prepareReleaseArtifacts(
   return build({ output, version, target });
 }
 
-async function archiveTool(archive) {
+async function archiveTool(archive: string): Promise<ArchiveTool> {
   if (process.platform === 'win32') return resolveTar();
   return {
     tool:
@@ -85,7 +104,11 @@ async function archiveTool(archive) {
   };
 }
 
-async function archiveCommand(archive, args, options) {
+async function archiveCommand(
+  archive: string,
+  args: string[],
+  options: Parameters<typeof command>[2],
+) {
   try {
     const { tool, prefixArgs } = await archiveTool(archive);
     return await command(tool, [...prefixArgs, ...args], options);
@@ -95,7 +118,7 @@ async function archiveCommand(archive, args, options) {
       process.platform === 'linux' &&
       error &&
       typeof error === 'object' &&
-      error.code === 'ENOENT'
+      (error as NodeJS.ErrnoException).code === 'ENOENT'
     )
       throw new Error('ZIP verification requires bsdtar (libarchive-tools) on this platform.', {
         cause: error,
@@ -104,31 +127,40 @@ async function archiveCommand(archive, args, options) {
   }
 }
 
-function record(value) {
+function record(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function validPriorArtifact(directory, prior, manifest) {
+async function validPriorArtifact(
+  directory: string,
+  prior: unknown,
+  manifest: ReleaseManifest,
+): Promise<boolean> {
   const invalidShape =
     !record(prior) ||
-    !safeArchivePath(prior.archive) ||
+    !safeArchivePath(prior?.archive) ||
+    typeof prior?.sha256 !== 'string' ||
     !/^[a-f0-9]{64}$/.test(prior.sha256) ||
-    typeof prior.version !== 'string' ||
+    typeof prior?.version !== 'string' ||
     prior.version === manifest.version;
   if (invalidShape) return false;
-  const location = path.join(directory, 'previous', prior.archive);
+  const validatedPrior = prior as { archive: string; sha256: string; version: string };
+  const location = path.join(directory, 'previous', validatedPrior.archive);
   const manifestLocation = `${location}.manifest.json`;
   const checksumLocation = `${location}.sha256`;
   try {
-    if (sha256(await readFile(location)) !== prior.sha256) return false;
-    if ((await readFile(checksumLocation, 'utf8')).trim() !== `${prior.sha256}  ${prior.archive}`)
+    if (sha256(await readFile(location)) !== validatedPrior.sha256) return false;
+    if (
+      (await readFile(checksumLocation, 'utf8')).trim() !==
+      `${validatedPrior.sha256}  ${validatedPrior.archive}`
+    )
       return false;
     const priorManifest = JSON.parse(await readFile(manifestLocation, 'utf8'));
     const valid =
       record(priorManifest) &&
-      priorManifest.archive === prior.archive &&
-      priorManifest.sha256 === prior.sha256 &&
-      priorManifest.version === prior.version &&
+      priorManifest.archive === validatedPrior.archive &&
+      priorManifest.sha256 === validatedPrior.sha256 &&
+      priorManifest.version === validatedPrior.version &&
       priorManifest.version !== manifest.version &&
       priorManifest.target === manifest.target;
     return valid;
@@ -137,7 +169,7 @@ async function validPriorArtifact(directory, prior, manifest) {
   }
 }
 
-function smokeArtifactEvidence(item, manifest) {
+function smokeArtifactEvidence(item: unknown, manifest: ReleaseManifest): item is JsonRecord {
   return (
     record(item) &&
     item.status === 'passed' &&
@@ -147,11 +179,15 @@ function smokeArtifactEvidence(item, manifest) {
     item.node === 'v24.20.0' &&
     item.systemToolchains === 'absent from PATH' &&
     Array.isArray(item.checks) &&
-    requiredSmokeChecks.every((check) => item.checks.includes(check))
+    requiredSmokeChecks.every((check) => (item.checks as unknown[]).includes(check))
   );
 }
 
-async function exactSmokeEvidence(directory, item, manifest) {
+async function exactSmokeEvidence(
+  directory: string,
+  item: unknown,
+  manifest: ReleaseManifest,
+): Promise<boolean> {
   if (
     !smokeArtifactEvidence(item, manifest) ||
     item.upgradeKind !== 'exact-prior-archive' ||
@@ -161,7 +197,8 @@ async function exactSmokeEvidence(directory, item, manifest) {
   return validPriorArtifact(directory, item.prior, manifest);
 }
 
-function windows11Qualification(item) {
+function windows11Qualification(item: unknown): boolean {
+  if (!record(item)) return false;
   if (typeof item.qualificationOS !== 'string') return false;
   const osName = item.qualificationOS.replace(/[^a-z0-9]/gi, '').toLowerCase();
   return (
@@ -172,16 +209,17 @@ function windows11Qualification(item) {
   );
 }
 
-function exactWorkflowEvidence(item, manifests) {
+function exactWorkflowEvidence(item: unknown, manifests: ReleaseManifest[]): boolean {
   if (!record(item) || item.kind !== 'live-workflow-qualification' || !record(item.candidate))
     return false;
+  const candidateRecord = item.candidate as JsonRecord;
   const manifest = manifests.find(
-    (candidate) =>
-      candidate.sha256 === item.candidate.archiveSha256 &&
-      candidate.commit === item.candidate.commit &&
-      candidate.version === item.candidate.version &&
-      candidate.target === item.candidate.target &&
-      candidate.nodeVersion === item.candidate.nodeVersion,
+    (manifestCandidate) =>
+      manifestCandidate.sha256 === candidateRecord.archiveSha256 &&
+      manifestCandidate.commit === candidateRecord.commit &&
+      manifestCandidate.version === candidateRecord.version &&
+      manifestCandidate.target === candidateRecord.target &&
+      manifestCandidate.nodeVersion === candidateRecord.nodeVersion,
   );
   if (
     !manifest ||
@@ -201,15 +239,16 @@ function exactWorkflowEvidence(item, manifests) {
     item.proof.handoff !== 'present'
   )
     return false;
+  const workflow = item.workflow as JsonRecord & { actions: unknown[] };
   return requiredWorkflowPhases.every((phase) =>
-    item.workflow.actions.some(
+    workflow.actions.some(
       (action) => record(action) && action.phase === phase && action.status === 'passed',
     ),
   );
 }
 
-async function inventory(directory, prefix = '') {
-  const files = [];
+async function inventory(directory: string, prefix = ''): Promise<ArchiveFile[]> {
+  const files: ArchiveFile[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     const filename = path.join(directory, entry.name);
@@ -223,9 +262,13 @@ async function inventory(directory, prefix = '') {
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbom) {
+export async function verifyEmbeddedArchive(
+  archive: string,
+  sidecarManifest: ReleaseManifest,
+  sidecarSbom: JsonRecord,
+): Promise<void> {
   const commandOptions = { windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 };
-  const listing = (await archiveCommand(archive, ['-tf', archive], commandOptions)).stdout
+  const listing = String((await archiveCommand(archive, ['-tf', archive], commandOptions)).stdout)
     .split(/\r?\n/)
     .filter(Boolean);
   const normalized = listing
@@ -236,7 +279,7 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
     new Set(normalized).size !== normalized.length
   )
     throw new Error('Archive contains an unsafe or duplicate entry.');
-  const verbose = (await archiveCommand(archive, ['-tvf', archive], commandOptions)).stdout
+  const verbose = String((await archiveCommand(archive, ['-tvf', archive], commandOptions)).stdout)
     .split(/\r?\n/)
     .filter(Boolean);
   if (verbose.some((line) => !/^[-d]/.test(line)))
@@ -248,13 +291,15 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
     await archiveCommand(archive, ['-xf', archive, '-C', temporary], commandOptions);
     const embedded = JSON.parse(
       await readFile(path.join(temporary, 'bundle-manifest.json'), 'utf8'),
-    );
-    const expected = { ...sidecarManifest };
+    ) as ReleaseManifest;
+    const expected: Partial<ReleaseManifest> = { ...sidecarManifest };
     delete expected.archive;
     delete expected.sha256;
     if (canonical(embedded) !== canonical(expected))
       throw new Error('Embedded bundle manifest differs from its sidecar manifest.');
-    const embeddedSbom = JSON.parse(await readFile(path.join(temporary, 'sbom.spdx.json'), 'utf8'));
+    const embeddedSbom = JSON.parse(
+      await readFile(path.join(temporary, 'sbom.spdx.json'), 'utf8'),
+    ) as JsonRecord & { packages?: JsonRecord[] };
     if (canonical(embeddedSbom) !== canonical(sidecarSbom))
       throw new Error('Embedded SBOM differs from its sidecar SBOM.');
     const actual = await inventory(temporary);
@@ -270,7 +315,10 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
     ].sort((left, right) => left.path.localeCompare(right.path));
     if (canonical(actual) !== canonical(recorded))
       throw new Error('Archive file inventory differs from its embedded manifest.');
-    const licenses = JSON.parse(await readFile(path.join(temporary, 'licenses.json'), 'utf8'));
+    const licenses = JSON.parse(await readFile(path.join(temporary, 'licenses.json'), 'utf8')) as {
+      schemaVersion?: number;
+      files?: unknown[];
+    };
     if (
       !licenses ||
       licenses.schemaVersion !== 1 ||
@@ -280,7 +328,7 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
       )
     )
       throw new Error('Embedded license inventory is invalid.');
-    for (const packageItem of embedded.packages ?? []) {
+    for (const packageItem of embedded.packages) {
       const sbomItem = embeddedSbom.packages?.find(
         (item) => item.SPDXID === `SPDXRef-${sha256(Buffer.from(packageItem.path)).slice(0, 24)}`,
       );
@@ -292,7 +340,7 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
       )
         throw new Error('SBOM package identity differs from the embedded production closure.');
     }
-    const expectedPackages = new Map((embedded.packages ?? []).map((item) => [item.path, item]));
+    const expectedPackages = new Map(embedded.packages.map((item) => [item.path, item]));
     for (const file of actual.filter(
       (item) =>
         item.path === 'app/package.json' ||
@@ -300,7 +348,7 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
     )) {
       const metadata = JSON.parse(
         await readFile(path.join(temporary, ...file.path.split('/')), 'utf8'),
-      );
+      ) as { name?: string; version?: string; license?: unknown };
       const packagePath =
         file.path === 'app/package.json' ? 'app' : file.path.slice(0, -'/package.json'.length);
       const expectedPackage = expectedPackages.get(packagePath);
@@ -319,16 +367,18 @@ export async function verifyEmbeddedArchive(archive, sidecarManifest, sidecarSbo
 }
 
 export async function verifyReleaseArtifacts(
-  directory,
-  { tag, requireClean = false, commit } = {},
-) {
+  directory: string,
+  { tag, requireClean = false, commit }: ReleaseVerificationOptions = {},
+): Promise<ReleaseManifest[]> {
   const files = (await readdir(directory)).filter((name) => name.endsWith('.manifest.json'));
   if (!files.length) throw new Error('No standalone bundle manifests were supplied.');
   const targets = new Set();
-  const manifests = [];
-  const embeddedChecks = [];
+  const manifests: ReleaseManifest[] = [];
+  const embeddedChecks: { archive: string; manifest: ReleaseManifest; sbom: JsonRecord }[] = [];
   for (const file of files) {
-    const manifest = JSON.parse(await readFile(path.join(directory, file), 'utf8'));
+    const manifest = JSON.parse(
+      await readFile(path.join(directory, file), 'utf8'),
+    ) as ReleaseManifest;
     if (
       manifest.schemaVersion !== 1 ||
       manifest.package !== 'latchkit' ||
@@ -357,7 +407,7 @@ export async function verifyReleaseArtifacts(
       throw new Error('Checksum file disagrees with bundle manifest.');
     const sbom = JSON.parse(
       await readFile(path.join(directory, `${manifest.archive}.spdx.json`), 'utf8'),
-    );
+    ) as JsonRecord & { packages?: JsonRecord[] };
     if (
       !Array.isArray(manifest.packages) ||
       !Array.isArray(sbom.packages) ||
@@ -427,12 +477,12 @@ export async function verifyReleaseArtifacts(
 
 async function main() {
   const args = process.argv.slice(2);
-  const value = (name) => {
+  const value = (name: string): string | undefined => {
     const index = args.indexOf(name);
     if (index === -1) return undefined;
-    if (!args[index + 1] || args[index + 1].startsWith('--'))
-      throw new Error(`${name} needs a value.`);
-    return args[index + 1];
+    const argument = args[index + 1];
+    if (!argument || argument.startsWith('--')) throw new Error(`${name} needs a value.`);
+    return argument;
   };
   const output = path.resolve(value('--output') ?? path.join(repository, 'release-artifacts'));
   const metadata = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8'));

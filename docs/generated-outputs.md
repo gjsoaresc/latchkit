@@ -57,13 +57,13 @@ accumulating, and they are not interchangeable:
 
 ## Release archive publication
 
-`scripts/bundle.js` stages the release archive next to its final name in
+Emitted `dist/scripts/bundle.js` stages the release archive next to its final name in
 `release-artifacts/` (or the configured `--output` directory) before
 touching that directory for real, then publishes the archive and its three
 sidecars (`.sha256`, `.spdx.json`, `.manifest.json`) through
-`scripts/atomic-publish.js`: each file is written to a same-directory
+`dist/scripts/atomic-publish.js`: each file is written to a same-directory
 temporary name and renamed into place, and the manifest is committed last
-because `verifyReleaseArtifacts`/`bundle-smoke.js` discover a published
+because `verifyReleaseArtifacts`/emitted `bundle-smoke.js` discover a published
 artifact by the presence of its `*.manifest.json` file. If any step fails --
 including a locked file, a full disk, or the sidecar write itself -- every
 file this operation staged or already committed is removed before the error

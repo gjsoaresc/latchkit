@@ -5,7 +5,7 @@
  * dependencies), so extraction shells out to the platform tool already
  * proven for this exact job: .NET `ZipFile` through PowerShell for the qualified
  * `win32-x64` `.zip` target (the same mechanism `install.ps1` and
- * `scripts/bundle-smoke.js` already use), and `tar` for the deferred
+ * emitted `dist/scripts/bundle-smoke.js` already use), and `tar` for the deferred
  * experimental `.tar.gz` targets. No administrator rights, WSL, or Bash are
  * required on Windows. The extraction itself is bounded by a timeout; the
  * *result* is bounded by walking the extracted tree afterward and rejecting
@@ -42,7 +42,7 @@ async function extractZipOnWindows(
   // install.ps1 already extracts this way.
   // A script file (rather than an inline -Command string) survives paths
   // with spaces and Unicode without shell-quoting concerns, matching the
-  // technique already proven in scripts/bundle-smoke.js.
+  // technique already proven in emitted dist/scripts/bundle-smoke.js.
   const script = path.join(destination, '..', `extract-${path.basename(destination)}.ps1`);
   await writeFile(
     script,

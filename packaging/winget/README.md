@@ -9,7 +9,7 @@ WinGet's declarative manifest formats (`msi`, `msix`, `exe`, `zip` +
 `NestedInstallerType: portable`, ...) all assume the archive/installer is
 already runnable once placed on disk. Latchkit's actual Windows release
 archive (`latchkit-<version>-win32-x64.zip`, built by
-`scripts/release-artifacts.js`) is **not** that: it contains
+emitted `dist/scripts/release-artifacts.js`) is **not** that: it contains
 `runtime/node.exe`, `app/dist/...`, and `bundle-manifest.json`, but
 `bin/latchkit.cmd` / `bin/latchkit.ps1` do not exist until
 `src/installation/manager.ts` (`createStableLaunchers`) actually stages and
@@ -39,7 +39,7 @@ Two ways to close that gap were considered:
 Option 2 is the one `willahealm.Latchkit.installer.yaml` in this directory
 sketches, because it requires no new installer executable and reuses the
 exact same manager code and checksums as the direct-install path. It is
-**not implemented**: `scripts/release-artifacts.js` does not produce this
+**not implemented**: emitted `dist/scripts/release-artifacts.js` does not produce this
 artifact shape today.
 
 ## What is in this directory

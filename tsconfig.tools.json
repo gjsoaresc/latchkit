@@ -9,7 +9,14 @@
     "scripts/browser-licenses.ts",
     "scripts/check.ts",
     "scripts/reconcile.ts",
-    "scripts/validate-skills.ts"
+    "scripts/validate-skills.ts",
+    "scripts/archive-tool.ts",
+    "scripts/atomic-publish.ts",
+    "scripts/bundle.ts",
+    "scripts/release-artifacts.ts",
+    "scripts/artifact-smoke.ts",
+    "scripts/bundle-smoke.ts",
+    "scripts/collect-release-evidence.ts"
   ],
   "exclude": ["dist", "node_modules"]
 }
