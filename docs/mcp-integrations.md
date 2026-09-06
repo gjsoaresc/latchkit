@@ -57,7 +57,13 @@ Recovery uses a fixed resource registry and needs no imported definition file. C
 
 The shared provider process runner checks each managed entry immediately before launch. Changed configuration, missing required environment variables, or a changed Latchkit provider contract refuses that launch until the entry is reconciled, removed, or explicitly reauthorized. This checks the Latchkit runtime contract; it does not inspect the installed provider binary's version or guard sessions launched outside Latchkit. Project-local ownership records are bookkeeping, not a cryptographic authorization boundary against an attacker who can edit the repository. Provider trust and tool approvals remain the actual tool-execution boundary.
 
-`toolAllowlist` is representable for import but **activation is unsupported**: writing an allowlist into configuration without runtime enforcement would falsely imply restricted tool access. Latchkit has no MCP tool-dispatch API and issues no tool grants. Enforceable tool narrowing, installed-provider version qualification, other provider serializers, and UI/HTTP configuration controls remain open parts of issue #19.
+`toolAllowlist` is representable for import but **activation is unsupported**: writing an allowlist into configuration without runtime enforcement would falsely imply restricted tool access. Latchkit has no MCP tool-dispatch API and issues no tool grants. Enforceable tool narrowing, installed-provider version qualification, and other provider serializers remain open parts of issue #19.
+
+## Local console and HTTP controls
+
+The authenticated local console exposes a dedicated MCP panel at `/mcp`, linked from Settings. Paste a single definition or a bounded array, select **Review exact changes**, and inspect the changes, conflict diagnostics, missing environment *names*, and execution/connection implications. Preview is inert: it performs no provider invocation, process launch, or endpoint request.
+
+**Explicitly activate reviewed definition** applies only the exact JSON bound to the session-scoped preview ID; edited, expired, or already-used previews are refused and must be reviewed again. Remove preserves unrelated `.mcp.json` entries. The panel also exposes transaction recovery and a separately initiated health check for an enabled supported HTTP entry. The API is intentionally narrow: `GET /api/mcp`, `POST /api/mcp/preview`, `POST /api/mcp/apply`, `POST /api/mcp/remove`, `GET`/`POST /api/mcp/recovery`, and `POST /api/mcp/health`; it accepts no arbitrary commands or tool calls.
 
 ## Credentials and health
 

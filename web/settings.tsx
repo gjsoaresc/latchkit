@@ -354,6 +354,21 @@ export function SettingsConsole() {
         </div>
         <PlanPanel />
       </section>
+      <section className="config-section" aria-labelledby="mcp-settings-heading">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">OPTIONAL MCP</p>
+            <h2 id="mcp-settings-heading">Managed MCP configuration.</h2>
+            <p>
+              Review inert definitions, then explicitly enable only the exact configuration you
+              approved.
+            </p>
+          </div>
+          <a className="button button-outline" href="/mcp">
+            Open MCP controls
+          </a>
+        </div>
+      </section>
       <FccConsole />
       <OnboardingConsole />
     </Shell>
