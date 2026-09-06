@@ -205,3 +205,85 @@ export interface UpdateStatusSnapshot {
   staged: StagedUpdateRecord | null;
   lastCheck: ReleaseCheckResult | null;
 }
+
+// --- Restart handoff (issue #139 slice 2) -----------------------------------
+
+/**
+ * A small, versioned, installation-scoped admission barrier (acceptance
+ * criterion 5). Any server process for any project sharing this
+ * installation must refuse a new non-exempt mutating request while a lease
+ * with state `restarting` is active and unexpired — see
+ * `src/installation/updates/lease.ts`. `expiresAt` bounds automatic
+ * recovery: a crashed or killed holder can never lock the installation out
+ * forever, and a fresh read past `expiresAt` is treated exactly like `idle`.
+ */
+export const INSTALLATION_LEASE_STATES = Object.freeze(['idle', 'restarting'] as const);
+export type InstallationLeaseState = (typeof INSTALLATION_LEASE_STATES)[number];
+
+export interface InstallationLease {
+  schemaVersion: 1;
+  state: InstallationLeaseState;
+  /** Identifies the server instance driving the restart (see `activity.ts`'s
+   * `serverId`), so a second server can tell its own lease apart from one
+   * held by another console/project sharing this installation. */
+  ownerId: string;
+  reason: string;
+  fromVersion: string;
+  toVersion: string;
+  acquiredAt: string;
+  expiresAt: string;
+}
+
+/**
+ * A per-server-process heartbeat (acceptance criterion 3) letting the
+ * installation-wide quiescence check see live "unsaved console edit" and
+ * "admitted mutating request" signals from *other* server processes serving
+ * other projects under the same installation — persisted state alone cannot
+ * carry ephemeral browser/session state. Written under
+ * `<installRoot>/activity/<serverId>.json`, refreshed while the process is
+ * alive, and removed on a clean shutdown; `updatedAt` plus a liveness check
+ * on `pid` let a reader discard a stale entry left behind by a crash without
+ * waiting indefinitely (see `activity.ts`).
+ */
+export interface ActivityHeartbeat {
+  schemaVersion: 1;
+  serverId: string;
+  root: string;
+  pid: number;
+  startedAt: string;
+  updatedAt: string;
+  dirty: boolean;
+  mutating: number;
+}
+
+export const UPDATE_HANDOFF_STAGES = Object.freeze([
+  'preflight',
+  'quiescence',
+  'spawn',
+  'ready-check',
+  'version-verify',
+  'activate',
+  'complete',
+] as const);
+export type UpdateHandoffStage = (typeof UPDATE_HANDOFF_STAGES)[number];
+
+/**
+ * Durable record of the most recent restart-handoff attempt (acceptance
+ * criteria 5/6), so a browser that cannot reconnect — or the surviving old
+ * server after a failed replacement — can report what actually ran and
+ * offer a copyable CLI fallback command. Overwritten on every attempt; a
+ * single latest record is sufficient since a new attempt can only start
+ * once quiescence and the lease allow it.
+ */
+export interface UpdateHandoffRecord {
+  schemaVersion: 1;
+  attemptedAt: string;
+  fromVersion: string;
+  toVersion: string;
+  target: string;
+  outcome: 'succeeded' | 'failed';
+  stage: UpdateHandoffStage;
+  reason: string | null;
+  replacementPid: number | null;
+  recoveryCommand: string | null;
+}

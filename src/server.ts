@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +67,14 @@ import {
 } from './project-memory/service.js';
 import { providerById } from './providers/registry.js';
 import { discoverSpecImport, previewSpecImport } from './spec-imports/service.js';
+import { startHeartbeat } from './installation/updates/activity.js';
+import { defaultInstallationRoot } from './installation/manager.js';
+import { detectInstallationOwnership } from './installation/updates/ownership.js';
+import {
+  createUpdateRoutes,
+  EXEMPT_DURING_RESTART,
+  isRestartAdmissionBlocked,
+} from './installation/updates/routes.js';
 import {
   detachSpecImportRegistration,
   registerSpecImport,
@@ -334,8 +342,28 @@ async function readJson<T = Record<string, unknown>>(req: http.IncomingMessage):
   }
 }
 
+export interface StartServerOptions {
+  port?: number;
+  /** Issue #139 slice 2: overrides for the console updater's installation
+   * identity, injectable only by a trusted caller (the CLI, or a test
+   * fixture) — never by request/browser input. Default to this process's
+   * own environment via `defaultInstallationRoot()`/`detectInstallationOwnership()`,
+   * matching `src/installation/updates/ownership.ts`'s documented contract. */
+  installRoot?: string;
+  runningFromInstallRoot?: string | null;
+  /** Test/fixture injection points threaded through to the restart-handoff
+   * machinery (see `src/installation/updates/handoff.ts`) so a deterministic
+   * fixture never spawns a real bundled runtime or reaches the network. */
+  updateSpawnImpl?: Parameters<typeof createUpdateRoutes>[0]['spawnImpl'];
+  updateFetchImpl?: Parameters<typeof createUpdateRoutes>[0]['fetchImpl'];
+  updateReadyTimeoutMs?: number;
+  updateExtraEnv?: Record<string, string>;
+  updateClock?: () => Date;
+}
+
 /** Serve a single project's configuration UI on loopback with launch-scoped access. */
-export async function startServer(root: string, { port = 0 }: { port?: number } = {}) {
+export async function startServer(root: string, options: StartServerOptions = {}) {
+  const { port = 0 } = options;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('Port must be an integer between 0 and 65535.');
   }
@@ -374,6 +402,18 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
     return result;
   };
 
+  // Console updater (issue #139 slice 2): resolved once, only from this process's own
+  // environment/defaults or an explicit trusted caller override (never from request/browser
+  // input — see src/installation/updates/ownership.ts's documented contract).
+  const serverId = randomUUID();
+  const installRoot = options.installRoot ?? defaultInstallationRoot();
+  const ownership = await detectInstallationOwnership({
+    root: installRoot,
+    runningFromInstallRoot: options.runningFromInstallRoot,
+  });
+  const heartbeat = startHeartbeat(installRoot, { serverId, root });
+  let mutatingCount = 0;
+
   const activeRequests = new Set<Promise<void>>();
   const server = http.createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
     const request = handleRequest(req, res);
@@ -382,6 +422,30 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
       () => activeRequests.delete(request),
       () => activeRequests.delete(request),
     );
+  });
+  const updateRoutes = createUpdateRoutes({
+    installRoot,
+    ownership,
+    projectRoot: root,
+    projectsRegistryRoot,
+    serverId,
+    heartbeat,
+    getMutatingCount: () => mutatingCount,
+    onHandoffSucceeded: () => {
+      // Mirrors the existing SIGINT/SIGTERM shutdown in src/cli.ts: `close()` alone can leave a
+      // keep-alive socket open indefinitely, which would otherwise keep this now-superseded
+      // process alive after a successful handoff to the replacement server.
+      server.close();
+      server.closeAllConnections();
+    },
+    fail,
+    respond,
+    readJson,
+    spawnImpl: options.updateSpawnImpl,
+    fetchImpl: options.updateFetchImpl,
+    readyTimeoutMs: options.updateReadyTimeoutMs,
+    extraEnv: options.updateExtraEnv,
+    clock: options.updateClock,
   });
 
   async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -409,6 +473,32 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin !== origin) {
           throw fail(403, 'Request origin must match this Latchkit session.');
         }
+        // Console updater (issue #139 slice 2): the installation-wide restart admission
+        // barrier and the "admitted mutating request" quiescence signal both live here, ahead
+        // of every route below, so neither can be bypassed by a route added elsewhere. See
+        // src/installation/updates/routes.ts's `isRestartAdmissionBlocked`/`EXEMPT_DURING_RESTART`.
+        const countsAsMutation =
+          req.method !== 'GET' && req.method !== 'HEAD' && !EXEMPT_DURING_RESTART.has(pathname);
+        if (countsAsMutation) {
+          const blocked = await isRestartAdmissionBlocked(
+            pathname,
+            req.method ?? 'GET',
+            installRoot,
+          );
+          if (blocked) throw fail(503, blocked);
+          mutatingCount += 1;
+          heartbeat.setMutating(mutatingCount);
+          let counted = true;
+          const uncount = () => {
+            if (!counted) return;
+            counted = false;
+            mutatingCount -= 1;
+            heartbeat.setMutating(mutatingCount);
+          };
+          res.once('finish', uncount);
+          res.once('close', uncount);
+        }
+        if (await updateRoutes.handle(req, res, requestUrl)) return;
         if (pathname === '/api/state' && req.method === 'GET') {
           await pendingMutation;
           const snapshot = await readConfigSnapshot(root);
@@ -1031,6 +1121,9 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
     })());
   server.once('close', () => {
     void drain().catch(() => {});
+    // Remove this server's activity heartbeat promptly on a clean shutdown rather than
+    // waiting for another console's quiescence check to age it out (see activity.ts).
+    void heartbeat.stop();
   });
   const closeTransport = server.close;
   server.close = function (callback) {
