@@ -66,6 +66,25 @@ export type TaskEvent = {
 };
 export type TaskOwner = { runId: string; ownerId: string; revision: number; acquiredAt: string };
 export type TaskImport = { path: string; sha256: string; importedAt: string };
+export type EnhancedArtifact = {
+  path: string;
+  sha256: string;
+  templateVersion: number;
+};
+export type EnhancedCheck = {
+  id: string;
+  criterionId: string;
+  type: 'cli' | 'http' | 'browser' | 'manual';
+  definitionSha256: string;
+};
+export type EnhancedWorkflow = {
+  schemaVersion: 1;
+  revision: number;
+  enrolledAt: string;
+  updatedAt: string;
+  artifacts: { prd: EnhancedArtifact; technicalPlan: EnhancedArtifact };
+  checks: EnhancedCheck[];
+};
 export type Task = {
   id: string;
   title: string;
@@ -82,6 +101,7 @@ export type Task = {
   evidence: TaskEvidence[];
   events: TaskEvent[];
   import: TaskImport | null;
+  enhancedWorkflow?: EnhancedWorkflow | null;
 };
 export type TaskState = {
   schemaVersion: number;
@@ -92,7 +112,8 @@ export type TaskState = {
   tasks: Task[];
 };
 
-export const TASK_STATE_SCHEMA_VERSION = 1;
+export const TASK_STATE_SCHEMA_VERSION = 2;
+export const SUPPORTED_TASK_STATE_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 
 export const TASK_STATES = Object.freeze([
   'planned',
@@ -362,9 +383,12 @@ function validateEvidence(value: TaskEvidence, path: string) {
   id(value.criterionId, `${path}.criterionId`, 'criterion');
   integer(value.criterionRevision, `${path}.criterionRevision`, 1);
   id(value.runId, `${path}.runId`, 'run');
-  if (!['check', 'approval'].includes(value.kind))
+  if (
+    !['check', 'approval'].includes(value.kind) &&
+    !/^enhanced-check:[a-z0-9][a-z0-9._-]{0,127}$/.test(value.kind)
+  )
     throw new TaskStateError(
-      'Expected check or approval evidence.',
+      'Expected check, approval, or enhanced-check evidence.',
       'TASK_STATE_INVALID',
       `${path}.kind`,
     );
@@ -420,7 +444,78 @@ function validateImport(value: TaskImport | null, path: string) {
   return value;
 }
 
-function validateTask(value: Task, path: string) {
+function validateEnhancedArtifact(value: EnhancedArtifact, path: string) {
+  keys(value, ['path', 'sha256', 'templateVersion'], ['path', 'sha256', 'templateVersion'], path);
+  const artifactPath = string(value.path, `${path}.path`);
+  if (!/^\.latchkit\/notes\/.+\.md$/.test(artifactPath))
+    throw new TaskStateError(
+      'Enhanced artifacts must be Markdown notes under .latchkit/notes/.',
+      'TASK_STATE_INVALID',
+      `${path}.path`,
+    );
+  hash(value.sha256, `${path}.sha256`);
+  integer(value.templateVersion, `${path}.templateVersion`, 1);
+}
+
+function validateEnhancedWorkflow(value: EnhancedWorkflow | null, task: Task, path: string) {
+  if (value === null) return;
+  keys(
+    value,
+    ['schemaVersion', 'revision', 'enrolledAt', 'updatedAt', 'artifacts', 'checks'],
+    ['schemaVersion', 'revision', 'enrolledAt', 'updatedAt', 'artifacts', 'checks'],
+    path,
+  );
+  if (value.schemaVersion !== 1)
+    throw new TaskStateError('Unsupported enhanced workflow schema.', 'TASK_STATE_INVALID', path);
+  integer(value.revision, `${path}.revision`, 1);
+  timestamp(value.enrolledAt, `${path}.enrolledAt`);
+  timestamp(value.updatedAt, `${path}.updatedAt`);
+  keys(value.artifacts, ['prd', 'technicalPlan'], ['prd', 'technicalPlan'], `${path}.artifacts`);
+  validateEnhancedArtifact(value.artifacts.prd, `${path}.artifacts.prd`);
+  validateEnhancedArtifact(value.artifacts.technicalPlan, `${path}.artifacts.technicalPlan`);
+  if (!Array.isArray(value.checks) || value.checks.length === 0)
+    throw new TaskStateError(
+      'Enhanced workflows require at least one check.',
+      'TASK_STATE_INVALID',
+      `${path}.checks`,
+    );
+  const criterionIds = new Set(task.criteria.map((criterion) => criterion.id));
+  const checkIds = new Set<string>();
+  for (const [index, check] of value.checks.entries()) {
+    const at = `${path}.checks[${index}]`;
+    keys(
+      check,
+      ['id', 'criterionId', 'type', 'definitionSha256'],
+      ['id', 'criterionId', 'type', 'definitionSha256'],
+      at,
+    );
+    if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(check.id))
+      throw new TaskStateError('Invalid enhanced check ID.', 'TASK_STATE_INVALID', `${at}.id`);
+    if (checkIds.has(check.id))
+      throw new TaskStateError('Enhanced check IDs must be unique.', 'TASK_STATE_INVALID', at);
+    checkIds.add(check.id);
+    id(check.criterionId, `${at}.criterionId`, 'criterion');
+    if (!criterionIds.has(check.criterionId))
+      throw new TaskStateError(
+        'Enhanced check references an unknown criterion.',
+        'TASK_STATE_INVALID',
+        at,
+      );
+    if (!['cli', 'http', 'browser', 'manual'].includes(check.type))
+      throw new TaskStateError('Unknown enhanced check type.', 'TASK_STATE_INVALID', `${at}.type`);
+    hash(check.definitionSha256, `${at}.definitionSha256`);
+  }
+  for (const criterion of task.criteria.filter((item) => item.required)) {
+    if (!value.checks.some((check) => check.criterionId === criterion.id))
+      throw new TaskStateError(
+        'Every required criterion must map to at least one check.',
+        'TASK_STATE_INVALID',
+        `${path}.checks`,
+      );
+  }
+}
+
+function validateTask(value: Task, path: string, schemaVersion: number) {
   const fields = [
     'id',
     'title',
@@ -438,6 +533,7 @@ function validateTask(value: Task, path: string) {
     'events',
     'import',
   ];
+  if (schemaVersion >= 2) fields.push('enhancedWorkflow');
   keys(value, fields, fields, path);
   id(value.id, `${path}.id`, 'task');
   string(value.title, `${path}.title`);
@@ -467,6 +563,17 @@ function validateTask(value: Task, path: string) {
     validateCheckpoint(item, `${path}.checkpoints[${index}]`),
   );
   value.evidence.forEach((item, index) => validateEvidence(item, `${path}.evidence[${index}]`));
+  if (schemaVersion === 1) {
+    const enhancedIndex = value.evidence.findIndex((item) =>
+      item.kind.startsWith('enhanced-check:'),
+    );
+    if (enhancedIndex !== -1)
+      throw new TaskStateError(
+        'Enhanced check evidence requires task-state schema version 2.',
+        'TASK_STATE_INVALID',
+        `${path}.evidence[${enhancedIndex}].kind`,
+      );
+  }
   value.events.forEach((item, index) => validateEvent(item, `${path}.events[${index}]`));
   for (const field of [
     'authorizations',
@@ -479,6 +586,8 @@ function validateTask(value: Task, path: string) {
     unique(value[field], 'id', `${path}.${field}`);
   validateOwner(value.owner, `${path}.owner`);
   validateImport(value.import, `${path}.import`);
+  if (schemaVersion >= 2)
+    validateEnhancedWorkflow(value.enhancedWorkflow ?? null, value, `${path}.enhancedWorkflow`);
   const runs = new Map(value.runs.map((item) => [item.id, item]));
   const criteria = new Map(value.criteria.map((item) => [item.id, item]));
   const authorizations = new Set(value.authorizations.map((item) => item.id));
@@ -568,7 +677,7 @@ export function validateTaskState(input: unknown): TaskState {
   // Treat fields as candidates while every field and relationship is checked below.
   // The document leaves this boundary only after the complete runtime validation.
   const value = input as TaskState;
-  if (value.schemaVersion !== TASK_STATE_SCHEMA_VERSION) {
+  if (!SUPPORTED_TASK_STATE_SCHEMA_VERSIONS.includes(value.schemaVersion)) {
     throw new TaskStateError(
       `Unsupported task-state schema version ${value.schemaVersion}.`,
       'TASK_STATE_UNSUPPORTED_VERSION',
@@ -583,7 +692,9 @@ export function validateTaskState(input: unknown): TaskState {
   timestamp(value.updatedAt, '$.updatedAt');
   if (!Array.isArray(value.tasks))
     throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', '$.tasks');
-  value.tasks.forEach((task, index) => validateTask(task, `$.tasks[${index}]`));
+  value.tasks.forEach((task, index) =>
+    validateTask(task, `$.tasks[${index}]`, value.schemaVersion),
+  );
   unique(value.tasks, 'id', '$.tasks');
   if (value.revision !== value.tasks.reduce((total, task) => total + task.revision, 0)) {
     throw new TaskStateError(

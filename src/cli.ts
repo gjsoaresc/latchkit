@@ -15,7 +15,15 @@ import {
   removeProjectSkills,
   syncProject,
 } from './core.js';
-import { importMarkdownTask, inspectTask, listTasks, resumeTask } from './task-state/service.js';
+import {
+  importMarkdownTask,
+  inspectTask,
+  listTasks,
+  migrateTaskState,
+  registerEnhancedWorkflow,
+  resumeTask,
+  verifyTask,
+} from './task-state/service.js';
 import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
 import { appendEvent } from './diagnostics/logger.js';
 import { operationalError } from './diagnostics/errors.js';
@@ -89,6 +97,7 @@ Usage: latchkit <command> [options]
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
+  spec       Register, inspect, migrate, or verify an enhanced specification
   workflow   Run, inspect, approve, resume, or cancel a delivery workflow
   self       Inspect, upgrade, roll back, or uninstall this standalone installation
   review     Run bounded independent reviews
@@ -241,6 +250,7 @@ try {
     if (
       ![
         'task',
+        'spec',
         'workflow',
         'self',
         'workspace',
@@ -304,6 +314,7 @@ try {
         'session',
         'host-local-authorized',
       ],
+      spec: ['project', 'task', 'expected-revision', 'mutation-id', 'file', 'dry-run'],
       review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
       diff: [
         'project',
@@ -656,6 +667,55 @@ try {
               : {}),
           }),
         );
+      }
+    } else if (command === 'spec') {
+      if (
+        extra.length !== 1 ||
+        !['register', 'update', 'inspect', 'migrate', 'verify'].includes(extra[0] ?? '')
+      )
+        throw new Error('Usage: latchkit spec <register|update|inspect|migrate|verify> [options].');
+      const action = extra[0];
+      if (action === 'migrate') print(await migrateTaskState(root, { dryRun: values['dry-run'] }));
+      else if (action === 'inspect')
+        print((await inspectTask(root, requiredOption(values.task, 'task'))).task.enhancedWorkflow);
+      else {
+        const expectedRevision = Number(
+          requiredOption(values['expected-revision'], 'expected-revision'),
+        );
+        if (!Number.isInteger(expectedRevision) || expectedRevision < 1)
+          throw new Error('--expected-revision must be a positive integer.');
+        if (action === 'verify')
+          print(
+            await verifyTask(root, {
+              taskId: requiredOption(values.task, 'task'),
+              expectedRevision,
+              ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+            }),
+          );
+        else {
+          const bytes = await readFile(path.resolve(requiredOption(values.file, 'file')));
+          if (bytes.byteLength > 64 * 1024)
+            throw new Error('Enhanced specification input exceeds 64 KiB.');
+          let document: unknown;
+          try {
+            document = JSON.parse(bytes.toString('utf8'));
+          } catch {
+            throw new Error('Enhanced specification input must be valid JSON.');
+          }
+          if (!document || typeof document !== 'object' || Array.isArray(document))
+            throw new Error('Enhanced specification input must be an object.');
+          print(
+            await registerEnhancedWorkflow(root, {
+              ...(document as Omit<
+                Parameters<typeof registerEnhancedWorkflow>[1],
+                'taskId' | 'expectedRevision' | 'mutationId'
+              >),
+              taskId: requiredOption(values.task, 'task'),
+              expectedRevision,
+              ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+            }),
+          );
+        }
       }
     } else if (command === 'review') {
       if (extra.length !== 1 || !['run'].includes(extra[0] ?? ''))

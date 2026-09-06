@@ -10,6 +10,8 @@ import { withTaskStateLock } from './lock.js';
 import type {
   Authorization,
   Criterion,
+  EnhancedArtifact,
+  EnhancedCheck,
   ProcessIdentity,
   SourceSnapshot,
   Task,
@@ -19,7 +21,8 @@ import type {
 } from './contracts.js';
 import type { StateWriteOptions } from './store.js';
 import { errorCode } from '../types.js';
-import { resolveProjectRoot, safePath } from '../storage.js';
+import { readOptional, resolveProjectRoot, safePath, writeAtomic } from '../storage.js';
+import { TASK_STATE_PATH } from './store.js';
 
 const execFileAsync = promisify(execFile);
 const TERMINAL_TASK_STATES = new Set(['cancelled', 'verified']);
@@ -49,6 +52,17 @@ export type CreateTaskInput = {
   criteria?: CriterionInput[];
   authorizationRequired?: boolean;
   authorization?: AuthorizationInput;
+};
+export type EnhancedArtifactInput = { path: string; templateVersion: number };
+export type EnhancedCheckInput = {
+  id: string;
+  criterionId: string;
+  type: 'cli' | 'http' | 'browser' | 'manual';
+};
+export type EnhancedWorkflowInput = TaskMutationInput & {
+  criteria?: CriterionInput[];
+  artifacts: { prd: EnhancedArtifactInput; technicalPlan: EnhancedArtifactInput };
+  checks: EnhancedCheckInput[];
 };
 export type ResumeTaskInput = TaskMutationInput & { ownerId?: string };
 export type EvidenceInput = TaskMutationInput & {
@@ -383,6 +397,7 @@ export async function createTask(
         events: [],
         import: importRecord,
       };
+      if (state.schemaVersion >= 2) task.enhancedWorkflow = null;
       state.tasks.push(task);
       commitEvent(state, task, {
         mutationId,
@@ -425,6 +440,193 @@ export async function importMarkdownTask(
   });
 }
 
+function reconcileCriteria(
+  currentCriteria: Criterion[],
+  input: CriterionInput[],
+  clock: () => Date,
+) {
+  if (!Array.isArray(input))
+    throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', '$.criteria');
+  const current = new Map(currentCriteria.map((item) => [item.id, item]));
+  const at = iso(clock);
+  const next = input.map((item, index) => {
+    if (!item || typeof item.description !== 'string' || !item.description.trim())
+      throw new TaskStateError(
+        'Criterion description is required.',
+        'TASK_STATE_INVALID',
+        `$.criteria[${index}].description`,
+      );
+    const suppliedId = item.id
+      ? validateStableId(item.id, 'criterion', `$.criteria[${index}].id`)
+      : null;
+    const previous = suppliedId ? current.get(suppliedId) : null;
+    const candidate = {
+      description: item.description,
+      required: item.required ?? true,
+      approvalRequired: item.approvalRequired ?? false,
+    };
+    if (!previous)
+      return {
+        id: suppliedId ?? id('criterion'),
+        revision: 1,
+        ...candidate,
+        createdAt: at,
+        updatedAt: at,
+      };
+    const changed =
+      previous.description !== candidate.description ||
+      previous.required !== candidate.required ||
+      previous.approvalRequired !== candidate.approvalRequired;
+    return {
+      ...previous,
+      ...candidate,
+      revision: changed ? previous.revision + 1 : previous.revision,
+      updatedAt: changed ? at : previous.updatedAt,
+    };
+  });
+  if (new Set(next.map((item) => item.id)).size !== next.length)
+    throw new TaskStateError('Criterion IDs must be unique.', 'TASK_STATE_INVALID', '$.criteria');
+  return next;
+}
+
+async function enhancedArtifact(
+  root: string,
+  input: EnhancedArtifactInput,
+  field: string,
+): Promise<EnhancedArtifact> {
+  if (
+    !input ||
+    typeof input.path !== 'string' ||
+    !/^\.latchkit\/notes\/.+\.md$/.test(input.path.replaceAll('\\', '/'))
+  )
+    throw new TaskStateError(
+      'Enhanced artifacts must be Markdown notes under .latchkit/notes/.',
+      'TASK_ENHANCED_WORKFLOW_INVALID',
+      `${field}.path`,
+    );
+  if (!Number.isInteger(input.templateVersion) || input.templateVersion < 1)
+    throw new TaskStateError(
+      'Artifact templateVersion must be a positive integer.',
+      'TASK_ENHANCED_WORKFLOW_INVALID',
+      `${field}.templateVersion`,
+    );
+  const artifactPath = input.path.replaceAll('\\', '/');
+  const bytes = await readFile(await safePath(root, artifactPath));
+  return { path: artifactPath, sha256: digest(bytes), templateVersion: input.templateVersion };
+}
+
+export async function registerEnhancedWorkflow(
+  root: string,
+  input: EnhancedWorkflowInput,
+  options: MutationOptions = {},
+) {
+  const request = {
+    mutationId: input.mutationId,
+    taskId: input.taskId,
+    expectedRevision: input.expectedRevision,
+    criteria: input.criteria ?? null,
+    artifacts: input.artifacts,
+    checks: input.checks,
+  };
+  return mutate(
+    root,
+    request,
+    async ({ state, root: projectRoot, clock, mutationId, hash }) => {
+      if (state.schemaVersion < 2)
+        throw new TaskStateError(
+          'Enhanced workflows require an explicit task-state migration to version 2.',
+          'TASK_STATE_MIGRATION_REQUIRED',
+          '$.schemaVersion',
+        );
+      const task = findTask(state, input.taskId);
+      assertExpected(task, input.expectedRevision);
+      ensureMutable(task);
+      const criteria = input.criteria
+        ? reconcileCriteria(task.criteria, input.criteria, clock)
+        : task.criteria;
+      const required = criteria.filter((criterion) => criterion.required);
+      if (required.length === 0)
+        throw new TaskStateError(
+          'Enhanced workflows require at least one required criterion.',
+          'TASK_ENHANCED_WORKFLOW_INVALID',
+          '$.criteria',
+        );
+      if (!input.artifacts || !input.checks || !Array.isArray(input.checks))
+        throw new TaskStateError(
+          'Enhanced artifacts and checks are required.',
+          'TASK_ENHANCED_WORKFLOW_INVALID',
+          '$',
+        );
+      const criterionIds = new Set(criteria.map((criterion) => criterion.id));
+      const checkIds = new Set<string>();
+      const checks: EnhancedCheck[] = input.checks.map((check, index) => {
+        const at = `$.checks[${index}]`;
+        if (!check || !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(check.id))
+          throw new TaskStateError(
+            'Check ID must be lowercase and portable.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            `${at}.id`,
+          );
+        if (checkIds.has(check.id))
+          throw new TaskStateError(
+            'Check IDs must be unique.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            `${at}.id`,
+          );
+        checkIds.add(check.id);
+        validateStableId(check.criterionId, 'criterion', `${at}.criterionId`);
+        if (!criterionIds.has(check.criterionId))
+          throw new TaskStateError(
+            'Check references an unknown criterion.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            `${at}.criterionId`,
+          );
+        if (!['cli', 'http', 'browser', 'manual'].includes(check.type))
+          throw new TaskStateError(
+            'Unknown check type.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            `${at}.type`,
+          );
+        return {
+          ...check,
+          definitionSha256: digest(canonical(check)!),
+        };
+      });
+      for (const criterion of required) {
+        if (!checks.some((check) => check.criterionId === criterion.id))
+          throw new TaskStateError(
+            'Every required criterion must map to at least one check.',
+            'TASK_ENHANCED_WORKFLOW_INVALID',
+            '$.checks',
+          );
+      }
+      const artifacts = {
+        prd: await enhancedArtifact(projectRoot, input.artifacts.prd, '$.artifacts.prd'),
+        technicalPlan: await enhancedArtifact(
+          projectRoot,
+          input.artifacts.technicalPlan,
+          '$.artifacts.technicalPlan',
+        ),
+      };
+      const at = iso(clock);
+      const previous = task.enhancedWorkflow;
+      task.criteria = criteria;
+      task.enhancedWorkflow = {
+        schemaVersion: 1,
+        revision: previous ? previous.revision + 1 : 1,
+        enrolledAt: previous?.enrolledAt ?? at,
+        updatedAt: at,
+        artifacts,
+        checks,
+      };
+      if (task.state === 'completed') task.state = 'planned';
+      commitEvent(state, task, { mutationId, type: 'enhanced-workflow.registered', hash, clock });
+      return task;
+    },
+    options,
+  );
+}
+
 export async function reviseCriteria(
   root: string,
   input: TaskMutationInput & { criteria: CriterionInput[] },
@@ -443,46 +645,7 @@ export async function reviseCriteria(
       const task = findTask(state, input.taskId);
       assertExpected(task, input.expectedRevision);
       ensureMutable(task);
-      if (!Array.isArray(input.criteria))
-        throw new TaskStateError('Expected an array.', 'TASK_STATE_INVALID', '$.criteria');
-      const current = new Map(task.criteria.map((item) => [item.id, item]));
-      const at = iso(clock);
-      const next = input.criteria.map((item, index) => {
-        if (!item || typeof item.description !== 'string' || !item.description.trim())
-          throw new TaskStateError(
-            'Criterion description is required.',
-            'TASK_STATE_INVALID',
-            `$.criteria[${index}].description`,
-          );
-        const previous = item.id
-          ? current.get(validateStableId(item.id, 'criterion', `$.criteria[${index}].id`))
-          : null;
-        const candidate = {
-          description: item.description,
-          required: item.required ?? true,
-          approvalRequired: item.approvalRequired ?? false,
-        };
-        if (!previous)
-          return { id: id('criterion'), revision: 1, ...candidate, createdAt: at, updatedAt: at };
-        const changed =
-          previous.description !== candidate.description ||
-          previous.required !== candidate.required ||
-          previous.approvalRequired !== candidate.approvalRequired;
-        return {
-          ...previous,
-          ...candidate,
-          revision: changed ? previous.revision + 1 : previous.revision,
-          updatedAt: changed ? at : previous.updatedAt,
-        };
-      });
-      const ids = new Set(next.map((item) => item.id));
-      if (ids.size !== next.length)
-        throw new TaskStateError(
-          'Criterion IDs must be unique.',
-          'TASK_STATE_INVALID',
-          '$.criteria',
-        );
-      task.criteria = next;
+      task.criteria = reconcileCriteria(task.criteria, input.criteria, clock);
       if (task.state === 'completed') task.state = 'planned';
       commitEvent(state, task, { mutationId, type: 'criteria.revised', hash, clock });
       return task;
@@ -729,10 +892,19 @@ export async function recordEvidence(
         const authorization = normalizeAuthorization(input.authorization, clock);
         task.authorizations.push(authorization);
         authorizationId = authorization.id;
-      } else if (kind !== 'check')
+      } else if (kind !== 'check' && !/^enhanced-check:[a-z0-9][a-z0-9._-]{0,127}$/.test(kind))
         throw new TaskStateError(
-          'Evidence kind must be check or approval.',
+          'Evidence kind must be check, approval, or a registered enhanced check.',
           'TASK_STATE_INVALID',
+          '$.kind',
+        );
+      if (
+        kind.startsWith('enhanced-check:') &&
+        !task.enhancedWorkflow?.checks.some((check) => `enhanced-check:${check.id}` === kind)
+      )
+        throw new TaskStateError(
+          'Enhanced evidence must reference a registered check.',
+          'TASK_EVIDENCE_REJECTED',
           '$.kind',
         );
       task.evidence.push({
@@ -854,7 +1026,75 @@ function verificationFailures(task: Task, source: SourceSnapshot): VerificationF
       failures.push({ criterionId: criterion.id, reason: 'approval-required' });
     }
   }
+  if (task.enhancedWorkflow) {
+    const required = task.criteria.filter((item) => item.required);
+    if (required.length === 0)
+      failures.push({ criterionId: 'enhanced-workflow', reason: 'missing-required-criterion' });
+    for (const criterion of required) {
+      const checks = task.enhancedWorkflow.checks.filter(
+        (check) => check.criterionId === criterion.id,
+      );
+      if (checks.length === 0) {
+        failures.push({ criterionId: criterion.id, reason: 'missing-check-mapping' });
+        continue;
+      }
+      for (const check of checks) {
+        const evidence = task.evidence
+          .filter(
+            (item) =>
+              item.criterionId === criterion.id &&
+              item.criterionRevision === criterion.revision &&
+              item.kind === `enhanced-check:${check.id}` &&
+              sourceEqual(item.source, source),
+          )
+          .at(-1);
+        if (!evidence)
+          failures.push({ criterionId: criterion.id, reason: `missing-check:${check.id}` });
+        else if (evidence.outcome !== 'passed')
+          failures.push({
+            criterionId: criterion.id,
+            reason: `check-${check.id}-outcome-${evidence.outcome}`,
+          });
+      }
+    }
+  }
   return failures;
+}
+
+export async function migrateTaskState(
+  root: string,
+  { dryRun = false, faultBoundary }: { dryRun?: boolean } & StateWriteOptions = {},
+) {
+  root = await resolveProjectRoot(root);
+  return withTaskStateLock(root, async () => {
+    await cleanupTaskStateTemps(root);
+    const raw = await readOptional(root, TASK_STATE_PATH);
+    if (raw === null) {
+      const state = await readTaskState(root);
+      return { action: 'current' as const, fromVersion: 2, toVersion: 2, backup: null, state };
+    }
+    const state = await readTaskState(root, { allowMissing: false });
+    if (state.schemaVersion === 2)
+      return { action: 'current' as const, fromVersion: 2, toVersion: 2, backup: null, state };
+    const backup = `.latchkit/backups/task-state.v1.${digest(raw)}.json`;
+    const migrated: TaskState = {
+      ...state,
+      schemaVersion: 2,
+      tasks: state.tasks.map((task) => ({ ...task, enhancedWorkflow: null })),
+    };
+    if (dryRun)
+      return { action: 'migrate' as const, fromVersion: 1, toVersion: 2, backup, state: migrated };
+    const existing = await readOptional(root, backup);
+    if (existing !== null && existing !== raw)
+      throw new TaskStateError(
+        `Migration backup already exists with different contents: ${backup}.`,
+        'TASK_STATE_MIGRATION_BACKUP_CONFLICT',
+        '$.backup',
+      );
+    if (existing === null) await writeAtomic(root, backup, raw, 0o600);
+    await writeTaskState(root, migrated, { faultBoundary });
+    return { action: 'migrated' as const, fromVersion: 1, toVersion: 2, backup, state: migrated };
+  });
 }
 
 export async function verifyTask(

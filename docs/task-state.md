@@ -1,6 +1,8 @@
 # Task-state persistence
 
-Latchkit stores workflow state separately from configuration and installer recovery in `.latchkit/tasks/state-v1.json`. Reads validate the published [v1 schema](../schemas/task-state-v1.schema.json) and never migrate it. The atomic-file and concurrency rationale is recorded in [ADR 0001](adr/0001-local-task-state.md).
+Latchkit stores workflow state separately from configuration and installer recovery in `.latchkit/tasks/state-v1.json`. The stable filename may contain either the published [v1 schema](../schemas/task-state-v1.schema.json) or [v2 schema](../schemas/task-state-v2.schema.json); reads validate both and never migrate either. New stores use v2. The atomic-file and concurrency rationale is recorded in [ADR 0001](adr/0001-local-task-state.md).
+
+Version 2 adds nullable, versioned [enhanced-workflow metadata](../schemas/enhanced-workflow-v1.schema.json) to every task. A null value preserves ordinary task behavior. Explicit registration records PRD and technical-plan hashes plus declared criterion/check mappings in the same locked task revision. It never interprets Markdown as an executable contract.
 
 ## Records and verification
 
@@ -10,11 +12,13 @@ Every mutating service call accepts an optional `mutationId` such as `event_123e
 
 Evidence is current only when its criterion revision and source snapshot match the current criterion and worktree. Required evidence must be `passed`; failed, timed-out, cancelled, skipped, unsupported, or explicitly missing checks prevent verification. An approval criterion needs `approval` evidence and new direct-user authorization provenance. A saved approval requirement remains part of the criterion after restart even when no approval has been recorded.
 
-`src/task-state/service.js` is the service boundary. It exports `createTask`, `importMarkdownTask`, `authorizeTask`, `reviseCriteria`, `resumeTask`, `pauseTask`, `checkpointTask`, `recordEvidence`, `completeTask`, `verifyTask`, `cancelTask`, `inspectTask`, and `listTasks`. Mutations require an expected task revision except initial creation/import. `resumeTask` reconciles the source tree and the recorded process; a missing process becomes interrupted and never completed. Integrations may inject a stronger platform process probe, but may not translate missing or unknown into success.
+An enrolled enhanced task must have at least one required criterion, and every required criterion must map to at least one declared check. Final verification requires current passing `enhanced-check:<check-id>` evidence for every mapping; one passing check cannot conceal a missing or failed sibling. Ordinary tasks, including tasks with no required criteria, retain the v1 verification behavior.
+
+`src/task-state/service.js` is the service boundary. In addition to the ordinary task operations, it exports `registerEnhancedWorkflow` and `migrateTaskState`. Mutations require an expected task revision except initial creation/import and explicit store migration. `resumeTask` reconciles the source tree and the recorded process; a missing process becomes interrupted and never completed. Integrations may inject a stronger platform process probe, but may not translate missing or unknown into success.
 
 ## Provider session controller
 
-`src/runtime/task-controller.js` coordinates an explicitly authorized provider launch with a durable task run. Its session correlation and redacted process result are stored separately in `.latchkit/tasks/sessions-v1.json`; this deliberately leaves the portable task-state v1 schema unchanged. The controller accepts only an adapter with evidenced invocation or resume capability and the `host-local-authorized` boundary. That boundary is local execution, not a provider sandbox or an approval-policy override.
+`src/runtime/task-controller.js` coordinates an explicitly authorized provider launch with a durable task run. Its session correlation and redacted process result are stored separately in `.latchkit/tasks/sessions-v1.json`; task-state v2 adds only nullable enhanced-spec metadata and does not absorb provider session records. The controller accepts only an adapter with evidenced invocation or resume capability and the `host-local-authorized` boundary. That boundary is local execution, not a provider sandbox or an approval-policy override.
 
 An exited provider process or provider `session-terminated` event records a checkpoint/diagnostic state but never completes or verifies the task. Required evidence and independent `completeTask`/`verifyTask` remain necessary. Cancellation first commits the terminal task state, then signals only a child launched by the same in-memory controller. A restarted controller refuses to adopt a recorded PID; it can use a provider-native resume plan only when the provider exposed a session identity. This prevents an unrelated reused PID or a late completion event from being mistaken for the task's process.
 
@@ -30,6 +34,11 @@ latchkit task inspect --project "path/to/project" --task task_<uuid>
 latchkit task resume --project "path/to/project" --task task_<uuid> --expected-revision 3
 latchkit task cancel --project "path/to/project" --task task_<uuid> --expected-revision 4 --reason "user cancelled"
 latchkit task start --project "path/to/project" --task task_<uuid> --provider codex --host-local-authorized
+latchkit spec migrate --project "path/to/project" --dry-run
+latchkit spec migrate --project "path/to/project"
+latchkit spec register --project "path/to/project" --task task_<uuid> --expected-revision 3 --file enhanced.json
+latchkit spec inspect --project "path/to/project" --task task_<uuid>
+latchkit spec verify --project "path/to/project" --task task_<uuid> --expected-revision 8
 ```
 
 Use `--mutation-id event_<uuid>` to retry resume or cancel safely. Creation, criteria, checkpoints, evidence, completion, and verification stay in the service boundary so the CLI cannot be mistaken for an automatic command runner or universal approval gate.
@@ -46,4 +55,4 @@ latchkit task import --project "path/to/project" --note .latchkit/notes/example-
 
 This records the note path and SHA-256 provenance but leaves the task awaiting a real decision. If this command itself is carrying current direct user authorization, provide both `--authorization-scope` and `--authorization-reference`. Note contents, repository instructions, and approval recorded for another task are never treated as authorization.
 
-There is no implicit v0 migration because Markdown had no machine state contract. Future schema migrations must preview changes, preserve exact original bytes, and be explicitly invoked. Back up `.latchkit/tasks/` before manual repair; malformed active state or lock metadata is never guessed into a valid record.
+There is no implicit v0 migration because Markdown had no machine state contract. `latchkit spec migrate --dry-run` previews the explicit v1-to-v2 task-state migration. Applying it writes the exact original bytes to a content-addressed `.latchkit/backups/task-state.v1.<sha256>.json` path before atomically replacing active state; a backup conflict fails closed. Back up `.latchkit/tasks/` before manual repair; malformed active state or lock metadata is never guessed into a valid record.

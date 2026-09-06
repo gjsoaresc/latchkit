@@ -15,7 +15,9 @@ import {
   createTask,
   importMarkdownTask,
   inspectTask,
+  migrateTaskState,
   recordEvidence,
+  registerEnhancedWorkflow,
   resumeTask,
   reviseCriteria,
   verifyTask,
@@ -358,6 +360,252 @@ test('Markdown import preserves the note, records provenance, and cannot invent 
     authorization: authorization('resume imported task'),
   });
   assert.equal(authorized.state, 'planned');
+});
+
+test('enhanced workflow registration is atomic, explicit, and revision-bound', async (t) => {
+  const root = await fixture(t);
+  const notes = path.join(root, '.latchkit', 'notes');
+  await fs.mkdir(notes, { recursive: true });
+  await fs.writeFile(path.join(notes, 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(notes, 'plan.md'), '# Plan\n');
+  const created = await createTask(root, {
+    title: 'Enhanced task',
+    authorization: authorization(),
+    criteria: [{ description: 'first result' }, { description: 'second result', required: false }],
+  });
+  const before = JSON.stringify(await readTaskState(root));
+  await assert.rejects(
+    registerEnhancedWorkflow(root, {
+      taskId: created.id,
+      expectedRevision: created.revision,
+      artifacts: {
+        prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+        technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+      },
+      checks: [{ id: 'wrong', criterionId: `criterion_${randomUUID()}`, type: 'cli' }],
+    }),
+    { code: 'TASK_ENHANCED_WORKFLOW_INVALID' },
+  );
+  assert.equal(JSON.stringify(await readTaskState(root)), before);
+
+  const registered = await registerEnhancedWorkflow(root, {
+    taskId: created.id,
+    expectedRevision: created.revision,
+    artifacts: {
+      prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+      technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+    },
+    checks: [{ id: 'first-cli', criterionId: created.criteria[0].id, type: 'cli' }],
+  });
+  assert.equal(registered.enhancedWorkflow.schemaVersion, 1);
+  assert.equal(registered.enhancedWorkflow.revision, 1);
+  assert.equal(registered.enhancedWorkflow.checks[0].id, 'first-cli');
+  assert.match(registered.enhancedWorkflow.artifacts.prd.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(registered.criteria.length, 2);
+  await assert.rejects(
+    registerEnhancedWorkflow(root, {
+      taskId: created.id,
+      expectedRevision: created.revision,
+      artifacts: {
+        prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+        technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+      },
+      checks: [{ id: 'first-cli', criterionId: created.criteria[0].id, type: 'cli' }],
+    }),
+    { code: 'TASK_REVISION_CONFLICT' },
+  );
+
+  const empty = await createTask(root, {
+    title: 'Atomic criteria registration',
+    authorization: authorization(),
+    criteria: [],
+  });
+  const criterionId = `criterion_${randomUUID()}`;
+  const withCriteria = await registerEnhancedWorkflow(root, {
+    taskId: empty.id,
+    expectedRevision: empty.revision,
+    criteria: [{ id: criterionId, description: 'registered with metadata' }],
+    artifacts: {
+      prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+      technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+    },
+    checks: [{ id: 'atomic', criterionId, type: 'cli' }],
+  });
+  assert.equal(withCriteria.criteria[0].id, criterionId);
+  assert.equal(withCriteria.enhancedWorkflow.checks[0].criterionId, criterionId);
+});
+
+test('enhanced verification requires every mapped check while ordinary empty tasks stay compatible', async (t) => {
+  const root = await fixture(t);
+  const notes = path.join(root, '.latchkit', 'notes');
+  await fs.mkdir(notes, { recursive: true });
+  await fs.writeFile(path.join(notes, 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(notes, 'plan.md'), '# Plan\n');
+  let task = await createTask(root, {
+    title: 'Enhanced verification',
+    authorization: authorization(),
+    criteria: [{ description: 'observable result' }],
+  });
+  task = await registerEnhancedWorkflow(root, {
+    taskId: task.id,
+    expectedRevision: task.revision,
+    artifacts: {
+      prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+      technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+    },
+    checks: [
+      { id: 'focused', criterionId: task.criteria[0].id, type: 'cli' },
+      { id: 'final', criterionId: task.criteria[0].id, type: 'cli' },
+    ],
+  });
+  task = await resumeTask(root, { taskId: task.id, expectedRevision: task.revision });
+  task = await recordEvidence(root, {
+    taskId: task.id,
+    runId: task.owner.runId,
+    expectedRevision: task.revision,
+    criterionId: task.criteria[0].id,
+    criterionRevision: task.criteria[0].revision,
+    outcome: 'passed',
+    kind: 'enhanced-check:focused',
+  });
+  task = await completeTask(root, {
+    taskId: task.id,
+    runId: task.owner.runId,
+    expectedRevision: task.revision,
+  });
+  await assert.rejects(
+    verifyTask(root, { taskId: task.id, expectedRevision: task.revision }),
+    (error) => {
+      assert.equal(error.code, 'TASK_NOT_VERIFIABLE');
+      assert.deepEqual(error.failures, [
+        { criterionId: task.criteria[0].id, reason: 'missing-check:final' },
+      ]);
+      return true;
+    },
+  );
+
+  let ordinary = await createTask(root, {
+    title: 'Ordinary empty task',
+    authorization: authorization(),
+    criteria: [],
+  });
+  ordinary = await resumeTask(root, {
+    taskId: ordinary.id,
+    expectedRevision: ordinary.revision,
+  });
+  ordinary = await completeTask(root, {
+    taskId: ordinary.id,
+    runId: ordinary.owner.runId,
+    expectedRevision: ordinary.revision,
+  });
+  ordinary = await verifyTask(root, {
+    taskId: ordinary.id,
+    expectedRevision: ordinary.revision,
+  });
+  assert.equal(ordinary.state, 'verified');
+});
+
+test('task-state v1 reads without mutation and migrates explicitly with an exact backup', async (t) => {
+  const root = await fixture(t);
+  const created = await createTask(root, {
+    title: 'Legacy task',
+    authorization: authorization(),
+    criteria: [{ description: 'legacy result' }],
+  });
+  const file = path.join(root, TASK_STATE_PATH);
+  const current = JSON.parse(await fs.readFile(file, 'utf8'));
+  current.schemaVersion = 1;
+  for (const task of current.tasks) delete task.enhancedWorkflow;
+  const legacy = `${JSON.stringify(current, null, 2)}\n`;
+  await fs.writeFile(file, legacy);
+  assert.equal((await readTaskState(root)).schemaVersion, 1);
+  assert.equal(await fs.readFile(file, 'utf8'), legacy);
+
+  const added = await createTask(root, {
+    title: 'Still ordinary on v1',
+    authorization: authorization(),
+    criteria: [],
+  });
+  assert.equal(Object.hasOwn(added, 'enhancedWorkflow'), false);
+  assert.equal((await readTaskState(root)).schemaVersion, 1);
+  const legacyAfterMutation = await fs.readFile(file, 'utf8');
+
+  const preview = await migrateTaskState(root, { dryRun: true });
+  assert.equal(preview.action, 'migrate');
+  assert.equal(await fs.readFile(file, 'utf8'), legacyAfterMutation);
+  await assert.rejects(
+    migrateTaskState(root, {
+      faultBoundary: async (boundary) => {
+        if (boundary === 'prepared') throw new Error('injected task migration failure');
+      },
+    }),
+    /injected task migration failure/,
+  );
+  assert.equal((await readTaskState(root)).schemaVersion, 1);
+  assert.equal(await fs.readFile(file, 'utf8'), legacyAfterMutation);
+  assert.equal(await fs.readFile(path.join(root, preview.backup), 'utf8'), legacyAfterMutation);
+  const migrated = await migrateTaskState(root);
+  assert.equal(migrated.action, 'migrated');
+  assert.equal((await readTaskState(root)).schemaVersion, 2);
+  assert.equal((await readTaskState(root)).tasks[0].enhancedWorkflow, null);
+  assert.equal(await fs.readFile(path.join(root, migrated.backup), 'utf8'), legacyAfterMutation);
+  assert.equal((await inspectTask(root, created.id)).task.enhancedWorkflow, null);
+});
+
+test('CLI registers and inspects an enhanced specification document', async (t) => {
+  const root = await fixture(t);
+  const notes = path.join(root, '.latchkit', 'notes');
+  await fs.mkdir(notes, { recursive: true });
+  await fs.writeFile(path.join(notes, 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(notes, 'plan.md'), '# Plan\n');
+  const task = await createTask(root, {
+    title: 'CLI enhanced task',
+    authorization: authorization(),
+    criteria: [{ description: 'CLI result' }],
+  });
+  const input = path.join(root, 'enhanced.json');
+  await fs.writeFile(
+    input,
+    JSON.stringify({
+      artifacts: {
+        prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+        technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+      },
+      checks: [{ id: 'cli-result', criterionId: task.criteria[0].id, type: 'cli' }],
+    }),
+  );
+  const registered = JSON.parse(
+    (
+      await execFileAsync(process.execPath, [
+        cli,
+        'spec',
+        'register',
+        '--project',
+        root,
+        '--task',
+        task.id,
+        '--expected-revision',
+        String(task.revision),
+        '--file',
+        input,
+      ])
+    ).stdout,
+  );
+  assert.equal(registered.enhancedWorkflow.checks[0].id, 'cli-result');
+  const inspected = JSON.parse(
+    (
+      await execFileAsync(process.execPath, [
+        cli,
+        'spec',
+        'inspect',
+        '--project',
+        root,
+        '--task',
+        task.id,
+      ])
+    ).stdout,
+  );
+  assert.equal(inspected.artifacts.prd.path, '.latchkit/notes/prd.md');
 });
 
 test('CLI inspect, resume, and cancel operate on a Unicode project path', async (t) => {

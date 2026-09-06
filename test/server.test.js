@@ -119,6 +119,38 @@ test('workflow endpoints require authentication, execution authorization, and cu
   }
 });
 
+test('enhanced specification API registers and inspects revision-bound metadata', async (t) => {
+  const { root, origin, headers } = await fixture(t);
+  await mkdir(path.join(root, '.latchkit', 'notes'), { recursive: true });
+  await writeFile(path.join(root, '.latchkit', 'notes', 'prd.md'), '# PRD\n');
+  await writeFile(path.join(root, '.latchkit', 'notes', 'plan.md'), '# Plan\n');
+  const task = await createTask(root, {
+    title: 'API enhanced task',
+    authorization: { source: 'user', scope: 'register spec', reference: 'api test' },
+    criteria: [{ description: 'API result' }],
+  });
+  assert.equal((await fetch(`${origin}/api/spec?taskId=${task.id}`)).status, 401);
+  const response = await fetch(`${origin}/api/spec/register`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      taskId: task.id,
+      expectedRevision: task.revision,
+      artifacts: {
+        prd: { path: '.latchkit/notes/prd.md', templateVersion: 1 },
+        technicalPlan: { path: '.latchkit/notes/plan.md', templateVersion: 1 },
+      },
+      checks: [{ id: 'api-result', criterionId: task.criteria[0].id, type: 'http' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).enhancedWorkflow.revision, 1);
+  const inspected = await (
+    await fetch(`${origin}/api/spec?taskId=${encodeURIComponent(task.id)}`, { headers })
+  ).json();
+  assert.equal(inspected.enhancedWorkflow.checks[0].id, 'api-result');
+});
+
 test('authenticated API exposes a task-owned diff and revision-bound annotations', async (t) => {
   const { root, origin, headers } = await fixture(t);
   await execFile('git', ['init', root]);

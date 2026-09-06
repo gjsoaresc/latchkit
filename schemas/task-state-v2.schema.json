@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/task-state-v2.schema.json",
+  "title": "Latchkit local task state v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "revision", "createdAt", "updatedAt", "tasks"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "project": { "$ref": "task-state-v1.schema.json#/properties/project" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "state",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "authorizationRequired",
+        "authorizations",
+        "owner",
+        "criteria",
+        "runs",
+        "checkpoints",
+        "evidence",
+        "events",
+        "import",
+        "enhancedWorkflow"
+      ],
+      "properties": {
+        "id": { "$ref": "task-state-v1.schema.json#/$defs/taskId" },
+        "title": { "type": "string", "minLength": 1 },
+        "state": {
+          "enum": [
+            "planned",
+            "running",
+            "awaiting-decision",
+            "blocked",
+            "cancelled",
+            "completed",
+            "verified"
+          ]
+        },
+        "revision": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "authorizationRequired": { "type": "boolean" },
+        "authorizations": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/authorization" }
+        },
+        "owner": { "$ref": "task-state-v1.schema.json#/$defs/owner" },
+        "criteria": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/criterion" }
+        },
+        "runs": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/run" }
+        },
+        "checkpoints": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/checkpoint" }
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "task-state-v1.schema.json#/$defs/event" }
+        },
+        "import": { "$ref": "task-state-v1.schema.json#/$defs/import" },
+        "enhancedWorkflow": {
+          "oneOf": [{ "type": "null" }, { "$ref": "enhanced-workflow-v1.schema.json" }]
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "criterionId",
+        "criterionRevision",
+        "runId",
+        "kind",
+        "command",
+        "environment",
+        "outcome",
+        "artifact",
+        "source",
+        "authorizationId",
+        "createdAt"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^evidence_[0-9a-fA-F-]{36}$" },
+        "criterionId": { "$ref": "task-state-v1.schema.json#/$defs/criterionId" },
+        "criterionRevision": { "type": "integer", "minimum": 1 },
+        "runId": { "$ref": "task-state-v1.schema.json#/$defs/runId" },
+        "kind": {
+          "oneOf": [
+            { "enum": ["check", "approval"] },
+            { "type": "string", "pattern": "^enhanced-check:[a-z0-9][a-z0-9._-]{0,127}$" }
+          ]
+        },
+        "command": { "$ref": "task-state-v1.schema.json#/$defs/nullableString" },
+        "environment": { "$ref": "task-state-v1.schema.json#/$defs/environment" },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "timed-out",
+            "cancelled",
+            "skipped",
+            "unsupported",
+            "missing"
+          ]
+        },
+        "artifact": { "$ref": "task-state-v1.schema.json#/$defs/nullableString" },
+        "source": { "$ref": "task-state-v1.schema.json#/$defs/source" },
+        "authorizationId": {
+          "oneOf": [
+            { "$ref": "task-state-v1.schema.json#/$defs/authorizationId" },
+            { "type": "null" }
+          ]
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

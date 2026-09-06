@@ -17,6 +17,8 @@ Use `.latchkit/notes/<unique-task-slug>-spec.md` for the working artifact. Reuse
 
 Record the requested result, scope, acceptance criteria, relevant files, unresolved choices, and intended verification. Each criterion should describe something observable. Identify decisions that materially affect behavior before implementing them; infer routine details from the project.
 
+For an explicitly enrolled enhanced workflow, use the compact [PRD](../references/prd-template.md) and [technical plan](../references/technical-plan-template.md) templates, then register their paths, hashes, structured criteria, and declared check mappings through the project's enhanced-spec service. Ordinary specification notes remain valid without enrollment; never infer enrollment or executable criteria from Markdown.
+
 Preserve existing user authorization. A request to implement permits ordinary implementation work; this skill does not add a separate plan-approval gate. If the user requested approval before implementation, first prepare the concrete plan and wait for that approval.
 
 ## Implement and verify

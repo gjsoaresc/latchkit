@@ -37,7 +37,13 @@ import {
   updateDiffAnnotation,
 } from './reviews/diff-annotations.js';
 import { createAcceptanceVerifier } from './acceptance/service.js';
-import { listTasks } from './task-state/service.js';
+import {
+  inspectTask,
+  listTasks,
+  migrateTaskState,
+  registerEnhancedWorkflow,
+  verifyTask,
+} from './task-state/service.js';
 import {
   addProjectMemory,
   deleteProjectMemory,
@@ -502,6 +508,25 @@ export async function startServer(root: string, { port = 0 }: { port?: number } 
         } else if (pathname === '/api/tasks/events' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof taskController.observe>[0]>(req);
           respond(res, 200, await serialize(() => taskController.observe(body)));
+        } else if (pathname === '/api/spec' && req.method === 'GET') {
+          await pendingMutation;
+          const taskId = requestUrl.searchParams.get('taskId');
+          if (!taskId) throw fail(400, 'Task ID is required.');
+          const inspected = await inspectTask(root, taskId);
+          respond(res, 200, {
+            taskId,
+            taskRevision: inspected.task.revision,
+            enhancedWorkflow: inspected.task.enhancedWorkflow ?? null,
+          });
+        } else if (pathname === '/api/spec/register' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof registerEnhancedWorkflow>[1]>(req);
+          respond(res, 200, await serialize(() => registerEnhancedWorkflow(root, body)));
+        } else if (pathname === '/api/spec/migration' && req.method === 'POST') {
+          const body = await readJson<{ dryRun?: boolean }>(req);
+          respond(res, 200, await serialize(() => migrateTaskState(root, body)));
+        } else if (pathname === '/api/spec/verify' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof verifyTask>[1]>(req);
+          respond(res, 200, await serialize(() => verifyTask(root, body)));
         } else if (pathname === '/api/reviews' && req.method === 'POST') {
           const body = await readJson(req);
           respond(res, 200, await serialize(() => reviewOrchestrator.run(body)));

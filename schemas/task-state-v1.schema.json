@@ -173,7 +173,17 @@
         "kind": { "enum": ["check", "approval"] },
         "command": { "$ref": "#/$defs/nullableString" },
         "environment": { "$ref": "#/$defs/environment" },
-        "outcome": { "enum": ["passed", "failed", "timed-out", "cancelled", "skipped", "unsupported", "missing"] },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed",
+            "timed-out",
+            "cancelled",
+            "skipped",
+            "unsupported",
+            "missing"
+          ]
+        },
         "artifact": { "$ref": "#/$defs/nullableString" },
         "source": { "$ref": "#/$defs/source" },
         "authorizationId": { "oneOf": [{ "$ref": "#/$defs/authorizationId" }, { "type": "null" }] },

@@ -98,6 +98,8 @@ latchkit memory add --title "Why snapshots" --text "Keep memory locally inspecta
 latchkit memory search --text "snapshots"
 latchkit memory recover --provider codex --budget 2000
 latchkit acceptance verify --task task_... --file acceptance.json --host-local-authorized
+latchkit spec migrate --dry-run
+latchkit spec register --task task_... --expected-revision 3 --file enhanced.json
 ```
 
 Sync preview includes the exact generated project-instruction sections, their provenance, declared command argument arrays, and provider discovery warnings. Latchkit never runs a discovered project command. It adds narrow owned sections to shared `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` files, or separately owned Claude/Cursor rule files, while preserving human-authored text and line endings. See [project instructions](docs/project-instructions.md).

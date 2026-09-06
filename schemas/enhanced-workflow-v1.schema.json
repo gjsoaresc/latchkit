@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/enhanced-workflow-v1.schema.json",
+  "title": "Latchkit enhanced workflow metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "revision", "enrolledAt", "updatedAt", "artifacts", "checks"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 1 },
+    "enrolledAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prd", "technicalPlan"],
+      "properties": {
+        "prd": { "$ref": "#/$defs/artifact" },
+        "technicalPlan": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/check" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "templateVersion"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^\\.latchkit/notes/.+\\.md$" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "templateVersion": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "criterionId", "type", "definitionSha256"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+        "criterionId": { "type": "string", "pattern": "^criterion_[0-9a-fA-F-]{36}$" },
+        "type": { "enum": ["cli", "http", "browser", "manual"] },
+        "definitionSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}
