@@ -29,6 +29,10 @@ type CommonCheck = {
   timeoutMs: number;
   outputLimitBytes: number;
   fixture?: Fixture;
+  /** Optional change-impact scope used only by fast-mode verification to
+   * decide whether this check's prior passing evidence may be reused instead
+   * of rerun. Absent means "no declared scope" (conservative rerun). */
+  watchPaths?: string[];
 };
 export type CliAcceptanceCheck = CommonCheck & {
   type: 'cli';
@@ -86,6 +90,12 @@ const positive = (value: unknown, field: string, fallback: number): number => {
     throw new AcceptanceError('Expected a positive integer.', 'ACCEPTANCE_INVALID', field);
   return value;
 };
+function watchPaths(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || !item))
+    throw new AcceptanceError('Expected an array of paths.', 'ACCEPTANCE_INVALID', field);
+  return [...(value as string[])];
+}
 
 function target(
   value: unknown,
@@ -233,6 +243,7 @@ function validateCheck(value: unknown, index: number): AcceptanceCheck {
   const type = requiredString(value.type, `${field}.type`) as AcceptanceCheckType;
   if (!ACCEPTANCE_CHECK_TYPES.includes(type))
     throw new AcceptanceError('Unknown check type.', 'ACCEPTANCE_INVALID', `${field}.type`);
+  const declaredWatchPaths = watchPaths(value.watchPaths, `${field}.watchPaths`);
   const common: CommonCheck = {
     id,
     criterionId,
@@ -240,6 +251,7 @@ function validateCheck(value: unknown, index: number): AcceptanceCheck {
     timeoutMs: positive(value.timeoutMs, `${field}.timeoutMs`, 15_000),
     outputLimitBytes: positive(value.outputLimitBytes, `${field}.outputLimitBytes`, 64 * 1024),
     fixture: fixture(value.fixture, `${field}.fixture`),
+    ...(declaredWatchPaths !== undefined ? { watchPaths: declaredWatchPaths } : {}),
   };
   if (type === 'cli') {
     if (value.fixture !== undefined)

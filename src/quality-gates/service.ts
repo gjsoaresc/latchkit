@@ -5,13 +5,20 @@ import {
   validateProviderContract,
 } from '../providers/contracts.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../runtime/process-runner.js';
-import { recordEvidence } from '../task-state/service.js';
+import { captureSource, recordEvidence } from '../task-state/service.js';
 import { validateAcceptanceDocument } from '../acceptance/contracts.js';
 import { createAcceptanceVerifier } from '../acceptance/service.js';
 import type { LifecycleEnvelope, ProviderContract, CommandPlan } from '../providers/contracts.js';
 import type { ProcessRunResult, RunProviderProcessOptions } from '../runtime/process-runner.js';
 import type { Task } from '../task-state/contracts.js';
 import { isRecord } from '../types.js';
+import {
+  buildVerificationPlan,
+  DEFAULT_VERIFICATION_MODE,
+  defaultFastBudget,
+  isBudgetExceeded,
+} from '../verification/contracts.js';
+import type { VerificationMode, VerificationStats } from '../verification/contracts.js';
 
 const CHECK_OUTCOMES = new Set([
   'passed',
@@ -55,6 +62,16 @@ type GateInput = {
   ) => boolean | Promise<boolean>;
   signal?: AbortSignal;
   run?: Execution;
+  /** Bounded, change-focused fast verification versus the full standard path.
+   * Defaults to standard, which selects and runs every affected check exactly
+   * as before this option existed. */
+  mode?: VerificationMode;
+  /** Fast-mode-only ceiling on wall-clock time spent executing (not reusing)
+   * checks in one call. Ignored in standard mode. */
+  timeBudgetMs?: number;
+  /** Fast-mode-only ceiling on the number of checks executed (not reused) in
+   * one call. Ignored in standard mode. */
+  maxExecutions?: number;
 };
 
 function redacted(value: unknown): string {
@@ -197,6 +214,9 @@ export async function executeQualityGates({
   isExecutionAuthorized,
   signal,
   run = runProviderProcess,
+  mode = DEFAULT_VERIFICATION_MODE,
+  timeBudgetMs,
+  maxExecutions,
 }: GateInput) {
   if (typeof isExecutionAuthorized !== 'function')
     throw new TypeError('Expected an explicit execution authorization function.');
@@ -208,9 +228,66 @@ export async function executeQualityGates({
     reason?: string | null;
     process?: string;
     artifact?: unknown;
+    reused?: boolean;
   }[] = [];
+  // Only fast mode ever reuses evidence, so only fast mode pays for computing
+  // the current source snapshot (a git call plus, when dirty, a full tree hash).
+  const currentSource =
+    mode === 'fast' ? await captureSource(root) : { revision: null, dirtyFingerprint: null };
+  const plan = buildVerificationPlan({
+    mode,
+    checks: selection.checks,
+    criteria: task.criteria,
+    evidence: task.evidence,
+    currentSource,
+    changedPaths,
+  });
+  const budget = {
+    ...defaultFastBudget(),
+    ...(timeBudgetMs !== undefined ? { timeBudgetMs } : {}),
+    ...(maxExecutions !== undefined ? { maxExecutions } : {}),
+  };
+  const startedAtMs = Date.now();
+  let executed = 0;
+  let skippedForBudget = 0;
+  let fallback: 'standard' | null = null;
+  let fallbackReason: string | null = null;
+  const nextChecks: string[] = [];
   let current = task;
   for (const check of selection.checks) {
+    const entry = plan.entries.find((item) => item.checkId === check.id);
+    if (entry?.reused) {
+      results.push({
+        checkId: check.id,
+        outcome: 'passed',
+        reason: entry.reason,
+        process: 'reused',
+        reused: true,
+      });
+      continue;
+    }
+    if (isBudgetExceeded(mode, startedAtMs, executed, budget)) fallback = 'standard';
+    if (fallback) {
+      fallbackReason ??= `Fast-mode time/execution budget exceeded after ${executed} executed check(s).`;
+      const criterion = current.criteria.find((item) => item.id === check.criterionId);
+      if (!current.owner || !criterion)
+        throw new TypeError('Quality gate task ownership or criterion is unavailable.');
+      current = await recordEvidence(root, {
+        taskId: current.id,
+        runId: current.owner.runId,
+        expectedRevision: current.revision,
+        criterionId: check.criterionId,
+        criterionRevision: criterion.revision,
+        outcome: 'skipped',
+        command: check.label,
+        environmentDetails: 'fast-mode; time/execution budget exceeded before this check ran',
+        artifact: JSON.stringify({ checkId: check.id, status: 'fast-mode-budget-exceeded' }),
+      });
+      results.push({ checkId: check.id, outcome: 'skipped', reason: fallbackReason });
+      skippedForBudget += 1;
+      nextChecks.push(check.id);
+      continue;
+    }
     if (selection.limitation && event.payload.decisionMode === 'blocking') {
       const criterion = current.criteria.find((item) => item.id === check.criterionId);
       if (!current.owner || !criterion)
@@ -256,6 +333,7 @@ export async function executeQualityGates({
       if (!accepted)
         throw new TypeError('Acceptance verifier did not return an executed check result.');
       current = acceptance.task;
+      executed += 1;
       results.push({
         checkId: check.id,
         outcome: accepted.outcome,
@@ -272,6 +350,7 @@ export async function executeQualityGates({
       outputLimitBytes: check.outputLimitBytes,
       signal,
     });
+    executed += 1;
     const outcome = evidenceOutcome(processResult);
     const criterion = current.criteria.find((item) => item.id === check.criterionId);
     if (!current.owner || !criterion)
@@ -290,12 +369,26 @@ export async function executeQualityGates({
     results.push({ checkId: check.id, outcome, process: processResult.status });
   }
   const failed = results.some((result) => result.outcome !== 'passed');
+  const stats: VerificationStats = {
+    mode,
+    selected: plan.entries.filter((item) => item.selected).length,
+    reused: plan.entries.filter((item) => item.reused).length,
+    executed,
+    skippedForBudget,
+    elapsedMs: Date.now() - startedAtMs,
+    fallback,
+    fallbackReason,
+    nextChecks,
+    usage: null,
+  };
   return {
     status: failed ? 'failed' : 'passed',
     decision: failed ? selection.decision : 'advisory',
     limitation: selection.limitation,
     results,
     task: current,
+    plan,
+    stats,
   };
 }
 
@@ -303,7 +396,13 @@ export async function executeQualityGates({
  * support is absent, and ignores ordinary lifecycle discussion events. */
 export function createQualityGateHandler(options: Omit<GateInput, 'task' | 'event'>) {
   return async (task: Task, event: Readonly<LifecycleEnvelope>) =>
-    executeQualityGates({ ...options, task, event });
+    executeQualityGates({
+      // Default to the task's own persisted mode; an explicit option still wins.
+      mode: task.verificationMode,
+      ...options,
+      task,
+      event,
+    });
 }
 
 export { CHECK_OUTCOMES, redacted as redactQualityGateText };

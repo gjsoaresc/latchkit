@@ -1,5 +1,9 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { resolveDefaultVerificationMode } from '../verification/service.js';
+import type { VerificationMode } from '../verification/contracts.js';
 import {
   AgentOutcome,
   WorkflowOutcome,
@@ -36,6 +40,33 @@ import {
   verifyTask,
 } from '../task-state/service.js';
 import type { SourceSnapshot, Task } from '../task-state/contracts.js';
+
+const execFileAsync = promisify(execFile);
+
+/** Best-effort list of paths currently different from HEAD (tracked diffs plus
+ * untracked files), used only to scope fast-mode evidence reuse. Returns
+ * undefined outside a Git working tree or on any failure, which callers must
+ * treat as "unknown change scope" rather than "nothing changed". */
+async function computeChangedPaths(root: string): Promise<string[] | undefined> {
+  try {
+    const [{ stdout: tracked }, { stdout: untracked }] = await Promise.all([
+      execFileAsync('git', ['-C', root, 'diff', '--name-only', 'HEAD', '--'], {
+        windowsHide: true,
+      }),
+      execFileAsync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard', '--'], {
+        windowsHide: true,
+      }),
+    ]);
+    const paths = new Set(
+      [...tracked.split(/\r?\n/), ...untracked.split(/\r?\n/)]
+        .map((line) => line.trim().replaceAll('\\', '/'))
+        .filter(Boolean),
+    );
+    return [...paths];
+  } catch {
+    return undefined;
+  }
+}
 
 const LIVE_ACTION_OWNERS = new Set<string>();
 
@@ -123,6 +154,10 @@ export type WorkflowRunInput = {
   expectedRevision?: number;
   mutationId?: string;
   checksDocument?: unknown;
+  /** Fast/standard verification selection for a newly created task. Ignored
+   * when resuming an existing task: an existing task keeps its own persisted
+   * mode unless explicitly changed through task-state's setVerificationMode. */
+  verificationMode?: VerificationMode;
 };
 
 export type WorkflowResumeResolution = {
@@ -798,7 +833,8 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
   ): Promise<void> {
     if (!record.plan)
       throw new WorkflowError('Approved checks are missing.', 'WORKFLOW_CHECKS_INVALID');
-    await ensureRunningTask(record);
+    const inspected = await ensureRunningTask(record);
+    const mode = inspected.task.verificationMode ?? 'standard';
     const pending = await journal(record, action, ownerId, canonicalJson(record.plan.checks));
     try {
       const document = validateAcceptanceDocument(record.plan.checks);
@@ -807,6 +843,8 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         document: correlatedChecks(document, pending.actionId),
         executionAuthorized: record.executionAuthorized,
         signal: abort.signal,
+        mode,
+        changedPaths: mode === 'fast' ? await computeChangedPaths(root) : undefined,
       });
       if (abort.signal.aborted)
         throw new WorkflowError(
@@ -814,9 +852,15 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
           'WORKFLOW_CANCELLED',
         );
       const passed = result.status === 'passed';
+      const fallbackNote = result.stats?.fallback
+        ? ` Fast-mode verification could not establish a full result before its bound (${
+            result.stats.fallbackReason ?? 'time budget exceeded'
+          }); next check(s): ${result.stats.nextChecks.join(', ') || 'none reported'}. Rerun with standard mode to establish confidence.`
+        : '';
       await commitAction(pending, {
         status: passed ? 'passed' : 'failed',
-        summary: passed ? 'Acceptance checks passed.' : 'Acceptance checks failed.',
+        summary:
+          (passed ? 'Acceptance checks passed.' : 'Acceptance checks failed.') + fallbackNote,
       });
     } catch (error) {
       if (abort.signal.aborted)
@@ -1097,6 +1141,9 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       prompt = input.prompt?.trim() || task.title;
     } else {
       prompt = requiredText(input.prompt, 'prompt');
+      const verificationMode =
+        input.verificationMode ??
+        (await resolveDefaultVerificationMode(root).catch(() => undefined));
       task = await tasks.create(root, {
         title: prompt,
         criteria: [{ description: prompt, required: true, approvalRequired: false }],
@@ -1107,6 +1154,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
           reference: selectedMutationId,
         },
         mutationId: selectedMutationId,
+        ...(verificationMode ? { verificationMode } : {}),
       });
     }
     if (!task.criteria.some((criterion) => criterion.required))

@@ -185,6 +185,7 @@ export function WorkflowConsole({
   const [loaded, setLoaded] = useState(false);
   const [provider, setProvider] = useState('');
   const [reviewer, setReviewer] = useState('');
+  const [verificationMode, setVerificationMode] = useState('standard');
   const selected = providers.some((item) => item.id === provider)
     ? provider
     : providers[0]?.id || '';
@@ -227,6 +228,7 @@ export function WorkflowConsole({
                 providerId: selected,
                 ...(selectedReviewer ? { reviewProviderId: selectedReviewer } : {}),
                 executionAuthorized: values.get('authorized') === 'on',
+                verificationMode,
               },
             });
             form.reset();
@@ -266,6 +268,17 @@ export function WorkflowConsole({
                 {item.label}
               </option>
             ))}
+          </NativeSelect>
+        </Label>
+        <Label>
+          Verification mode
+          <NativeSelect
+            value={verificationMode}
+            onChange={(event) => setVerificationMode(event.target.value)}
+            aria-label="Verification mode"
+          >
+            <option value="standard">Standard — run every check every time</option>
+            <option value="fast">Fast — bounded, change-focused checks with evidence reuse</option>
           </NativeSelect>
         </Label>
         <Label className="authorization memory-text-label">

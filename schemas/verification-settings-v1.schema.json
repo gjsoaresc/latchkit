@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/verification-settings-v1.schema.json",
+  "title": "Latchkit project verification settings v1",
+  "description": "Project-level default fast/standard verification mode. Explicit task and workflow entrypoints may override this default per task; the persisted default never changes an existing task's own recorded mode.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "revision", "settings", "createdAt", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^project_[0-9a-fA-F-]{36}$" }
+      }
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["defaultMode"],
+      "properties": {
+        "defaultMode": { "enum": ["fast", "standard"] }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

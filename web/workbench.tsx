@@ -225,7 +225,8 @@ export function TaskList({
             <div className="task-detail">
               <p className="section-note">
                 Revision {task.revision} · process{' '}
-                {task.reconciliation?.recordedProcess ?? 'unknown'}
+                {task.reconciliation?.recordedProcess ?? 'unknown'} · verification{' '}
+                {task.verificationMode ?? 'standard'}
               </p>
               <strong>Acceptance criteria</strong>
               <ul>

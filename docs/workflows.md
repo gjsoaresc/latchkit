@@ -36,6 +36,17 @@ afterward. On restart, the controller inspects the checkpoint and current task
 evidence before continuing; it does not infer completion from a provider exit
 status.
 
+Every task carries an explicit `fast` or `standard` verification mode
+(`standard` by default), persisted on the task itself so it survives every
+resume unchanged until an explicit change. `latchkit workflow run` accepts
+`--verification-mode`, applied only when it creates a new task; resuming an
+existing task never changes its mode. When the verification phase runs, the
+controller reads the task's own persisted mode and passes it to the acceptance
+verifier, so a workflow started in fast mode stays bounded and change-focused
+across every repair and resume. See [quality gates](quality-gates.md#fast-mode)
+for the bounded plan, evidence-reuse rules, and budget/fallback behavior fast
+mode applies; standard mode's behavior is unchanged from before this existed.
+
 An upgrade that changes the policy, dispatcher, or review prompts cannot resume
 an existing approved checkpoint under the new code. Inspection and cancellation
 remain available. Roll back to the retained version that created the workflow
