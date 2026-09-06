@@ -20,4 +20,8 @@ Hook commands use a Node executable and explicit script arguments when the insta
 
 Authenticated provider smoke tests are intentionally optional and are not run by the default test suite. A smoke procedure should record the Claude version, operating system, skill discovery, hook activation in `/hooks`, invocation, resume, and any unavailable capability; it must not be described as Latchkit verification unless each step was observed.
 
+## Interactive decision surface
+
+Claude Code documents an interactive question tool (commonly called `AskUserQuestion`) and a plan-mode approval flow for presenting an editable plan for user approval, including free-form notes. These are session features of the running Claude Code client, not something Latchkit's adapter installs, invokes, or verifies; the `latchkit-spec` skill's end-of-spec decision prefers whichever is actually present in the current session's own toolset and otherwise falls back to a concise text choice. No other adapter in this repository (Codex, Antigravity CLI, Cursor IDE/CLI) currently has a documented equivalent control recorded here; skills must not assume one exists for those providers.
+
 Sources: [CLI reference](https://code.claude.com/docs/en/cli-usage), [hooks](https://code.claude.com/docs/en/hooks), [hook guide](https://code.claude.com/docs/en/hooks-guide), [skills](https://code.claude.com/docs/en/skills), and [setup](https://code.claude.com/docs/en/setup).

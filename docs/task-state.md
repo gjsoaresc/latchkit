@@ -39,7 +39,30 @@ latchkit spec migrate --project "path/to/project"
 latchkit spec register --project "path/to/project" --task task_<uuid> --expected-revision 3 --file enhanced.json
 latchkit spec inspect --project "path/to/project" --task task_<uuid>
 latchkit spec verify --project "path/to/project" --task task_<uuid> --expected-revision 8
+latchkit spec decision-present --project "path/to/project" --task task_<uuid> \
+  --plan-ref <link-or-path> --plan-digest <sha256> --summary "<one-line summary>"
+latchkit spec decision-approve --project "path/to/project" --task task_<uuid> --expected-revision 1 \
+  --plan-digest <sha256> --scope "src/** and test/**" --reference "maintainer approval"
+latchkit spec decision-notes --project "path/to/project" --task task_<uuid> --expected-revision 2 \
+  --text "<revision notes>" --plan-digest <new-sha256>
+latchkit spec decision-pause --project "path/to/project" --task task_<uuid> --expected-revision 2
+latchkit spec decision-build --project "path/to/project" --task task_<uuid> --expected-revision 3
+latchkit spec decision-inspect --project "path/to/project" --task task_<uuid>
 ```
+
+The `spec decision-*` commands are the durable decision state machine behind the `latchkit-spec`
+skill's end-of-spec offer (approve and build, add notes, or keep the plan for later); see
+[workflow scenarios](workflows.md#plan-only-request-and-the-end-of-spec-decision). One decision
+record exists per task, keyed to a caller-supplied plan reference and a SHA-256 digest of the
+exact plan content, in `.latchkit/workflows/spec-decisions-v1.json`. `decision-approve` binds an
+approval to that exact digest the same way the delivery workflow's approval binds to a plan
+digest (see [delivery workflow policy](architecture.md#delivery-workflow-policy)); a plan that
+changes afterward — for example through `decision-notes` — makes the approval stale
+(`SPEC_DECISION_PLAN_STALE`) rather than silently carrying it forward. `decision-present` and
+`decision-build` are idempotent for a repeated completion event: an unchanged plan or an
+already-started build is returned unchanged rather than re-prompted or re-launched, and reusing a
+`--mutation-id` with different input is rejected (`SPEC_DECISION_IDEMPOTENCY_CONFLICT`) rather than
+silently applied.
 
 Use `--mutation-id event_<uuid>` to retry resume or cancel safely. Creation, criteria, checkpoints, evidence, completion, and verification stay in the service boundary so the CLI cannot be mistaken for an automatic command runner or universal approval gate.
 

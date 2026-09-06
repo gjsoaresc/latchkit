@@ -24,6 +24,14 @@ import {
   resumeTask,
   verifyTask,
 } from './task-state/service.js';
+import {
+  addSpecDecisionNotes,
+  approveSpecDecision,
+  inspectSpecDecision,
+  markSpecBuildStarted,
+  pauseSpecDecision,
+  presentSpecDecision,
+} from './workflows/spec-decision-service.js';
 import { exportSupportBundle, previewSupportBundle } from './diagnostics/bundle.js';
 import { appendEvent } from './diagnostics/logger.js';
 import { operationalError } from './diagnostics/errors.js';
@@ -97,7 +105,9 @@ Usage: latchkit <command> [options]
   remove     Remove unmodified Latchkit skills; keep configuration and notes
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state
-  spec       Register, inspect, migrate, or verify an enhanced specification
+  spec       Register/inspect/migrate/verify an enhanced spec, or present/approve/
+             note/pause/build the end-of-spec decision (approve and build,
+             add revision notes, or keep the plan for later)
   workflow   Run, inspect, approve, resume, or cancel a delivery workflow
   self       Inspect, upgrade, roll back, or uninstall this standalone installation
   review     Run bounded independent reviews
@@ -220,6 +230,8 @@ try {
       base: { type: 'string' },
       'review-provider': { type: 'string' },
       'plan-digest': { type: 'string' },
+      'plan-ref': { type: 'string' },
+      summary: { type: 'string' },
       'requirements-digest': { type: 'string' },
       'checks-digest': { type: 'string' },
       resolution: { type: 'string' },
@@ -314,7 +326,20 @@ try {
         'session',
         'host-local-authorized',
       ],
-      spec: ['project', 'task', 'expected-revision', 'mutation-id', 'file', 'dry-run'],
+      spec: [
+        'project',
+        'task',
+        'expected-revision',
+        'mutation-id',
+        'file',
+        'dry-run',
+        'plan-digest',
+        'plan-ref',
+        'summary',
+        'text',
+        'scope',
+        'reference',
+      ],
       review: ['project', 'task', 'provider', 'prompt', 'host-local-authorized'],
       diff: [
         'project',
@@ -669,16 +694,73 @@ try {
         );
       }
     } else if (command === 'spec') {
-      if (
-        extra.length !== 1 ||
-        !['register', 'update', 'inspect', 'migrate', 'verify'].includes(extra[0] ?? '')
-      )
-        throw new Error('Usage: latchkit spec <register|update|inspect|migrate|verify> [options].');
+      const specActions = [
+        'register',
+        'update',
+        'inspect',
+        'migrate',
+        'verify',
+        'decision-present',
+        'decision-approve',
+        'decision-notes',
+        'decision-pause',
+        'decision-build',
+        'decision-inspect',
+      ];
+      if (extra.length !== 1 || !specActions.includes(extra[0] ?? ''))
+        throw new Error(`Usage: latchkit spec <${specActions.join('|')}> [options].`);
       const action = extra[0];
       if (action === 'migrate') print(await migrateTaskState(root, { dryRun: values['dry-run'] }));
       else if (action === 'inspect')
         print((await inspectTask(root, requiredOption(values.task, 'task'))).task.enhancedWorkflow);
-      else {
+      else if (action === 'decision-inspect')
+        print(await inspectSpecDecision(root, requiredOption(values.task, 'task')));
+      else if (action === 'decision-present')
+        print(
+          await presentSpecDecision(root, {
+            taskId: requiredOption(values.task, 'task'),
+            planRef: requiredOption(values['plan-ref'], 'plan-ref'),
+            planDigest: requiredOption(values['plan-digest'], 'plan-digest'),
+            summary: requiredOption(values.summary, 'summary'),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      else if (
+        ['decision-approve', 'decision-notes', 'decision-pause', 'decision-build'].includes(
+          action ?? '',
+        )
+      ) {
+        const expectedRevision = Number(
+          requiredOption(values['expected-revision'], 'expected-revision'),
+        );
+        if (!Number.isInteger(expectedRevision) || expectedRevision < 1)
+          throw new Error('--expected-revision must be a positive integer.');
+        const common = {
+          taskId: requiredOption(values.task, 'task'),
+          expectedRevision,
+          ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+        };
+        if (action === 'decision-approve')
+          print(
+            await approveSpecDecision(root, {
+              ...common,
+              planDigest: requiredOption(values['plan-digest'], 'plan-digest'),
+              scope: requiredOption(values.scope, 'scope'),
+              reference: requiredOption(values.reference, 'reference'),
+            }),
+          );
+        else if (action === 'decision-notes')
+          print(
+            await addSpecDecisionNotes(root, {
+              ...common,
+              notes: requiredOption(values.text, 'text'),
+              planDigest: requiredOption(values['plan-digest'], 'plan-digest'),
+              ...(values['plan-ref'] ? { planRef: values['plan-ref'] } : {}),
+            }),
+          );
+        else if (action === 'decision-pause') print(await pauseSpecDecision(root, common));
+        else print(await markSpecBuildStarted(root, common));
+      } else {
         const expectedRevision = Number(
           requiredOption(values['expected-revision'], 'expected-revision'),
         );

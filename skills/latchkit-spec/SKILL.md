@@ -21,6 +21,29 @@ For an explicitly enrolled enhanced workflow, use the compact [PRD](../reference
 
 Preserve existing user authorization. A request to implement permits ordinary implementation work; this skill does not add a separate plan-approval gate. If the user requested approval before implementation, first prepare the concrete plan and wait for that approval.
 
+## Offer the end-of-spec decision
+
+When a spec-only request reaches a finished, reviewable plan, do not just stop silently. Show a concise one- or two-sentence summary and a link to the plan — the task's registered plan reference (for example, the value `latchkit spec decision-inspect` or `latchkit task inspect` reports), never a hardcoded note path, since plan storage is not fixed by this skill. Then offer exactly three choices: approve and build now, add notes to request changes, or keep the plan for later.
+
+Register the decision point so it is durable and machine-checkable: `latchkit spec decision-present --task <task-id> --plan-ref <link-or-path> --plan-digest <sha256-of-the-plan-just-shown> --summary "<one-line summary>"`. Reuse the CLI's `--mutation-id event_<uuid>` idempotency pattern for a retried or repeated completion event; the command is safe to call again for the same task — an unchanged plan is a no-op, and an already-approved decision for the current plan is returned unchanged rather than re-asked or rebuilt.
+
+### Prefer the host agent's own native control
+
+Check this session's own currently available tools before choosing how to present the three choices:
+
+- If a structured multi-choice/question tool or an editable plan-approval control (including free-form notes) is actually available in the running session, use it. Claude Code documents such a control (its `AskUserQuestion` tool and plan-mode approval flow — see [the Claude Code adapter notes](../../docs/providers/claude.md)); use it there when available.
+- Otherwise — including Codex, Antigravity CLI, Cursor IDE/CLI, or any session where no such tool is actually present — offer the three choices as concise text and read the reply as ordinary conversation, with free-form notes accepted as plain text.
+
+Only Claude Code has a documented native control for this today. Never claim or invoke a native question/choice/plan-approval tool that is not actually present in the current session's toolset, and never report using a native control when the text fallback was what the user actually saw; do not fabricate capability for a provider merely because another provider has it.
+
+### Handle the answer
+
+- **Approve and build**: `latchkit spec decision-approve --task <task-id> --expected-revision <n> --plan-digest <sha256> --scope "<paths or description>" --reference "<who/what approved it>"`. This binds the approval to the exact plan digest just shown — the same digest-bound approval approach `src/workflows/contracts.ts` uses for the full delivery workflow — so a plan that changes after this point makes the approval stale rather than authorizing the new content. On success, continue into `latchkit-build` (or the existing authorized implementation workflow, for example `latchkit workflow run`) for the same task, preserving its context, named criteria, and the provider's own permission boundaries. Immediately before starting that implementation, call `latchkit spec decision-build --task <task-id> --expected-revision <n>` once so a repeated completion event can never start a second build for the same approval.
+- **Add notes**: revise the plan to address the feedback, then `latchkit spec decision-notes --task <task-id> --expected-revision <n> --text "<the notes>" --plan-digest <new-sha256> [--plan-ref <new-link>]`. This attaches the notes to the same task/plan, updates it to the revised content, and clears any prior approval — a stale approval can never authorize a changed plan. Re-present the revised plan and the same three choices again.
+- **Keep for later**: `latchkit spec decision-pause --task <task-id> --expected-revision <n>` — or simply stop; leaving the prompt unanswered or dismissing it has the same effect. The plan is preserved and nothing is implemented. On resume, `latchkit spec decision-inspect --task <task-id>` restores the pending decision and its current revision before re-presenting it.
+
+Preserve any implementation authorization or plan approval that already exists and is still valid for the current plan; do not introduce a duplicate confirmation when no new user decision is needed.
+
 ## Implement and verify
 
 When implementation is authorized, work in coherent increments and update the note when evidence changes the plan. For behavioral code, use the smallest meaningful failing test when the repository has a suitable test harness. Confirm it fails for the intended behavior, make the change, then run it again. For prose, styling, or trivial configuration, use inspection or focused validation instead of manufacturing tests.
