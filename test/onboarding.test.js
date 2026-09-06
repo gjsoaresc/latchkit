@@ -30,6 +30,7 @@ import {
   updateWorkspacePreference,
 } from '../dist/src/onboarding/service.js';
 import { readOnboardingHandoffState } from '../dist/src/installation/onboarding-state.js';
+import { listProjects } from '../dist/src/projects/service.js';
 
 async function tempProject(t) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-')));
@@ -41,6 +42,24 @@ async function tempInstallRoot(t) {
     await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-install-')),
   );
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  return root;
+}
+
+/** Overrides `LATCHKIT_PROJECTS_ROOT` for the duration of one test so the #94 registry
+ * integration point (`registerProjectWithRegistry`, `source: 'onboarding'`) never touches the
+ * shared per-process registry root `test/env.js` already set, let alone a real per-user
+ * registry. Realpath'd so a comparison against a registered project's own realpath'd root can
+ * never mismatch on a host where the OS temp directory is itself a symlink. */
+async function tempProjectsRegistryRoot(t) {
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-registry-'));
+  const root = await fs.realpath(created);
+  t.after(() => fs.rm(created, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const previous = process.env.LATCHKIT_PROJECTS_ROOT;
+  process.env.LATCHKIT_PROJECTS_ROOT = root;
+  t.after(() => {
+    if (previous === undefined) delete process.env.LATCHKIT_PROJECTS_ROOT;
+    else process.env.LATCHKIT_PROJECTS_ROOT = previous;
+  });
   return root;
 }
 
@@ -79,16 +98,17 @@ test('inspectOnboarding on an uninitialized project is honest: not initialized, 
 
 test('selectProject initializes idempotently, advances the project step, and calls the #94 registry integration point', async (t) => {
   const root = await tempProject(t);
+  await tempProjectsRegistryRoot(t);
   // registerProjectWithRegistry is the named, documented integration point for
-  // #94's future local project registry (see src/onboarding/service.ts). It
-  // is a no-op today but must exist, be exported, and be callable without
-  // throwing so a future registry implementation can replace its body.
+  // #94's local project registry (see src/onboarding/service.ts). It must exist, be exported,
+  // and resolve to a reported outcome without throwing, whatever the registry's state.
   assert.equal(typeof registerProjectWithRegistry, 'function');
   await assert.doesNotReject(registerProjectWithRegistry(root));
 
   const config = await selectProject(root, { providers: ['codex'], skills: ['spec'] });
   assert.deepEqual(config.providers, ['codex']);
   assert.deepEqual(config.skills, ['spec']);
+  assert.equal(config.registryWarning, null, 'a healthy registry reports no warning');
   const afterFirst = await readOnboardingState(root);
   assert.deepEqual(afterFirst.progress.completedStepIds, ['project']);
   assert.equal(afterFirst.progress.status, 'in-progress');
@@ -99,6 +119,87 @@ test('selectProject initializes idempotently, advances the project step, and cal
   assert.deepEqual(again.providers, ['codex']); // unchanged: init never replaces an existing config
   const afterSecond = await readOnboardingState(root);
   assert.deepEqual(afterSecond.progress.completedStepIds, ['project']); // not duplicated
+});
+
+test('selectProject registers the chosen project in the #94 registry with source "onboarding"', async (t) => {
+  const root = await tempProject(t);
+  const registry = await tempProjectsRegistryRoot(t);
+
+  const config = await selectProject(root, { providers: ['codex'], skills: ['spec'] });
+  assert.equal(config.registryWarning, null);
+
+  const listed = await listProjects(registry);
+  assert.equal(listed.projects.length, 1);
+  const entry = listed.projects[0];
+  assert.equal(entry.root, await fs.realpath(root));
+  assert.equal(entry.addedVia, 'onboarding');
+  assert.equal(entry.lastSeenVia, 'onboarding');
+});
+
+test('repeated project selection registers idempotently: no duplicate entry, lastSeenAt/lastSeenVia reconciled', async (t) => {
+  const root = await tempProject(t);
+  const registry = await tempProjectsRegistryRoot(t);
+
+  const first = await selectProject(root, { providers: ['codex'], skills: ['spec'] });
+  assert.equal(first.registryWarning, null);
+  const firstListing = await listProjects(registry);
+  assert.equal(firstListing.projects.length, 1);
+  const firstId = firstListing.projects[0].id;
+  const firstSeenAt = firstListing.projects[0].lastSeenAt;
+
+  // Re-selecting the same project (e.g. resuming onboarding, or re-running the "project" step)
+  // must reconcile the existing registry entry rather than registering a second one.
+  const second = await selectProject(root, { providers: ['codex'] });
+  assert.equal(second.registryWarning, null);
+  const secondListing = await listProjects(registry);
+  assert.equal(secondListing.projects.length, 1, 'a repeated registration never duplicates');
+  assert.equal(secondListing.projects[0].id, firstId, 'the same resolved root reuses the record');
+  assert.equal(secondListing.projects[0].addedVia, 'onboarding', 'addedVia is never overwritten');
+  assert.equal(secondListing.projects[0].lastSeenVia, 'onboarding');
+  assert.ok(
+    Date.parse(secondListing.projects[0].lastSeenAt) >= Date.parse(firstSeenAt),
+    'lastSeenAt is refreshed, not merely repeated',
+  );
+
+  // registerProjectWithRegistry itself is equally idempotent when called directly, independent
+  // of the onboarding step wrapper.
+  const direct = await registerProjectWithRegistry(root);
+  assert.equal(direct.registered, true);
+  assert.equal((await listProjects(registry)).projects.length, 1);
+});
+
+test('an unavailable/unwritable registry root never fails the "project" step; it is reported as a warning instead', async (t) => {
+  const root = await tempProject(t);
+  // A file in place of the registry root directory makes every write inside it fail
+  // (mkdir/lock-acquire against a path component that is not a directory) regardless of file
+  // permissions or platform, unlike a chmod-based read-only directory which the owning user can
+  // still write to on some hosts (including this Windows one).
+  const blockerBase = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-blocked-'));
+  t.after(() =>
+    fs.rm(blockerBase, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+  );
+  const blockedRegistryRoot = path.join(blockerBase, 'not-a-directory');
+  await fs.writeFile(blockedRegistryRoot, 'blocking file, not a directory\n');
+  const previous = process.env.LATCHKIT_PROJECTS_ROOT;
+  process.env.LATCHKIT_PROJECTS_ROOT = blockedRegistryRoot;
+  t.after(() => {
+    if (previous === undefined) delete process.env.LATCHKIT_PROJECTS_ROOT;
+    else process.env.LATCHKIT_PROJECTS_ROOT = previous;
+  });
+
+  const direct = await registerProjectWithRegistry(root);
+  assert.equal(direct.registered, false);
+  assert.match(direct.warning, /local projects registry/i);
+
+  // The onboarding step itself must still succeed end to end: selectProject resolves, the
+  // config is saved, and the "project" step advances — only the registry write failed.
+  const config = await selectProject(root, { providers: ['codex'], skills: ['spec'] });
+  assert.deepEqual(config.providers, ['codex']);
+  assert.ok(config.registryWarning, 'the registry failure is surfaced as a warning');
+  assert.match(config.registryWarning, /local projects registry/i);
+  const state = await readOnboardingState(root);
+  assert.deepEqual(state.progress.completedStepIds, ['project']);
+  assert.equal(state.progress.status, 'in-progress');
 });
 
 test('updateProjectSelection requires at least one field and merges without clobbering the other', async (t) => {

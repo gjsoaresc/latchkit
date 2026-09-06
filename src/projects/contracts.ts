@@ -13,9 +13,19 @@ export const PROJECT_REGISTRY_PATH = 'registry-v1.json';
 export const MAX_DISPLAY_NAME_BYTES = 200;
 
 /** How a project entered the registry. Distinct from `lastSeenVia`, which tracks the most
- * recent touch without erasing how the project was first captured. */
-export const PROJECT_SOURCES = Object.freeze(['init', 'ui-start', 'task-run', 'manual']);
-export type ProjectSource = 'init' | 'ui-start' | 'task-run' | 'manual';
+ * recent touch without erasing how the project was first captured. `onboarding` is the
+ * installation-onboarding wizard's "select/confirm a project" step (issue #100,
+ * `src/onboarding/service.ts`'s `registerProjectWithRegistry`) — kept distinct from `init` so a
+ * project captured through the first-run wizard is distinguishable from one captured by a bare
+ * `latchkit init`. */
+export const PROJECT_SOURCES = Object.freeze([
+  'init',
+  'ui-start',
+  'task-run',
+  'manual',
+  'onboarding',
+]);
+export type ProjectSource = 'init' | 'ui-start' | 'task-run' | 'manual' | 'onboarding';
 
 export type ProjectRecord = {
   schemaVersion: 1;
