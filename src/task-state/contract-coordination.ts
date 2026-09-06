@@ -39,8 +39,17 @@ export type ContractAssociation = {
   mutations: Array<{ id: string; requestDigest: string }>;
 };
 type Document = { schemaVersion: 1; associations: ContractAssociation[] };
+type Journal = {
+  schemaVersion: 1;
+  state: 'prepared' | 'committed';
+  operation: 'create' | 'revise' | 'acknowledge';
+  associationId: string;
+  requestDigest: string;
+  baseDigest: string;
+  target: Document;
+};
 const empty = (): Document => ({ schemaVersion: 1, associations: [] });
-async function read(root: string): Promise<Document> {
+async function readDocument(root: string): Promise<Document> {
   const raw = await readOptional(root, PATH);
   if (!raw) return empty();
   const value = JSON.parse(raw) as Document;
@@ -62,8 +71,63 @@ async function read(root: string): Promise<Document> {
   }
   return value;
 }
+async function recover(root: string): Promise<void> {
+  const raw = await readOptional(root, JOURNAL);
+  if (!raw) return;
+  let journal: Journal;
+  try {
+    journal = JSON.parse(raw) as Journal;
+  } catch {
+    throw new TaskStateError('Contract association journal is malformed.', 'TASK_STATE_INVALID', JOURNAL);
+  }
+  if (
+    journal.schemaVersion !== 1 || !['prepared', 'committed'].includes(journal.state) ||
+    !['create', 'revise', 'acknowledge'].includes(journal.operation) ||
+    typeof journal.associationId !== 'string' ||
+    typeof journal.requestDigest !== 'string' ||
+    typeof journal.baseDigest !== 'string' ||
+    !journal.target || journal.target.schemaVersion !== 1 || !Array.isArray(journal.target.associations)
+  )
+    throw new TaskStateError('Contract association journal has an unsupported shape.', 'TASK_STATE_INVALID', JOURNAL);
+  const current = await readDocument(root);
+  const currentDigest = hash(current);
+  if (journal.state === 'committed') return;
+  if (currentDigest === hash(journal.target)) {
+    await writeAtomic(root, JOURNAL, `${JSON.stringify({ ...journal, state: 'committed' }, null, 2)}\n`);
+    return;
+  }
+  if (currentDigest !== journal.baseDigest)
+    throw new TaskStateError(
+      'Contract association recovery found conflicting external state; preserve the journal for inspection.',
+      'TASK_CONTRACT_CONFLICT',
+      JOURNAL,
+    );
+  await write(root, journal.target);
+}
+async function read(root: string): Promise<Document> {
+  await recover(root);
+  return readDocument(root);
+}
 async function write(root: string, document: Document) {
   await writeAtomic(root, PATH, `${JSON.stringify(document, null, 2)}\n`);
+}
+async function commit(
+  root: string,
+  journal: Omit<Journal, 'state' | 'baseDigest' | 'target'>,
+  base: Document,
+  target: Document,
+) {
+  await writeAtomic(
+    root,
+    JOURNAL,
+    `${JSON.stringify({ ...journal, state: 'prepared', baseDigest: hash(base), target }, null, 2)}\n`,
+  );
+  await write(root, target);
+  await writeAtomic(
+    root,
+    JOURNAL,
+    `${JSON.stringify({ ...journal, state: 'committed', baseDigest: hash(base), target }, null, 2)}\n`,
+  );
 }
 function task(state: Awaited<ReturnType<typeof readTaskState>>, taskId: string) {
   const found = state.tasks.find((item) => item.id === taskId);
@@ -143,6 +207,7 @@ export async function createContractAssociation(
           '$.criterionIds',
         );
     const document = await read(root);
+    const base = structuredClone(document);
     const digest = recordDigest(state, input.producerTaskId, input.producerRecordId);
     const existing = document.associations.find(
       (a) =>
@@ -180,18 +245,8 @@ export async function createContractAssociation(
       updatedAt: now,
       mutations: input.mutationId ? [{ id: input.mutationId, requestDigest: hash(input) }] : [],
     };
-    await writeAtomic(
-      root,
-      JOURNAL,
-      `${JSON.stringify({ schemaVersion: 1, operation: 'create', associationId: association.id })}\n`,
-    );
     document.associations.push(association);
-    await write(root, document);
-    await writeAtomic(
-      root,
-      JOURNAL,
-      `${JSON.stringify({ schemaVersion: 1, operation: 'committed', associationId: association.id })}\n`,
-    );
+    await commit(root, { schemaVersion: 1, operation: 'create', associationId: association.id, requestDigest: hash(input) }, base, document);
     return structuredClone(association);
   });
 }
@@ -210,6 +265,7 @@ export async function proposeContractRevision(
   return withTaskStateLock(root, async () => {
     const state = await readTaskState(root, { allowMissing: false });
     const document = await read(root);
+    const base = structuredClone(document);
     const a = document.associations.find((x) => x.id === input.associationId);
     if (!a)
       throw new TaskStateError(
@@ -249,7 +305,7 @@ export async function proposeContractRevision(
       a.reconciliation = 'pending';
       a.updatedAt = new Date().toISOString();
       if (input.mutationId) a.mutations.push({ id: input.mutationId, requestDigest });
-      await write(root, document);
+      await commit(root, { schemaVersion: 1, operation: 'revise', associationId: a.id, requestDigest }, base, document);
       return structuredClone(a);
     }
     if (current.digest === digest && input.accept !== false) return structuredClone(a);
@@ -269,17 +325,7 @@ export async function proposeContractRevision(
     a.consumerAcknowledgedRevision = null;
     a.updatedAt = now;
     if (input.mutationId) a.mutations.push({ id: input.mutationId, requestDigest });
-    await writeAtomic(
-      root,
-      JOURNAL,
-      `${JSON.stringify({ schemaVersion: 1, operation: 'revise', associationId: a.id })}\n`,
-    );
-    await write(root, document);
-    await writeAtomic(
-      root,
-      JOURNAL,
-      `${JSON.stringify({ schemaVersion: 1, operation: 'committed', associationId: a.id })}\n`,
-    );
+    await commit(root, { schemaVersion: 1, operation: 'revise', associationId: a.id, requestDigest }, base, document);
     return structuredClone(a);
   });
 }
@@ -299,6 +345,7 @@ export async function acknowledgeContractReceipt(
   return withTaskStateLock(root, async () => {
     const state = await readTaskState(root, { allowMissing: false });
     const document = await read(root);
+    const base = structuredClone(document);
     const association = document.associations.find((item) => item.id === input.associationId);
     if (!association)
       throw new TaskStateError(
@@ -342,7 +389,7 @@ export async function acknowledgeContractReceipt(
     association.reconciliation = version.status === 'accepted' ? 'current' : 'pending';
     association.updatedAt = new Date().toISOString();
     if (input.mutationId) association.mutations.push({ id: input.mutationId, requestDigest });
-    await write(root, document);
+    await commit(root, { schemaVersion: 1, operation: 'acknowledge', associationId: association.id, requestDigest }, base, document);
     return structuredClone(association);
   });
 }
