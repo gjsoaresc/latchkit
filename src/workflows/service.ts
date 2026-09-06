@@ -856,9 +856,35 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
     action: WorkflowAction,
     ownerId: string,
     abort: AbortController,
+    task: Task,
   ): Promise<void> {
     if (!record.plan)
       throw new WorkflowError('Approved checks are missing.', 'WORKFLOW_CHECKS_INVALID');
+    // The request can understate consequences. Reinspect the actual bounded
+    // working-tree scope immediately before executing checks, while no new
+    // verifier effect has started. Escalation is durable and deliberately
+    // stops here: it never manufactures approval for a newly high-impact
+    // route or continues through an owned effect with stale authority.
+    const actualRoute = selectRoute({
+      request: record.initialPrompt,
+      criteria: task.criteria.map((criterion) => criterion.description),
+      changedPaths: await computeChangedPaths(root),
+    });
+    if (actualRoute.id === 'high-impact' && record.route?.id !== 'high-impact') {
+      await mutateWorkflow(root, record.taskId, record.revision, (current) => {
+        current.route = actualRoute;
+        current.status = 'blocked';
+        current.lastOutcome = {
+          status: 'error',
+          summary:
+            'Actual changed paths require the high-impact route; inspect the new scope and obtain a current plan and approval before continuing.',
+        };
+      });
+      throw new WorkflowError(
+        'Actual changed paths require high-impact route escalation.',
+        'WORKFLOW_ROUTE_ESCALATED',
+      );
+    }
     const inspected = await ensureRunningTask(record);
     const mode = inspected.task.verificationMode ?? 'standard';
     const pending = await journal(record, action, ownerId, canonicalJson(record.plan.checks));
@@ -1121,7 +1147,8 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
       }
       if (abort.signal.aborted) return workflow(taskId);
       if (action.kind === 'invoke') await invoke(record, action, ownerId, abort, inspected.task);
-      else if (action.kind === 'verify') await executeVerification(record, action, ownerId, abort);
+      else if (action.kind === 'verify')
+        await executeVerification(record, action, ownerId, abort, inspected.task);
       else if (action.kind === 'review')
         await executeReview(record, action, ownerId, inspected.task, abort);
     }
