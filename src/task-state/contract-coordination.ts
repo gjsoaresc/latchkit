@@ -30,6 +30,8 @@ export type ContractAssociation = {
   criterionIds: string[];
   versions: ContractVersion[];
   consumerAcknowledgedDigest: string | null;
+  /** Receipt is deliberately not correctness, acceptance, authorization, or verification. */
+  consumerAcknowledgedRevision: number | null;
   reconciliation: 'current' | 'pending';
   createdAt: string;
   updatedAt: string;
@@ -138,6 +140,7 @@ export async function createContractAssociation(
         { revision: 1, digest, status: 'accepted', proposedAt: now, provenance: input.provenance },
       ],
       consumerAcknowledgedDigest: null,
+      consumerAcknowledgedRevision: null,
       reconciliation: 'current',
       createdAt: now,
       updatedAt: now,
@@ -198,6 +201,7 @@ export async function proposeContractRevision(
     if (a.versions.length > MAX_HISTORY) a.versions.splice(0, a.versions.length - MAX_HISTORY);
     a.reconciliation = 'pending';
     a.consumerAcknowledgedDigest = null;
+    a.consumerAcknowledgedRevision = null;
     a.updatedAt = now;
     await writeAtomic(
       root,
@@ -211,6 +215,45 @@ export async function proposeContractRevision(
       `${JSON.stringify({ schemaVersion: 1, operation: 'committed', associationId: a.id })}\n`,
     );
     return structuredClone(a);
+  });
+}
+/** Records only that the existing consumer controller received this exact producer contract.
+ * It never changes a task, approves a result, or establishes that the consumer is correct. */
+export async function acknowledgeContractReceipt(
+  root: string,
+  input: { associationId: string; expectedConsumerRevision: number; contractDigest: string },
+) {
+  root = await resolveProjectRoot(root);
+  return withTaskStateLock(root, async () => {
+    const state = await readTaskState(root, { allowMissing: false });
+    const document = await read(root);
+    const association = document.associations.find((item) => item.id === input.associationId);
+    if (!association)
+      throw new TaskStateError(
+        'Contract association was not found.',
+        'TASK_NOT_FOUND',
+        '$.associationId',
+      );
+    const consumer = task(state, association.consumerTaskId);
+    if (consumer.revision !== input.expectedConsumerRevision)
+      throw new TaskStateError(
+        'Consumer revision changed.',
+        'TASK_REVISION_CONFLICT',
+        '$.expectedConsumerRevision',
+      );
+    const version = association.versions.at(-1)!;
+    if (version.digest !== input.contractDigest)
+      throw new TaskStateError(
+        'Contract digest changed; acknowledge the current revision.',
+        'TASK_CONTRACT_STALE',
+        '$.contractDigest',
+      );
+    association.consumerAcknowledgedDigest = version.digest;
+    association.consumerAcknowledgedRevision = consumer.revision;
+    association.reconciliation = version.status === 'accepted' ? 'current' : 'pending';
+    association.updatedAt = new Date().toISOString();
+    await write(root, document);
+    return structuredClone(association);
   });
 }
 export async function inspectContractImpact(

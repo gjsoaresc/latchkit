@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   createTask,
   recordTaskRecord,
@@ -13,6 +14,7 @@ import {
   inspectContractImpact,
   proposeContractRevision,
 } from '../dist/src/task-state/contract-coordination.js';
+import { presentResultDecision } from '../dist/src/workflows/result-decision-service.js';
 
 async function decision(root, task, text) {
   const added = await recordTaskRecord(root, {
@@ -65,6 +67,16 @@ test('explicit association retains accepted history and identifies an old consum
   });
   assert.equal(pending.reconciliation, 'pending');
   assert.equal(pending.versions.at(-1).status, 'pending');
+  await assert.rejects(
+    presentResultDecision(root, {
+      taskId: c.task.id,
+      resultRef: 'artifacts/client.patch',
+      resultDigest: createHash('sha256').update('client result').digest('hex'),
+      summary: 'client work remains available',
+      verificationResults: 'not admitted as current',
+    }),
+    { code: 'RESULT_DECISION_CONTRACT_STALE' },
+  );
   const impact = await inspectContractImpact(root, {
     producerTaskId: p.task.id,
     producerRecordId: p.record.id,

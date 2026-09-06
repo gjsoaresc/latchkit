@@ -147,6 +147,7 @@ import {
 } from './integrations/codegraph/service.js';
 import {
   createContractAssociation,
+  acknowledgeContractReceipt,
   inspectContractImpact,
   proposeContractRevision,
 } from './task-state/contract-coordination.js';
@@ -590,6 +591,7 @@ try {
       'consumer-revision': { type: 'string' },
       'criterion-ids': { type: 'string' },
       'association-id': { type: 'string' },
+      'contract-digest': { type: 'string' },
     },
   });
   cliValues = values;
@@ -666,6 +668,7 @@ try {
         'consumer-revision',
         'criterion-ids',
         'association-id',
+        'contract-digest',
       ],
       task: [
         'project',
@@ -1127,6 +1130,7 @@ try {
         'contract-link',
         'contract-impact',
         'contract-revise',
+        'contract-acknowledge',
       ];
       if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
         throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
@@ -1476,6 +1480,19 @@ try {
             expectedProducerRevision: producerRevision,
             provenance: requiredOption(values.reference, 'reference'),
             ...(values.status === 'pending' ? { accept: false } : {}),
+          }),
+        );
+      } else if (action === 'contract-acknowledge') {
+        const consumerRevision = Number(
+          requiredOption(values['consumer-revision'], 'consumer-revision'),
+        );
+        if (!Number.isInteger(consumerRevision))
+          throw new Error('--consumer-revision must be an integer.');
+        print(
+          await acknowledgeContractReceipt(root, {
+            associationId: requiredOption(values['association-id'], 'association-id'),
+            expectedConsumerRevision: consumerRevision,
+            contractDigest: requiredOption(values['contract-digest'], 'contract-digest'),
           }),
         );
       } else {
