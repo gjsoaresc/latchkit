@@ -500,6 +500,12 @@ export function translateAntigravityLifecycleInput(
     )
   )
     throw new ProviderContractError('Unsupported Antigravity hook event.', '$.eventName');
+  if (event === 'PostToolUse') {
+    if (!isRecord(input.toolCall))
+      throw new ProviderContractError('PostToolUse requires a toolCall object.', '$.toolCall');
+    if (!Number.isInteger(input.stepIdx) || (input.stepIdx as number) < 0)
+      throw new ProviderContractError('PostToolUse requires a non-negative stepIdx.', '$.stepIdx');
+  }
   const kind = event === 'Stop' ? 'turn-completed' : null;
   if (!kind) return { accepted: true, event, envelope: null };
   const sessionId = text(context.sessionId ?? input.conversationId, 'sessionId');
@@ -531,12 +537,7 @@ export function translateAntigravityLifecycleOutput(
   event: unknown,
   result: { decision?: unknown } = {},
 ) {
-  if (
-    typeof event !== 'string' ||
-    !ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS.includes(
-      event as (typeof ANTIGRAVITY_DOCUMENTED_HOOK_EVENTS)[number],
-    )
-  )
+  if (event !== 'PostToolUse')
     throw new ProviderContractError('Unsupported Antigravity hook event.', '$.event');
   if (result.decision === undefined || result.decision === 'advisory') return {};
   throw new ProviderContractError(

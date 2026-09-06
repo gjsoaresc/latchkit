@@ -169,7 +169,11 @@ test('Antigravity hook registration is explicit, reversible, and preserves unrel
   assert.deepEqual(Object.keys(installed.latchkit).sort(), [...ANTIGRAVITY_HOOK_EVENTS].sort());
   assert.match(installed.latchkit.PostToolUse[0].hooks[0].command, /--event PostToolUse/);
   assert.ok(await fs.readFile(path.join(root, ANTIGRAVITY_HANDLER_PATH), 'utf8'));
-  const post = await runHook(root, 'PostToolUse', JSON.stringify({ conversationId: 'opaque-id' }));
+  const post = await runHook(
+    root,
+    'PostToolUse',
+    JSON.stringify({ conversationId: 'opaque-id', toolCall: { name: 'read_file' }, stepIdx: 0 }),
+  );
   assert.deepEqual(post, { exitCode: 0, stdout: '{}\n', stderr: '' });
   for (const event of ['PreToolUse', 'PreInvocation', 'PostInvocation', 'Stop']) {
     const refused = await runHook(root, event, '{}');
@@ -179,6 +183,9 @@ test('Antigravity hook registration is explicit, reversible, and preserves unrel
   const malformed = await runHook(root, 'PostToolUse', '{');
   assert.equal(malformed.exitCode, 1);
   assert.match(malformed.stderr, /Invalid Antigravity hook JSON input/);
+  const schemaInvalid = await runHook(root, 'PostToolUse', '{}');
+  assert.equal(schemaInvalid.exitCode, 1);
+  assert.match(schemaInvalid.stderr, /toolCall object and non-negative stepIdx/);
   await applyAntigravityHookExport(root, { enabled: false });
   // The original document's unrelated content survives, while an empty managed namespace is removed.
   const removed = JSON.parse(await fs.readFile(path.join(root, ANTIGRAVITY_HOOKS_PATH), 'utf8'));
@@ -240,14 +247,21 @@ test('Antigravity lifecycle translation is advisory and refuses unsupported deci
       .envelope,
     null,
   );
-  assert.deepEqual(translateAntigravityLifecycleOutput('Stop', { decision: 'advisory' }), {});
+  assert.deepEqual(
+    translateAntigravityLifecycleOutput('PostToolUse', { decision: 'advisory' }),
+    {},
+  );
+  assert.throws(
+    () => translateAntigravityLifecycleOutput('Stop', { decision: 'advisory' }),
+    /Unsupported/,
+  );
   assert.throws(
     () => ANTIGRAVITY_ADAPTER.operations.translateLifecycleInput({}, { eventName: 'Unknown' }),
     /Unsupported/,
   );
   assert.throws(
     () => translateAntigravityLifecycleOutput('PreToolUse', { decision: 'deny' }),
-    /not supported/,
+    /Unsupported/,
   );
   assert.throws(
     () =>
@@ -256,6 +270,10 @@ test('Antigravity lifecycle translation is advisory and refuses unsupported deci
         { eventName: 'Stop', projectId: 'p', taskId: 't' },
       ),
     /sessionId/,
+  );
+  assert.throws(
+    () => ANTIGRAVITY_ADAPTER.operations.translateLifecycleInput({}, { eventName: 'PostToolUse' }),
+    /toolCall/,
   );
 });
 

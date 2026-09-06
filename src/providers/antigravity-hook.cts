@@ -25,6 +25,15 @@ async function main() {
   }
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Expected an Antigravity hook object.');
+  const payload = value as { toolCall?: unknown; stepIdx?: unknown };
+  if (
+    payload.toolCall === null ||
+    typeof payload.toolCall !== 'object' ||
+    Array.isArray(payload.toolCall) ||
+    !Number.isInteger(payload.stepIdx) ||
+    (payload.stepIdx as number) < 0
+  )
+    throw new Error('PostToolUse requires a toolCall object and non-negative stepIdx.');
   process.stdout.write('{}\n');
 }
 main().catch((error: unknown) => {
