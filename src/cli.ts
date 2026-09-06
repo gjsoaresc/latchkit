@@ -458,6 +458,7 @@ Options:
                        for --entry from that same preview
   --expected-task-revision <n> spec-import register: required when updating an
                        already-registered entry (see spec-import reinspect)
+  --review-id <id>    review inspect/cancel: review ID
   --format <kind>     review compare: json (default) or text
   --baseline-revision <n> review compare: an explicitly selected retained task revision to
                       compare against, in place of the derived previously reviewed snapshot
@@ -563,6 +564,7 @@ try {
       'expected-task-revision': { type: 'string' },
       format: { type: 'string' },
       'baseline-revision': { type: 'string' },
+      'review-id': { type: 'string' },
       'since-digest': { type: 'string' },
       'byte-budget': { type: 'string' },
     },
@@ -701,6 +703,7 @@ try {
         'host-local-authorized',
         'format',
         'baseline-revision',
+        'review-id',
       ],
       diff: [
         'project',
@@ -1538,8 +1541,8 @@ try {
         }
       }
     } else if (command === 'review') {
-      if (extra.length !== 1 || !['run', 'compare'].includes(extra[0] ?? ''))
-        throw new Error('Usage: latchkit review <run|compare> [options].');
+      if (extra.length !== 1 || !['run', 'compare', 'inspect', 'cancel'].includes(extra[0] ?? ''))
+        throw new Error('Usage: latchkit review <run|compare|inspect|cancel> [options].');
       if (extra[0] === 'compare') {
         // Issue #113: a read-only, non-mutating comparison of changed decisions and their
         // consequences for one task. Never launches a provider, never refreshes evidence.
@@ -1560,6 +1563,14 @@ try {
         });
         if (values.format === 'text') console.log(formatDecisionComparisonText(report));
         else print(report);
+      } else if (extra[0] === 'inspect') {
+        print(await createReviewOrchestrator({ root }).inspect());
+      } else if (extra[0] === 'cancel') {
+        print(
+          await createReviewOrchestrator({ root }).cancel({
+            reviewId: requiredOption(values['review-id'], 'review-id'),
+          }),
+        );
       } else {
         if (!values.task || !values.provider)
           throw new Error('review run requires --task and --provider.');
@@ -1570,6 +1581,7 @@ try {
               { id: values.provider, providerId: values.provider, prompt: values.prompt },
             ],
             executionAuthorized: values['host-local-authorized'] === true,
+            sandbox: 'read-only',
           }),
         );
       }
