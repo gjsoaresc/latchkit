@@ -8,7 +8,7 @@ import {
   createReviewOrchestrator,
   validateReviewResult,
 } from '../dist/src/reviews/orchestrator.js';
-import { inspectReviewAdmission } from '../dist/src/reviews/admission.js';
+import { inspectReviewAdmission, reserveReviewInvocation } from '../dist/src/reviews/admission.js';
 
 const adapter = (providerId = 'codex') => ({
   contract: { id: providerId, capabilities: { invocation: { state: 'supported' } } },
@@ -167,49 +167,73 @@ test('shared admission keeps simultaneous review submissions at the default conc
 
 test('shared admission caps assignments per stable parent run and resets for a new parent run', async (t) => {
   const root = await fixture(t);
-  let launches = 0;
-  const make = () =>
-    createReviewOrchestrator({
-      root,
-      reviewerAdapters: new Map([['codex', adapter()]]),
-      source: async () => ({ revision: 'abc', dirtyFingerprint: 'fixture' }),
-      workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
-      launch: async () => {
-        launches += 1;
-        return {
-          status: 'exited',
-          exitCode: 0,
-          stdout: JSON.stringify({ schemaVersion: 1, state: 'completed', findings: [] }),
-        };
-      },
-    });
-  const input = (parentRunId) => ({
-    taskId: 'task_parent',
-    parentRunId,
-    reviewers: [
-      { providerId: 'codex' },
-      { providerId: 'codex' },
-      { providerId: 'codex' },
-      { providerId: 'codex' },
-    ],
-    executionAuthorized: true,
-    sandbox: 'read-only',
-  });
-  const [first, second] = await Promise.all([
-    make().run(input('parent-run-1')),
-    make().run(input('parent-run-1')),
-  ]);
-  assert.equal(launches, 4);
-  assert.ok([first.state, second.state].includes('failed'));
+  const reservations = [];
+  for (let index = 0; index < 4; index += 1)
+    reservations.push(
+      await reserveReviewInvocation({
+        root,
+        reviewId: `review-${index}`,
+        assignmentId: `assignment-${index}`,
+        parentRunId: 'parent-run-1',
+        controllerId: 'controller',
+        limit: 4,
+      }),
+    );
+  await assert.rejects(
+    () =>
+      reserveReviewInvocation({
+        root,
+        reviewId: 'review-overflow',
+        assignmentId: 'assignment-overflow',
+        parentRunId: 'parent-run-1',
+        controllerId: 'controller',
+        queueTimeoutMs: 10,
+      }),
+    /assignment limit/,
+  );
   assert.equal(
     (await inspectReviewAdmission(root)).parentRuns.find(
       (item) => item.parentRunId === 'parent-run-1',
     ).admittedAssignments,
     4,
   );
-  const next = await make().run(input('parent-run-2'));
-  assert.equal(next.state, 'completed');
-  assert.equal(launches, 8);
+  await Promise.all(reservations.map((reservation) => reservation.release()));
+  const next = await reserveReviewInvocation({
+    root,
+    reviewId: 'review-next',
+    assignmentId: 'assignment-next',
+    parentRunId: 'parent-run-2',
+    controllerId: 'controller',
+  });
+  await next.release();
+  assert.equal(
+    (await inspectReviewAdmission(root)).parentRuns.find(
+      (item) => item.parentRunId === 'parent-run-2',
+    ).admittedAssignments,
+    1,
+  );
+  const held = await reserveReviewInvocation({
+    root,
+    reviewId: 'review-held',
+    assignmentId: 'assignment-held',
+    parentRunId: 'parent-run-queue',
+    controllerId: 'controller',
+    limit: 1,
+  });
+  await assert.rejects(
+    () =>
+      reserveReviewInvocation({
+        root,
+        reviewId: 'review-queued',
+        assignmentId: 'assignment-queued',
+        parentRunId: 'parent-run-queue',
+        controllerId: 'controller',
+        limit: 1,
+        queueTimeoutMs: 10,
+      }),
+    { code: 'REVIEW_ADMISSION_TIMEOUT' },
+  );
+  await held.release();
 });
 
 test('worker admission releases reservations on cancellation and rejects hard spend guarantees', async (t) => {
@@ -327,6 +351,17 @@ test('malformed, unavailable, nested, and unauthorized reviews remain explicit',
         depth: 1,
       }),
     { code: 'REVIEW_NESTING_LIMIT' },
+  );
+  await assert.rejects(
+    () =>
+      createReviewOrchestrator(base).run({
+        taskId: 'task_parent',
+        parentRunId: 'forged-parent-run',
+        reviewers: [{ providerId: 'codex' }],
+        executionAuthorized: true,
+        sandbox: 'read-only',
+      }),
+    { code: 'REVIEW_PARENT_INVALID' },
   );
   const result = await createReviewOrchestrator(base).run({
     taskId: 'task_parent',
