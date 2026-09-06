@@ -7,10 +7,10 @@
 // The baseline arm always uses each fixture's own bundled, deterministic
 // scripted controller (apply-change.mjs) — never a live model or provider
 // call, so this command never spends on a provider session. The
-// reconciliation arm (the #110-#112 intent/reconciliation flow) is always
-// reported as an explicit, schema-level "unavailable" result: this increment
-// does not stub a fake outcome for work that has not merged yet. A future
-// increment can drive the SAME `runRequirementChangeSuite` API with a
+// reconciliation arm exercises the merged #110/#111 task-record and
+// reconciliation APIs in a separate fixture copy. Only #112's provider resume
+// context remains explicitly unavailable; this script never fabricates it or
+// starts a provider session. A future increment can drive the SAME API with a
 // model-driven `applyChange`/`runAcceptance` pair; the result schema already
 // distinguishes `controller: "scripted"` from `controller: "model"`, but no
 // such run is authorized or executed by this command.
@@ -44,7 +44,7 @@ const result = await runRequirementChangeSuite({
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
     baselineController: 'scripted',
-    reconciliationStatus: 'unavailable (issues #110, #111, #112 not yet merged)',
+    reconciliationStatus: 'completed with merged #110/#111 APIs; #112 resume context unavailable',
     limitations:
       'The scripted-controller baseline is a deterministic fixed patch used to validate the ' +
       'harness and its correctness gate end to end offline; it is not a claim about live agent ' +

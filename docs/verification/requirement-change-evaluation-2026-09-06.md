@@ -22,7 +22,7 @@ From the retained `.latchkit/requirement-change-evaluation.json` (not committed;
 - Both scenarios' scripted-controller correctness gate: **passed**, zero failures, zero regressions.
 - `export-visibility` gate `uncertain`: `"order-access (src/orderAccess.js): impact intentionally seeded as unknown; flagged for review."` — the seeded unknown-impact dependency was flagged, and the harness still reports it as unresolved rather than coercing it into a pass.
 - `notification-opt-out` gate `uncertain`: `"digest-sender (src/digestSender.js): impact intentionally seeded as unknown; flagged for review."`
-- Reconciliation arm for both scenarios: `status: "unavailable"`, reason names issues #110, #111, and #112 explicitly.
+- Reconciliation arm for both scenarios: `status: "completed"` using the merged #110/#111 task-record and reconciliation APIs. Each records accepted-intent supersession, stale-preview rejection, explicit unknown impact, and preserved artifacts; only `resumeContext` is `unavailable` pending #112.
 - `arms.baseline.acceptance`: `{ "total": 5, "passed": 5, "failedIds": [] }` for both scenarios.
 - `arms.baseline.metrics` for both scenarios: `finalBehavioralSuccess: true`, `falseCompletion: false`, `staleResultAcceptance: false`, `omittedRequiredConstraints: 0`, `detectedSeededDependencies: 1`, `missedSeededDependencies: 0`, `unnecessaryInvalidation: 0`, `retainedWork: 1`, `discardedWork: 0`, `reworkAfterChange: 0`; `coordinatorUsage`/`workerUsage` both `unavailable` (owned by [#32](https://github.com/willahealm/latchkit/issues/32)/[#92](https://github.com/willahealm/latchkit/issues/92), not computed here).
 
@@ -32,4 +32,4 @@ From the retained `.latchkit/requirement-change-evaluation.json` (not committed;
 
 ## Limitations
 
-This run exercises the deterministic scripted-controller arm only, which is a fixed, known-good patch bundled with each fixture — not a model or human session. It validates the harness, the fixtures, and the correctness gate end to end offline; it is not a claim about live-agent or human behavior on ordinary current Latchkit, and `totalElapsedTimeMs` in the metrics above (a few milliseconds per scenario) is harness/filesystem overhead, not a productivity or cost figure. The reconciliation arm is unmeasured by construction pending #110-#112. No participant or provider session was used to produce this evidence.
+This run exercises deterministic scripted controllers, including the separate #110/#111 reconciliation integration; it is not a model or human session. It validates the harness, fixtures, correctness gate, and task-state API boundary end to end offline; it is not a claim about live-agent or human behavior on ordinary current Latchkit, and `totalElapsedTimeMs` is harness/filesystem overhead, not a productivity or cost figure. #112 resume context remains unmeasured. No participant or provider session was used to produce this evidence.

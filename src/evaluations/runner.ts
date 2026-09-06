@@ -5,6 +5,13 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { redact } from '../diagnostics/redact.js';
 import {
+  applyTaskReconciliation,
+  createTask,
+  previewTaskReconciliation,
+  recordTaskRecord,
+  transitionTaskRecord,
+} from '../task-state/service.js';
+import {
   REQUIREMENT_CHANGE_METRICS,
   SKILL_EVALUATION_V2_VERSION,
   SKILL_EVALUATION_VERSION,
@@ -379,6 +386,156 @@ const defaultRunAcceptance: RunAcceptance = async ({ workspace, scenario }) => {
   return (candidate as RunAcceptance)({ workspace, scenario });
 };
 
+const RESUME_CONTEXT_UNAVAILABLE =
+  'Issue #112 is not merged: this offline arm does not fabricate a provider resume-context result.';
+
+async function runReconciliationArm(input: {
+  source: string;
+  scenario: RequirementChangeScenario;
+  applyChange: ApplyChange;
+  runAcceptance: RunAcceptance;
+}): Promise<RequirementChangeArmResult> {
+  const workspace = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), 'latchkit-reconciliation-')),
+  );
+  try {
+    await cp(input.source, workspace, { recursive: true, force: false, errorOnExist: false });
+    const preFiles = await collectWorkspaceFiles(workspace);
+    const preHashes = await hashWorkspaceFiles(workspace, preFiles);
+    const authorization = {
+      source: 'user' as const,
+      scope: 'apply changed requirement',
+      reference: 'seeded requirement change',
+    };
+    let task = await createTask(workspace, {
+      title: input.scenario.title,
+      authorization,
+      criteria: input.scenario.mandatoryConstraints.map((description) => ({ description })),
+    });
+    task = await recordTaskRecord(workspace, {
+      taskId: task.id,
+      expectedRevision: task.revision,
+      kind: 'decision',
+      text: input.scenario.initialRequirement,
+      provenance: { kind: 'direct-user', reference: 'seeded initial requirement' },
+    });
+    const oldDecision = task.records?.at(-1);
+    if (!oldDecision) throw new Error('Failed to seed the initial requirement decision.');
+    task = await transitionTaskRecord(workspace, {
+      taskId: task.id,
+      expectedRevision: task.revision,
+      recordId: oldDecision.id,
+      recordRevision: oldDecision.revision,
+      status: 'accepted',
+      reason: 'seeded initial authorization',
+      authorization,
+    });
+    const accepted = task.records?.find((record) => record.id === oldDecision.id);
+    if (!accepted) throw new Error('Failed to accept the seeded requirement decision.');
+    // A declared dependent makes the impact graph inspectable; it is a question rather than an
+    // authority, so the fixture's deliberately misleading memory never becomes task intent.
+    task = await recordTaskRecord(workspace, {
+      taskId: task.id,
+      expectedRevision: task.revision,
+      kind: 'question',
+      text: input.scenario.unknownImpactDependencies[0]?.note ?? 'Unknown impact requires review.',
+      provenance: { kind: 'agent-inferred', reference: 'seeded unknown dependency' },
+      links: [{ type: 'record', recordId: accepted.id, recordRevision: accepted.revision }],
+    });
+    const patch = {
+      recordOps: [
+        {
+          op: 'supersede' as const,
+          recordId: accepted.id,
+          recordRevision: accepted.revision,
+          kind: 'decision' as const,
+          text: input.scenario.changedRequirement,
+          provenance: { kind: 'direct-user' as const, reference: 'seeded changed requirement' },
+          authorization,
+        },
+      ],
+    };
+    const preview = await previewTaskReconciliation(workspace, { taskId: task.id, patch });
+    // Mutate after preview, then prove the digest fence rejects the stale review before retrying.
+    task = await recordTaskRecord(workspace, {
+      taskId: task.id,
+      expectedRevision: task.revision,
+      kind: 'observation',
+      text: 'Pre-apply review recorded.',
+      provenance: { kind: 'agent-inferred', reference: 'evaluation stale-preview probe' },
+    });
+    let stalePreviewRejected = false;
+    try {
+      await applyTaskReconciliation(workspace, {
+        taskId: task.id,
+        expectedRevision: task.revision,
+        patch,
+        previewDigest: preview.digest,
+      });
+    } catch (error) {
+      stalePreviewRejected = (error as { code?: string }).code === 'TASK_RECONCILE_PREVIEW_STALE';
+    }
+    const freshPreview = await previewTaskReconciliation(workspace, { taskId: task.id, patch });
+    const applied = await applyTaskReconciliation(workspace, {
+      taskId: task.id,
+      expectedRevision: task.revision,
+      patch,
+      previewDigest: freshPreview.digest,
+    });
+    const started = process.hrtime.bigint();
+    const controllerResult = await Promise.resolve(
+      input.applyChange({ workspace, scenario: input.scenario }),
+    );
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+    const changeLog: RequirementChangeLog = controllerResult.changeLog ?? {};
+    const postFiles = await collectWorkspaceFiles(workspace);
+    const postHashes = await hashWorkspaceFiles(workspace, [
+      ...new Set([...preFiles, ...postFiles]),
+    ]);
+    const acceptanceResults =
+      (await Promise.resolve(input.runAcceptance({ workspace, scenario: input.scenario })))
+        .results ?? {};
+    const gate = evaluateRequirementChangeGate({
+      scenario: input.scenario,
+      changeLog,
+      acceptanceResults,
+      preHashes,
+      postHashes,
+    });
+    return {
+      arm: 'reconciliation',
+      status: 'completed',
+      controller: 'scripted',
+      metrics: computeRequirementChangeMetrics({
+        scenario: input.scenario,
+        changeLog,
+        preHashes,
+        postHashes,
+        elapsedMs,
+        acceptanceResults,
+      }),
+      correctnessGate: gate,
+      acceptance: summarizeRequirementChangeAcceptance(input.scenario, acceptanceResults),
+      flaggedDependencies: redact(changeLog.flaggedDependencies ?? []) as string[],
+      reconciliationEvidence: {
+        intentSuperseded:
+          applied.task.records?.find((record) => record.id === accepted.id)?.status ===
+          'superseded',
+        stalePreviewRejected,
+        unknownImpactExplicit:
+          freshPreview.impact.some((entry) => entry.classification === 'declared-dependent') &&
+          freshPreview.uncertainties.length >= 0,
+        preservedArtifacts: input.scenario.preserveArtifacts.every(
+          (file) => preHashes[file] === postHashes[file],
+        ),
+        resumeContext: { status: 'unavailable', reason: RESUME_CONTEXT_UNAVAILABLE },
+      },
+    };
+  } finally {
+    await rm(workspace, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
 interface GateInput {
   scenario: RequirementChangeScenario;
   changeLog: RequirementChangeLog;
@@ -613,7 +770,8 @@ function summarizeRequirementChangeAcceptance(
 
 /**
  * Evaluate one requirement-change scenario's scripted-controller (baseline) arm in a fresh
- * fixture copy, and pair it with the always-explicit, always-unavailable reconciliation arm.
+ * fixture copy, and pair it with a separate workspace that exercises the merged task-record and
+ * reconciliation APIs. Resume-context delivery remains explicitly unavailable until #112 lands.
  * The mkdtemp root is resolved through `fs.promises.realpath` before use so expected paths
  * remain correct on hosts (including CI) that resolve the OS temp directory to an 8.3 short
  * path.
@@ -684,11 +842,17 @@ export async function runRequirementChangeScenario({
       acceptance: summarizeRequirementChangeAcceptance(scenario, acceptanceResults),
       flaggedDependencies: redact(changeLog.flaggedDependencies ?? []) as string[],
     };
+    const reconciliation = await runReconciliationArm({
+      source,
+      scenario,
+      applyChange,
+      runAcceptance,
+    });
     return {
       id: scenario.id,
       kind: 'requirement-change',
       title: scenario.title,
-      arms: { baseline, reconciliation: unavailableReconciliationArm() },
+      arms: { baseline, reconciliation },
       completedAt: now(),
     };
   } finally {
@@ -717,7 +881,9 @@ export async function runRequirementChangeSuite({
   );
   const counts = {
     completed: scenarios.filter((item) => item.arms.baseline.status === 'completed').length,
-    unavailable: scenarios.filter((item) => item.arms.baseline.status === 'unavailable').length,
+    unavailable: scenarios.filter((item) =>
+      [item.arms.baseline, item.arms.reconciliation].some((arm) => arm.status === 'unavailable'),
+    ).length,
   };
   return {
     schemaVersion: SKILL_EVALUATION_V2_VERSION,

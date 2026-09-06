@@ -480,6 +480,15 @@ export interface RequirementChangeArmResult {
   correctnessGate?: CorrectnessGateResult;
   acceptance?: AcceptanceSummary;
   flaggedDependencies?: string[];
+  /** Evidence from the real task-state reconciliation API.  This is deliberately
+   * separate from controller claims and acceptance output. */
+  reconciliationEvidence?: {
+    intentSuperseded: boolean;
+    stalePreviewRejected: boolean;
+    unknownImpactExplicit: boolean;
+    preservedArtifacts: boolean;
+    resumeContext: { status: 'unavailable'; reason: string };
+  };
 }
 
 export interface RequirementChangeScenarioResult {

@@ -10,7 +10,7 @@ npm run evaluate:requirement-change -- --format markdown
 npm run evaluate:requirement-change -- --output .latchkit/requirement-change-evaluation.json
 ```
 
-The command is offline by default, deterministic, and Windows-compatible: it copies each fixture into an isolated temporary workspace, runs the fixture's own bundled scripted controller, hashes every workspace file before and after, grades the result against the correctness gate below, and removes the workspace. It never starts a provider process or spends on a session. It exits non-zero if any scenario's correctness gate fails.
+The command is offline by default, deterministic, and Windows-compatible: it copies each fixture into isolated temporary workspaces, runs the fixture's own bundled scripted controller, and separately seeds and reconciles task intent through the merged #110/#111 APIs. It hashes every workspace file before and after, grades the result against the correctness gate below, and removes the workspaces. It never starts a provider process or spends on a session. It exits non-zero if any scenario's correctness gate fails.
 
 ## What each scenario seeds
 
@@ -56,7 +56,7 @@ The gate result reports the full scenario denominator (every mandatory assertion
 Every scenario result carries two arms (`RequirementChangeScenarioResult.arms`):
 
 - **`baseline`** — always present, `controller: "scripted"` by default in this command. It is the deterministic fixed patch described above, used to validate the harness and the correctness gate end to end offline. The same `runRequirementChangeScenario`/`runRequirementChangeSuite` functions accept an injected `applyChange`/`runAcceptance` pair, so a future increment can drive this arm with a model instead (`controller: "model"`, `provider: "<id>"`); this command does not do that, and no such run is authorized or executed here. Deterministic scripted-controller results and model-driven outcomes are never merged into the same field — the `controller` field always says which one produced a result, and only the scripted arm ever carries a `correctnessGate`.
-- **`reconciliation`** — always `status: "unavailable"` with an explicit `reason` naming [#110](https://github.com/willahealm/latchkit/issues/110), [#111](https://github.com/willahealm/latchkit/issues/111), and [#112](https://github.com/willahealm/latchkit/issues/112). This is a schema-level placeholder, not a stubbed or fabricated result: the harness runs end to end today, and this arm is filled in once that intent/reconciliation flow merges.
+- **`reconciliation`** — `status: "completed"` for deterministic #110/#111 integration. `reconciliationEvidence` separately records superseded authority, stale-preview rejection, explicit unknown impact, and preserved work. Its `resumeContext` is explicitly unavailable pending [#112](https://github.com/willahealm/latchkit/issues/112); no provider result is fabricated.
 
 ## Honest scope of this increment
 

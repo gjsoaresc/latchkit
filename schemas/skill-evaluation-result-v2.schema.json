@@ -122,7 +122,31 @@
             "failedIds": { "type": "array", "items": { "type": "string" } }
           }
         },
-        "flaggedDependencies": { "type": "array", "items": { "type": "string" } }
+        "flaggedDependencies": { "type": "array", "items": { "type": "string" } },
+        "reconciliationEvidence": {
+          "type": "object",
+          "required": [
+            "intentSuperseded",
+            "stalePreviewRejected",
+            "unknownImpactExplicit",
+            "preservedArtifacts",
+            "resumeContext"
+          ],
+          "properties": {
+            "intentSuperseded": { "type": "boolean" },
+            "stalePreviewRejected": { "type": "boolean" },
+            "unknownImpactExplicit": { "type": "boolean" },
+            "preservedArtifacts": { "type": "boolean" },
+            "resumeContext": {
+              "type": "object",
+              "required": ["status", "reason"],
+              "properties": {
+                "status": { "const": "unavailable" },
+                "reason": { "type": "string" }
+              }
+            }
+          }
+        }
       }
     }
   }
