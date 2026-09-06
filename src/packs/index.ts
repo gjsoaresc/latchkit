@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -190,12 +190,53 @@ export async function loadLocalPack(source: string): Promise<LoadedPack> {
   return { ...manifest, source: { type: 'local', path: root }, files };
 }
 
+/**
+ * Recursively collect every regular file under `directory`, returning
+ * POSIX-style paths relative to it in deterministic sorted order. Rejects a
+ * symlink/junction anywhere in the tree: the bundled skills tree is trusted
+ * repository content and never expected to contain one.
+ */
+async function collectRegularFiles(directory: string, prefix = ''): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const found: string[] = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const absolute = path.join(directory, entry.name);
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isSymbolicLink())
+      throw new PackContractError(
+        `Bundled skill path must not be a symlink or junction: ${relative}`,
+        'PACK_FILE_INVALID',
+      );
+    if (entry.isDirectory()) {
+      found.push(...(await collectRegularFiles(absolute, relative)));
+      continue;
+    }
+    if (!entry.isFile())
+      throw new PackContractError(
+        `Bundled skill path must be a regular file: ${relative}`,
+        'PACK_FILE_INVALID',
+      );
+    found.push(relative);
+  }
+  return found;
+}
+
+/**
+ * Load every file under the canonical `skills/` tree, not just each
+ * skill's own `SKILL.md`. A top-level folder with its own `SKILL.md` is a
+ * selectable skill; every other top-level folder (for example
+ * `skills/references/`) is a shared resource collection that selected
+ * skills can depend on through relative Markdown links -- see
+ * `resolvePackResourceDependencies`. Scanning the whole tree keeps this
+ * loader from needing to know the shared-resource folder name(s) in
+ * advance.
+ */
 export async function loadBundledPack(): Promise<LoadedPack> {
+  const relatives = await collectRegularFiles(bundledRoot);
   const files: LoadedPackFile[] = [];
-  for (const id of ['requirements', 'spec', 'build', 'fix', 'review', 'handoff', 'setup']) {
-    const sourceRelative = `latchkit-${id}/SKILL.md`;
-    const bytes = await readFile(path.join(bundledRoot, ...sourceRelative.split('/')));
-    files.push({ path: `skills/${sourceRelative}`, bytes });
+  for (const relative of relatives) {
+    const bytes = await readFile(path.join(bundledRoot, ...relative.split('/')));
+    files.push({ path: `skills/${relative}`, bytes });
   }
   return {
     schemaVersion: 1,
@@ -209,6 +250,89 @@ export async function loadBundledPack(): Promise<LoadedPack> {
     source: { type: 'bundled' },
     files,
   };
+}
+
+const MARKDOWN_LINK = /\[[^\]]+\]\(([^)]+)\)/g;
+const WINDOWS_ABSOLUTE_OR_UNC = /^(?:[a-zA-Z]:[\\/]|\\\\)/;
+
+/**
+ * Extract same-tree local resource link targets from one pack file's
+ * Markdown content, resolved to pack-relative POSIX paths (`skills/...`).
+ * Skips scheme URLs (`https:`, `mailto:`, ...), in-page anchors, and any
+ * link that is absolute or whose `..` segments resolve outside the
+ * `skills/` tree -- those are never treated as exportable resources, only
+ * as incidental prose (for example a link back into repository docs).
+ */
+function localLinkTargets(sourcePackPath: string, content: string): string[] {
+  const directory = path.posix.dirname(sourcePackPath);
+  const targets: string[] = [];
+  for (const match of content.matchAll(MARKDOWN_LINK)) {
+    const reference = match[1]?.split(/[?#]/, 1)[0]?.trim();
+    if (
+      !reference ||
+      reference.startsWith('#') ||
+      reference.startsWith('/') ||
+      WINDOWS_ABSOLUTE_OR_UNC.test(reference) ||
+      /^[a-z][a-z+.-]*:/i.test(reference)
+    )
+      continue;
+    const resolved = path.posix.normalize(path.posix.join(directory, reference));
+    if (resolved === 'skills' || resolved.startsWith('skills/')) targets.push(resolved);
+  }
+  return targets;
+}
+
+export interface PackResourceDependencies {
+  /** Top-level pack folder names (`latchkit-build`, ...) that own a `SKILL.md`. */
+  primarySkills: Set<string>;
+  /** Selectable skill folder name -> pack-relative paths of shared resources it needs, including transitive links. */
+  dependencies: Map<string, Set<string>>;
+}
+
+/**
+ * Resolve, for every selectable skill in a loaded pack, the full transitive
+ * closure of same-tree local resources its `SKILL.md` reaches through
+ * relative Markdown links. A shared resource stays reachable for every
+ * skill that still links to it, so deselecting one skill never drops a
+ * resource another selected skill still needs; an unreachable resource file
+ * is simply never exported by anyone. Cross-links directly into another
+ * skill's own `SKILL.md` are not followed -- that skill's export already
+ * has independent selection rules.
+ */
+export function resolvePackResourceDependencies(pack: LoadedPack): PackResourceDependencies {
+  const byPath = new Map(pack.files.map((file) => [file.path, file]));
+  const primarySkillPaths = new Set(
+    pack.files
+      .filter((file) => {
+        const parts = file.path.split('/');
+        return parts.length === 3 && parts[0] === 'skills' && parts[2] === 'SKILL.md';
+      })
+      .map((file) => file.path),
+  );
+  const primarySkills = new Set(
+    [...primarySkillPaths].map((entryPath) => entryPath.split('/')[1]!),
+  );
+  const dependencies = new Map<string, Set<string>>();
+  for (const skillPath of primarySkillPaths) {
+    const folder = skillPath.split('/')[1]!;
+    const visited = new Set<string>([skillPath]);
+    const resources = new Set<string>();
+    const queue = [skillPath];
+    while (queue.length) {
+      const current = queue.shift()!;
+      const file = byPath.get(current);
+      if (!file) continue;
+      for (const target of localLinkTargets(current, file.bytes.toString('utf8'))) {
+        if (visited.has(target)) continue;
+        visited.add(target);
+        if (!byPath.has(target) || primarySkillPaths.has(target)) continue;
+        resources.add(target);
+        queue.push(target);
+      }
+    }
+    dependencies.set(folder, resources);
+  }
+  return { primarySkills, dependencies };
 }
 
 export async function loadPack(selection: PackSelection): Promise<LoadedPack> {

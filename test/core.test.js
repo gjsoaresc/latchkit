@@ -15,6 +15,10 @@ import {
 
 const providerIds = ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli'];
 const skillIds = ['spec', 'fix', 'review', 'handoff'];
+// Shared resources `spec` and `review` link to from this fixed skill
+// selection (`../references/<file>` from each SKILL.md); `fix` and
+// `handoff` link to none.
+const referenceFileNames = ['efficiency.md', 'prd-template.md', 'technical-plan-template.md'];
 const validConfig = (overrides = {}) => {
   const schemaVersion = overrides.schemaVersion ?? 3;
   return {
@@ -111,7 +115,7 @@ test('initialization preserves an existing project configuration', async (t) => 
   assert.equal(await fs.readFile(path.join(root, '.latchkit', 'config.json'), 'utf8'), before);
 });
 
-test('preview is read-only and five providers share eight skill files', async (t) => {
+test('preview is read-only and five providers share eight skill files plus their shared references', async (t) => {
   const { root } = await temporaryProject(t);
   await initProject(root, { providers: providerIds, skills: skillIds });
   const before = await snapshot(root);
@@ -120,7 +124,10 @@ test('preview is read-only and five providers share eight skill files', async (t
   assert.deepEqual(await snapshot(root), before);
 
   const expected = ['.claude', '.agents']
-    .flatMap((directory) => skillIds.map((id) => `${directory}/skills/latchkit-${id}/SKILL.md`))
+    .flatMap((directory) => [
+      ...skillIds.map((id) => `${directory}/skills/latchkit-${id}/SKILL.md`),
+      ...referenceFileNames.map((name) => `${directory}/skills/references/${name}`),
+    ])
     .sort();
   assert.deepEqual(changedPaths(root, preview, 'create'), expected);
 

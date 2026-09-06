@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { SKILLS } from './catalog.js';
-import { loadPack } from './packs/index.js';
+import { loadPack, resolvePackResourceDependencies } from './packs/index.js';
 import { gitCacheResource, loadMaterializedGitPack, materializeGitPack } from './packs/git.js';
 import { PROVIDERS } from './providers/registry.js';
 import {
@@ -382,20 +382,38 @@ async function makePlan(root: Root, removing = false): Promise<ManagedPlan> {
       ...(selection.source.type === 'git' ? { resolvedCommit: selection.source.commit } : {}),
       files: pack.files.map((file) => ({ path: file.path, sha256: hash(file.bytes) })),
     });
-    const packSkills = new Set<string>();
-    const primarySkills = new Set<string>();
     for (const file of pack.files) {
       const parts = file.path.split('/');
       if (parts.length < 3 || parts[0] !== 'skills')
         throw new Error(`Pack ${pack.id} resource is not inside a portable skill: ${file.path}`);
-      const skillName = parts[1];
-      if (!skillName) throw new Error(`Pack ${pack.id} has an invalid skill path: ${file.path}`);
+      if (!parts[1]) throw new Error(`Pack ${pack.id} has an invalid skill path: ${file.path}`);
+    }
+    // A top-level `skills/<folder>/` with its own `SKILL.md` is a selectable
+    // skill; every other top-level folder (for example `skills/references/`)
+    // is a shared resource collection with no independent selection of its
+    // own. Deselecting one skill can never drop a resource another selected
+    // skill's `SKILL.md` still reaches through a relative Markdown link,
+    // because inclusion is the union of every currently selected skill's
+    // resolved dependencies, recomputed on every plan.
+    const { primarySkills, dependencies } = resolvePackResourceDependencies(pack);
+    const selectedSkillFolders =
+      pack.id === 'latchkit-core'
+        ? new Set(
+            [...primarySkills].filter((folder) =>
+              config.skills.includes(folder.replace(/^latchkit-/, '')),
+            ),
+          )
+        : primarySkills;
+    const neededResources = new Set<string>();
+    for (const folder of selectedSkillFolders)
+      for (const resourcePath of dependencies.get(folder) ?? []) neededResources.add(resourcePath);
+    for (const file of pack.files) {
+      const parts = file.path.split('/');
+      const skillName = parts[1]!;
       const skillRelative = parts.slice(2).join('/');
-      packSkills.add(skillName);
-      if (parts.length === 3 && parts[2] === 'SKILL.md') primarySkills.add(skillName);
+      const isPrimarySkillFile = primarySkills.has(skillName);
       if (
-        pack.id === 'latchkit-core' &&
-        !config.skills.includes(skillName.replace(/^latchkit-/, ''))
+        isPrimarySkillFile ? !selectedSkillFolders.has(skillName) : !neededResources.has(file.path)
       )
         continue;
       for (const directory of directories) {
@@ -406,9 +424,6 @@ async function makePlan(root: Root, removing = false): Promise<ManagedPlan> {
         desired.set(relative, file.bytes.toString('utf8'));
       }
     }
-    for (const skillName of packSkills)
-      if (!primarySkills.has(skillName))
-        throw new Error(`Pack ${pack.id} resource set has no SKILL.md for ${skillName}.`);
   }
   const ruleExport: {
     model: ProjectInstructionModel;
