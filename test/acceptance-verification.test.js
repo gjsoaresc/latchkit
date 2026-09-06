@@ -10,7 +10,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { createAcceptanceVerifier } from '../dist/src/acceptance/service.js';
 import { validateAcceptanceDocument } from '../dist/src/acceptance/contracts.js';
 import { runProviderProcess } from '../dist/src/runtime/process-runner.js';
-import { createTask, resumeTask } from '../dist/src/task-state/service.js';
+import {
+  completeTask,
+  createTask,
+  registerEnhancedWorkflow,
+  resumeTask,
+  verifyTask,
+} from '../dist/src/task-state/service.js';
+import { runEnhancedWorkflowChecks } from '../dist/src/acceptance/service.js';
 
 const fixtureApp = path.resolve('test/fixtures/acceptance/fixture-app.js');
 const cli = path.resolve('dist/src/cli.js');
@@ -100,6 +107,44 @@ test('real CLI and HTTP drivers record criterion-bound, sanitized, digest-addres
     assert.doesNotMatch(content, /super-secret|fixture-secret/);
     assert.match(content, new RegExp(item.criterionId));
   }
+});
+
+test('enhanced workflow runs only its persisted definition and verification binds its hash', async (t) => {
+  const { root, task: started } = await setup(t, ['persisted acceptance']);
+  await fs.mkdir(path.join(root, 'docs', 'plans'), { recursive: true });
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'prd.md'), '# PRD\n');
+  await fs.writeFile(path.join(root, 'docs', 'plans', 'plan.md'), '# Plan\n');
+  const definition = {
+    id: 'persisted-cli',
+    criterionId: started.criteria[0].id,
+    label: 'persisted CLI',
+    type: 'cli',
+    plan: { executable: process.execPath, args: ['-e', 'process.exit(0)'] },
+  };
+  const enrolled = await registerEnhancedWorkflow(root, {
+    taskId: started.id,
+    expectedRevision: started.revision,
+    artifacts: {
+      prd: { path: 'docs/plans/prd.md', templateVersion: 1 },
+      technicalPlan: { path: 'docs/plans/plan.md', templateVersion: 1 },
+    },
+    checks: [{ id: 'persisted-cli', criterionId: started.criteria[0].id, type: 'cli', definition }],
+  });
+  const result = await runEnhancedWorkflowChecks(root, {
+    taskId: enrolled.id,
+    executionAuthorized: true,
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.task.evidence.at(-1).kind, 'enhanced-check:persisted-cli');
+  const completed = await completeTask(root, {
+    taskId: result.task.id,
+    runId: result.task.owner.runId,
+    expectedRevision: result.task.revision,
+  });
+  assert.equal(
+    (await verifyTask(root, { taskId: completed.id, expectedRevision: completed.revision })).state,
+    'verified',
+  );
 });
 
 test(

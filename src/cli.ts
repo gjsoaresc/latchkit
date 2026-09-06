@@ -79,7 +79,7 @@ import {
   formatDecisionComparisonText,
   inspectDecisionComparison,
 } from './reviews/decision-comparison.js';
-import { createAcceptanceVerifier } from './acceptance/service.js';
+import { createAcceptanceVerifier, runEnhancedWorkflowChecks } from './acceptance/service.js';
 import {
   addProjectMemory,
   deleteProjectMemory,
@@ -1427,6 +1427,7 @@ try {
         'inspect',
         'migrate',
         'verify',
+        'run',
         'decision-present',
         'decision-approve',
         'decision-notes',
@@ -1513,6 +1514,13 @@ try {
               taskId: requiredOption(values.task, 'task'),
               expectedRevision,
               ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+            }),
+          );
+        else if (action === 'run')
+          print(
+            await runEnhancedWorkflowChecks(root, {
+              taskId: requiredOption(values.task, 'task'),
+              executionAuthorized: values['host-local-authorized'] === true,
             }),
           );
         else {
