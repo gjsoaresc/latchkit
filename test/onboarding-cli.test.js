@@ -10,7 +10,9 @@ const execute = promisify(execFile);
 const cli = path.resolve('dist/src/cli.js');
 
 async function tempProject(t) {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-cli-')));
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-cli-')),
+  );
   t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return root;
 }
