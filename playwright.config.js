@@ -12,6 +12,15 @@ if (!process.env.LATCHKIT_PROJECTS_ROOT) {
     `latchkit-test-projects-registry-playwright-${process.pid}`,
   );
 }
+// Issue #139 slice 2: isolate the update-service default installation-data root the same way,
+// see src/installation/manager.js's `defaultInstallationRoot` and test/env.js.
+if (!process.env.LATCHKIT_INSTALL_DATA_ROOT) {
+  process.env.LATCHKIT_INSTALL_DATA_ROOT = path.join(
+    os.tmpdir(),
+    `latchkit-test-install-root-playwright-${process.pid}`,
+  );
+}
+delete process.env.LATCHKIT_INSTALL_ROOT;
 
 export default defineConfig({
   testDir: './test/browser',

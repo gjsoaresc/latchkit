@@ -3,6 +3,7 @@ import { ArrowUpRight, Save } from 'lucide-react';
 import { createConsoleStore } from './console-store.js';
 import { FccConsole } from './fcc.js';
 import { OnboardingConsole } from './onboarding.js';
+import { UpdatesConsole } from './updates.js';
 import type { ConsoleState, WorkspacePreference } from './types.js';
 import { Button } from './components/ui/button.js';
 import { Card } from './components/ui/card.js';
@@ -370,6 +371,7 @@ export function SettingsConsole() {
         </div>
       </section>
       <FccConsole />
+      <UpdatesConsole hasUnsavedEdits={store.dirty()} />
       <OnboardingConsole />
     </Shell>
   );

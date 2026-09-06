@@ -835,7 +835,21 @@ export async function runInstallationManager(
   return installBundle(request);
 }
 
+/**
+ * `LATCHKIT_INSTALL_DATA_ROOT` overrides the machine-wide default below,
+ * mirroring `LATCHKIT_PROJECTS_ROOT` in `src/projects/store.ts`. This
+ * repository's own test suite (see test/env.js and playwright.config.js)
+ * sets it to an isolated temp directory so a server/CLI invocation under
+ * test — including the update-service console routes added in issue #139
+ * slice 2 — never reads or writes the real per-user installation directory.
+ * Distinct from `LATCHKIT_INSTALL_ROOT` (see
+ * `src/installation/updates/ownership.ts`), which only a stable launcher
+ * sets to mark "running from an installed bundle" and is never treated as a
+ * data-root override.
+ */
 export function defaultInstallationRoot(): string {
+  const override = process.env.LATCHKIT_INSTALL_DATA_ROOT;
+  if (override) return path.resolve(override);
   if (process.platform === 'win32')
     return path.join(
       process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'),

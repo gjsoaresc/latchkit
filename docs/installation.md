@@ -330,3 +330,58 @@ exactly like `self upgrade` does internally, but stops before touching
 `rollback` reuses the existing `self rollback` activation primitive
 directly. Restart handoff, the console UI, and onboarding/Settings
 automation are later #139 slices.
+
+## Console update and restart (issue #139 slice 2)
+
+Settings → Updates (`web/updates.tsx`) adds authenticated local API routes
+over the slice 1 update service, all under the same bearer-token/origin
+protections and installation-identity contract as every other `/api/*`
+route (see `src/installation/updates/routes.ts`):
+
+- `GET /api/updates` — settings, status, and ownership; a pure read.
+- `POST /api/updates/check` / `/preview` — a fresh release check and a
+  server-cached preview (never trusts a client-supplied preview back; a
+  `previewId` the server did not itself just hand out is rejected as stale).
+- `POST /api/updates/stage` — downloads/verifies/extracts the exact cached
+  preview; cancelling (a client disconnect) reports a distinct cancellation
+  outcome and never activates anything or changes the persisted mode.
+- `POST /api/updates/activate` / `/rollback` — bind to the current settings
+  revision and staged update ID, then run the restart handoff below.
+- `GET /api/updates/recovery` — the most recent handoff attempt's outcome
+  and a copyable CLI recovery command.
+- `POST /api/updates/activity` — a console reports its own unsaved-edit
+  state for the installation-wide quiescence check.
+
+**Installation-wide quiescence and the admission barrier** (see
+`src/installation/updates/workload.ts`) read persisted task/workflow/review
+state across every project registered on this installation, plus a small
+cross-process activity heartbeat (`activity.ts`) for live unsaved-edit and
+in-flight-request signals other server processes cannot otherwise expose.
+A clear check atomically writes a small versioned installation lease
+(`update-lease.json`) inside the same installation lock every other
+mutating installation operation already uses, so a concurrent activation
+from another console always observes the first one's lease rather than
+racing it. While that lease is active, every server sharing the
+installation rejects new mutating requests (503) except the lease-managing
+routes themselves and bounded status/heartbeat traffic.
+
+**Pending-work compatibility preflight** (`preflight.ts`) blocks manual
+activation when pending (interrupted/awaiting-approval/awaiting-input/
+blocked) workflows exist under a different workflow policy version than the
+staged candidate reports — read by spawning the candidate's own bundled
+runtime, the same technique `manager.ts`'s internal smoke check already
+uses. It never fakes migration, deletes an approval, or resumes anything.
+
+**Restart handoff** (`restart.ts`/`handoff.ts`) never touches `current`
+until a replacement — spawned directly from the staged, already
+verified-and-smoked immutable version directory, using that version's own
+bundled runtime and `latchkit ui --project <root> --port 0` — has proven
+itself healthy over its own authenticated `/api/updates` status route. Only
+then does the existing manager activation primitive flip `current`; only
+then does the browser receive the replacement's real endpoint to reconnect
+to (an ephemeral port and a fresh session token every time — reloading the
+old URL cannot work) and does the old server drain and close. Any failure
+before that point leaves the previous installation completely untouched;
+every attempt's outcome and a copyable recovery command are persisted for
+`/api/updates/recovery` to report even after a failed replacement leaves the
+old server as the survivor.

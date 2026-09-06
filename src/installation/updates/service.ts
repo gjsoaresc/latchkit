@@ -33,7 +33,7 @@ import type {
   UpdateSettingsState,
   UpdateStatusSnapshot,
 } from './contracts.js';
-import { downloadToFile, fetchChecksumSidecar } from './download.js';
+import { DownloadCancelledError, downloadToFile, fetchChecksumSidecar } from './download.js';
 import type { DownloadOptions } from './download.js';
 import { checkReleases, expectedAssetName, OFFICIAL_REPOSITORY } from './release-source.js';
 import type { CheckReleasesOptions } from './release-source.js';
@@ -314,6 +314,12 @@ export interface StageUpdateOptions {
   extract?: ExtractOptions;
   scratchParent?: string;
   onProgress?: (status: 'downloading' | 'verifying') => void;
+  /** Issue #139 slice 2: cancels the in-flight download (see
+   * `DownloadCancelledError` in `download.ts`). The staged record is still
+   * recorded as `failed` with a distinguishable reason; cancelling never
+   * activates a different release and never touches the persisted update
+   * mode/preference. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -344,6 +350,7 @@ export async function stageUpdate(
       timeoutMs: options.timeoutMs,
       maxRetries: options.maxRetries,
       maxBytes: options.maxDownloadBytes,
+      signal: options.signal,
     });
     options.onProgress?.('verifying');
     if (downloaded.sha256 !== preview.sha256)
@@ -439,4 +446,4 @@ export async function rollbackUpdate(
   return rollbackInstallation(resolved, version, target ?? `${process.platform}-${process.arch}`);
 }
 
-export { OFFICIAL_REPOSITORY, expectedAssetName };
+export { OFFICIAL_REPOSITORY, expectedAssetName, DownloadCancelledError };

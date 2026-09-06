@@ -12,10 +12,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import {
   activateStagedUpdate,
+  DownloadCancelledError,
   stageUpdate,
   UpdateServiceError,
 } from '../dist/src/installation/updates/service.js';
-import { readStagedUpdateRecord } from '../dist/src/installation/updates/store.js';
+import {
+  readStagedUpdateRecord,
+  readUpdateSettingsState,
+} from '../dist/src/installation/updates/store.js';
 import { expectedAssetName } from '../dist/src/installation/updates/release-source.js';
 
 const run = promisify(execFile);
@@ -367,4 +371,51 @@ test('activateStagedUpdate refuses to activate when nothing is staged', async (t
     () => activateStagedUpdate(root),
     (error) => error instanceof UpdateServiceError && error.code === 'UPDATE_NOT_STAGED',
   );
+});
+
+// Issue #139 slice 2: cancelling a download must never activate a different release or change
+// the persisted update preference (see the console's "Cancel" control, wired through
+// src/installation/updates/routes.ts's `/api/updates/stage` handler to this same `signal`).
+test('cancelling a download mid-transfer is distinguishable from a failure, activates nothing, and never touches the persisted mode', async (t) => {
+  const scratch = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), 'latchkit-update-stage-cancel-')),
+  );
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const payload = Buffer.alloc(2_000_000, 9); // large enough to still be streaming when aborted
+  let firstChunkSent;
+  const firstChunkSentPromise = new Promise((resolve) => {
+    firstChunkSent = resolve;
+  });
+  const { server, baseUrl } = await startServer((req, res) => {
+    res.writeHead(200, { 'content-length': String(payload.length) });
+    res.write(payload.subarray(0, 1000));
+    firstChunkSent();
+    // Hold the connection open (never call res.end()) so the client observes an in-progress
+    // stream to cancel rather than a response that already finished on its own.
+  });
+  t.after(() => server.close());
+  const root = path.join(scratch, 'root');
+  const activations = countActivations(t, root);
+  const preview = previewFor({
+    version: '9.9.9-cancel',
+    sha256: hash(payload),
+    assetUrl: `${baseUrl}/download/fixture.zip`,
+  });
+
+  const controller = new AbortController();
+  const staging = stageUpdate(root, preview, { scratchParent: scratch, signal: controller.signal });
+  await firstChunkSentPromise;
+  controller.abort();
+
+  await assert.rejects(
+    staging,
+    (error) => error instanceof DownloadCancelledError || /cancelled/i.test(error.message),
+  );
+  assert.equal(activations(), 0, 'cancelling a download must never activate any release');
+  const staged = await readStagedUpdateRecord(root);
+  assert.equal(staged.status, 'failed');
+  // Never lose or change the update preference: no settings file was ever written by staging.
+  const settings = await readUpdateSettingsState(root);
+  assert.equal(settings.mode, 'manual');
+  assert.equal(settings.revision, 0);
 });

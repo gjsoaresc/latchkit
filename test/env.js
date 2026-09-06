@@ -19,3 +19,19 @@ if (!process.env.LATCHKIT_PROJECTS_ROOT) {
     `latchkit-test-projects-registry-${process.pid}-${Date.now()}`,
   );
 }
+
+// Issue #139 slice 2: `defaultInstallationRoot()` (src/installation/manager.js) backs the
+// update-service settings/staged-record/lease/handoff stores. Without this override, any test
+// that starts a server (every one now exposes the console updater's read-only status route) or
+// calls an update-service default-rooted function would touch the real per-user installation
+// directory the first time it ran. Individual update tests still pass an explicit, isolated
+// `installRoot` directly rather than relying on this shared default.
+if (!process.env.LATCHKIT_INSTALL_DATA_ROOT) {
+  process.env.LATCHKIT_INSTALL_DATA_ROOT = path.join(
+    os.tmpdir(),
+    `latchkit-test-install-root-${process.pid}-${Date.now()}`,
+  );
+}
+// Never let a real installed-bundle launcher's environment leak into a test process; ownership
+// detection must default to `source-development` unless a test explicitly overrides it.
+delete process.env.LATCHKIT_INSTALL_ROOT;

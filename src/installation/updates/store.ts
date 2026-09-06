@@ -15,7 +15,9 @@ import { errorCode, errorMessage } from '../../types.js';
 import { defaultInstallationRoot } from '../manager.js';
 import {
   DEFAULT_UPDATE_MODE,
+  INSTALLATION_LEASE_STATES,
   UPDATE_CONSENT_SOURCES,
+  UPDATE_HANDOFF_STAGES,
   UPDATE_MODES,
   UpdateContractError,
   isUpdateMode,
@@ -24,18 +26,24 @@ import {
   requireFields,
 } from './contracts.js';
 import type {
+  InstallationLease,
+  InstallationLeaseState,
   ReleaseAsset,
   ReleaseCandidate,
   ReleaseCheckResult,
   StagedUpdateRecord,
   UpdateConsent,
   UpdateConsentSource,
+  UpdateHandoffRecord,
+  UpdateHandoffStage,
   UpdateSettingsState,
 } from './contracts.js';
 
 export const UPDATE_SETTINGS_PATH = 'update-settings.json';
 export const UPDATE_STAGED_PATH = 'update-staged.json';
 export const UPDATE_LAST_CHECK_PATH = 'update-last-check.json';
+export const UPDATE_LEASE_PATH = 'update-lease.json';
+export const UPDATE_HANDOFF_PATH = 'update-handoff.json';
 
 async function parseJson(raw: string, label: string): Promise<unknown> {
   try {
@@ -335,6 +343,157 @@ export async function writeLastCheckRecord(
     installRoot,
     UPDATE_LAST_CHECK_PATH,
     `${JSON.stringify(result, null, 2)}\n`,
+    0o600,
+  );
+}
+
+// --- Installation lease (issue #139 slice 2) --------------------------------
+
+function validateInstallationLease(input: unknown): InstallationLease {
+  requireFields(
+    input,
+    [
+      'schemaVersion',
+      'state',
+      'ownerId',
+      'reason',
+      'fromVersion',
+      'toVersion',
+      'acquiredAt',
+      'expiresAt',
+    ],
+    'installation lease',
+  );
+  if (input.schemaVersion !== 1)
+    throw new UpdateContractError(
+      `Unsupported installation lease schema version ${String(input.schemaVersion)}.`,
+    );
+  if (!(INSTALLATION_LEASE_STATES as readonly string[]).includes(input.state as string))
+    throw new UpdateContractError(`state must be one of: ${INSTALLATION_LEASE_STATES.join(', ')}.`);
+  if (typeof input.ownerId !== 'string' || !input.ownerId)
+    throw new UpdateContractError('ownerId must be a non-empty string.');
+  if (typeof input.reason !== 'string') throw new UpdateContractError('reason must be a string.');
+  if (typeof input.fromVersion !== 'string' || !input.fromVersion)
+    throw new UpdateContractError('fromVersion must be a non-empty string.');
+  if (typeof input.toVersion !== 'string' || !input.toVersion)
+    throw new UpdateContractError('toVersion must be a non-empty string.');
+  return {
+    schemaVersion: 1,
+    state: input.state as InstallationLeaseState,
+    ownerId: input.ownerId,
+    reason: input.reason,
+    fromVersion: input.fromVersion,
+    toVersion: input.toVersion,
+    acquiredAt: isoDateTime(input.acquiredAt, 'acquiredAt'),
+    expiresAt: isoDateTime(input.expiresAt, 'expiresAt'),
+  };
+}
+
+export async function readInstallationLease(
+  installRoot: string = defaultInstallationRoot(),
+): Promise<InstallationLease | null> {
+  const raw = await readOptional(installRoot, UPDATE_LEASE_PATH);
+  if (raw === null) return null;
+  return validateInstallationLease(await parseJson(raw, 'Installation lease'));
+}
+
+export async function writeInstallationLease(
+  lease: InstallationLease,
+  installRoot: string = defaultInstallationRoot(),
+): Promise<void> {
+  validateInstallationLease(lease);
+  await writeAtomic(installRoot, UPDATE_LEASE_PATH, `${JSON.stringify(lease, null, 2)}\n`, 0o600);
+}
+
+export async function clearInstallationLease(
+  installRoot: string = defaultInstallationRoot(),
+): Promise<void> {
+  try {
+    await removeFile(installRoot, UPDATE_LEASE_PATH);
+  } catch (error) {
+    if (errorCode(error) !== 'ENOENT') throw error;
+  }
+}
+
+/** A lease is only ever a barrier while `state === 'restarting'` and its
+ * bounded `expiresAt` has not yet passed; an expired lease is treated
+ * exactly like `idle` so a crashed holder can never lock the installation
+ * out indefinitely (acceptance criterion 5's bounded automatic recovery). */
+export function isInstallationLeaseActive(
+  lease: InstallationLease | null,
+  now: Date = new Date(),
+): boolean {
+  return (
+    Boolean(lease) && lease!.state === 'restarting' && Date.parse(lease!.expiresAt) > now.getTime()
+  );
+}
+
+// --- Update handoff record (issue #139 slice 2) -----------------------------
+
+function validateUpdateHandoffRecord(input: unknown): UpdateHandoffRecord {
+  requireFields(
+    input,
+    [
+      'schemaVersion',
+      'attemptedAt',
+      'fromVersion',
+      'toVersion',
+      'target',
+      'outcome',
+      'stage',
+      'reason',
+      'replacementPid',
+      'recoveryCommand',
+    ],
+    'update handoff record',
+  );
+  if (input.schemaVersion !== 1)
+    throw new UpdateContractError(
+      `Unsupported update handoff schema version ${String(input.schemaVersion)}.`,
+    );
+  if (input.outcome !== 'succeeded' && input.outcome !== 'failed')
+    throw new UpdateContractError('outcome must be "succeeded" or "failed".');
+  if (!(UPDATE_HANDOFF_STAGES as readonly string[]).includes(input.stage as string))
+    throw new UpdateContractError(`stage must be one of: ${UPDATE_HANDOFF_STAGES.join(', ')}.`);
+  if (typeof input.fromVersion !== 'string' || !input.fromVersion)
+    throw new UpdateContractError('fromVersion must be a non-empty string.');
+  if (typeof input.toVersion !== 'string' || !input.toVersion)
+    throw new UpdateContractError('toVersion must be a non-empty string.');
+  if (typeof input.target !== 'string' || !input.target)
+    throw new UpdateContractError('target must be a non-empty string.');
+  if (input.replacementPid !== null && !Number.isInteger(input.replacementPid))
+    throw new UpdateContractError('replacementPid must be an integer or null.');
+  return {
+    schemaVersion: 1,
+    attemptedAt: isoDateTime(input.attemptedAt, 'attemptedAt'),
+    fromVersion: input.fromVersion,
+    toVersion: input.toVersion,
+    target: input.target,
+    outcome: input.outcome,
+    stage: input.stage as UpdateHandoffStage,
+    reason: optionalNonEmptyString(input.reason, 'reason'),
+    replacementPid: input.replacementPid as number | null,
+    recoveryCommand: optionalNonEmptyString(input.recoveryCommand, 'recoveryCommand'),
+  };
+}
+
+export async function readUpdateHandoffRecord(
+  installRoot: string = defaultInstallationRoot(),
+): Promise<UpdateHandoffRecord | null> {
+  const raw = await readOptional(installRoot, UPDATE_HANDOFF_PATH);
+  if (raw === null) return null;
+  return validateUpdateHandoffRecord(await parseJson(raw, 'Update handoff record'));
+}
+
+export async function writeUpdateHandoffRecord(
+  record: UpdateHandoffRecord,
+  installRoot: string = defaultInstallationRoot(),
+): Promise<void> {
+  validateUpdateHandoffRecord(record);
+  await writeAtomic(
+    installRoot,
+    UPDATE_HANDOFF_PATH,
+    `${JSON.stringify(record, null, 2)}\n`,
     0o600,
   );
 }
