@@ -121,7 +121,11 @@ export function FccConsole() {
             )}
           </>
         ) : (
-          <p className="section-note">Inspecting the optional local tool…</p>
+          <p className="section-note">
+            {error
+              ? 'Tool status is unavailable. Refresh to try again.'
+              : 'Inspecting the optional local tool…'}
+          </p>
         )}
         {error && (
           <p className="fcc-error" role="alert">
@@ -146,7 +150,7 @@ export function FccConsole() {
           )}
           <a
             className="fcc-guide"
-            href="https://github.com/willahealm/latchkit/blob/main/docs/managed-fcc.md"
+            href="/docs/managed-fcc.md"
             target="_blank"
             rel="noreferrer noopener"
           >

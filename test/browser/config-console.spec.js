@@ -210,6 +210,9 @@ test('keeps optional FCC controls bounded to explicit inspection and lifecycle a
   });
   await open(page);
   const tool = page.getByRole('region', { name: 'Free Claude Code.' });
+  const guide = await page.request.get(new URL('/docs/managed-fcc.md', page.url()).href);
+  expect(guide.status()).toBe(200);
+  expect(await guide.text()).toContain('latchkit tool fcc install');
   await expect(tool).toContainText('FCC is not installed');
   await expect(tool.getByRole('button', { name: 'Start server' })).toBeDisabled();
   await tool.getByRole('button', { name: 'Refresh' }).click();

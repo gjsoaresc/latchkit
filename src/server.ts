@@ -66,6 +66,7 @@ const ASSETS = new Map<string, [string, string]>([
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
+  ['/docs/managed-fcc.md', ['../../docs/managed-fcc.md', 'text/plain; charset=utf-8']],
 ]);
 
 function fail(status: number, message: string) {
