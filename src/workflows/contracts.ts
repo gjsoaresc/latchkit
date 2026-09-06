@@ -462,7 +462,15 @@ export function assertWorkflowRecord(value: unknown): asserts value is WorkflowR
     !statuses.has(String(item.status)) ||
     typeof item.executionAuthorized !== 'boolean' ||
     !text(item.providerId) ||
-    (!text(item.reviewProviderId) && (!route || route.requiresIndependentReview)) ||
+    (!text(item.reviewProviderId) &&
+      (!route ||
+        (route.requiresIndependentReview &&
+          !(
+            item.status === 'blocked' &&
+            item.lastOutcome?.summary.startsWith(
+              'Actual changed paths require the high-impact route',
+            )
+          )))) ||
     !text(item.policyVersion) ||
     !digest(item.policyDigest) ||
     !digest(item.promptDigest) ||

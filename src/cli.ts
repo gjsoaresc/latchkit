@@ -1032,6 +1032,7 @@ try {
                 expectedRevision: expectedRevision!,
                 taskId: requiredOption(values.task, 'task'),
                 prompt: values.prompt,
+                reviewProviderId: values['review-provider'],
                 executionAuthorized: values['host-local-authorized'] === true,
                 ...(decision
                   ? {

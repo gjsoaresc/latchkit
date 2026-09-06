@@ -98,6 +98,9 @@ function WorkflowCard({
                   taskId: workflow.taskId,
                   expectedRevision: workflow.revision,
                   executionAuthorized: values.get('permission') === 'on',
+                  ...(values.get('reviewProviderId')
+                    ? { reviewProviderId: values.get('reviewProviderId') }
+                    : {}),
                   ...(prompt.trim() ? { prompt } : {}),
                   ...(workflow.pendingAction
                     ? {
@@ -146,6 +149,16 @@ function WorkflowCard({
             Answers or updated requirements
             <Textarea name="answer" maxLength={16384} />
           </Label>
+          {workflow.route?.id === 'high-impact' && workflow.status === 'blocked' && (
+            <Label>
+              Escalated reviewer (Codex or Claude)
+              <NativeSelect name="reviewProviderId" required>
+                <option value="">Select a reviewer</option>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+              </NativeSelect>
+            </Label>
+          )}
           <Label className="authorization">
             Authorize local coding-tool execution
             <input name="permission" type="checkbox" required />

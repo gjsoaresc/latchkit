@@ -1386,6 +1386,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
     taskId: string;
     executionAuthorized: boolean;
     prompt?: string;
+    reviewProviderId?: string;
     resolution?: WorkflowResumeResolution;
     expectedRevision: number;
     mutationId?: string;
@@ -1404,6 +1405,14 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         'WORKFLOW_ACTION_ACTIVE',
       );
     const selectedMutationId = normalizeMutationId(input.mutationId);
+    if (
+      input.reviewProviderId !== undefined &&
+      !['codex', 'claude'].includes(input.reviewProviderId)
+    )
+      throw new WorkflowError(
+        'Escalated review requires a supported Codex or Claude reviewer.',
+        'WORKFLOW_REVIEWER_REQUIRED',
+      );
     let observed: { evidence: Task['evidence']; source: SourceSnapshot } | undefined;
     if (before.pendingAction && input.resolution?.decision === 'observed') {
       const pending = before.pendingAction;
@@ -1512,6 +1521,11 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         record.route?.id === 'high-impact' &&
         record.lastOutcome.summary.startsWith('Actual changed paths require the high-impact route')
       ) {
+        if (!input.reviewProviderId)
+          throw new WorkflowError(
+            'Select a Codex or Claude reviewer before resuming the escalated route.',
+            'WORKFLOW_REVIEWER_REQUIRED',
+          );
         // Preserve the prior lightweight artifacts as history, but require a
         // fresh high-impact requirements/plan/approval cycle. No old check
         // document or approval can cover the escalated consequences.
@@ -1520,6 +1534,7 @@ export function createWorkflowController(options: WorkflowControllerOptions) {
         record.plan = null;
         record.proposedChecks = null;
         record.approval = null;
+        record.reviewProviderId = input.reviewProviderId;
         record.lastOutcome = { status: 'none', summary: '' };
       } else {
         throw new WorkflowError(
