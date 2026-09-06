@@ -8,7 +8,18 @@
 import { readdir, rm, rmdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-function toPosix(relative) {
+export type ReconcileOptions = {
+  ignore?: readonly string[];
+  dryRun?: boolean;
+};
+
+export type ReconcileResult = { removed: string[]; bytesReclaimed: number };
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === 'object' && error !== null && 'code' in error;
+}
+
+function toPosix(relative: string): string {
   return relative.split(path.sep).join('/');
 }
 
@@ -16,14 +27,14 @@ function toPosix(relative) {
 // `root`. Symbolic links and junctions are never traversed or reported, so a
 // reconciliation boundary can never be told to "keep" something reached
 // through a link. Returns an empty array when `root` does not exist.
-export async function listFiles(root) {
-  const results = [];
-  async function walk(directory, prefix) {
+export async function listFiles(root: string): Promise<string[]> {
+  const results: string[] = [];
+  async function walk(directory: string, prefix: string): Promise<void> {
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
     } catch (error) {
-      if (error && error.code === 'ENOENT') return;
+      if (isNodeError(error) && error.code === 'ENOENT') return;
       throw error;
     }
     for (const entry of entries) {
@@ -49,18 +60,22 @@ export async function listFiles(root) {
 //
 // With `dryRun: true`, nothing is removed; the same `{ removed,
 // bytesReclaimed }` shape reports what an apply pass would do.
-export async function reconcileDirectory(root, keep, { ignore = [], dryRun = false } = {}) {
+export async function reconcileDirectory(
+  root: string,
+  keep: Iterable<string>,
+  { ignore = [], dryRun = false }: ReconcileOptions = {},
+): Promise<ReconcileResult> {
   const keepSet = keep instanceof Set ? keep : new Set(keep);
-  const ignored = (relative) =>
+  const ignored = (relative: string): boolean =>
     ignore.some((entry) => relative === entry || relative.startsWith(`${entry}/`));
-  const removed = [];
+  const removed: string[] = [];
   let bytesReclaimed = 0;
-  async function walk(directory, prefix) {
+  async function walk(directory: string, prefix: string): Promise<void> {
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
     } catch (error) {
-      if (error && error.code === 'ENOENT') return;
+      if (isNodeError(error) && error.code === 'ENOENT') return;
       throw error;
     }
     for (const entry of entries) {
@@ -74,7 +89,8 @@ export async function reconcileDirectory(root, keep, { ignore = [], dryRun = fal
           try {
             await rmdir(absolute);
           } catch (error) {
-            if (error && error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT') throw error;
+            if (!isNodeError(error) || (error.code !== 'ENOTEMPTY' && error.code !== 'ENOENT'))
+              throw error;
           }
         }
         continue;

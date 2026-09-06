@@ -1,15 +1,37 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { collectBrowserLicenses } from './browser-licenses.js';
 import { listFiles, reconcileDirectory } from './reconcile.js';
 
-const root = path.resolve(import.meta.dirname, '..');
+const adjacentRoot = path.resolve(import.meta.dirname, '..');
+// The tool runs from source only during development and from dist/scripts in
+// the supported bootstrap. Resolve the actual repository in both layouts.
+const root = existsSync(path.join(adjacentRoot, 'tsconfig.json'))
+  ? adjacentRoot
+  : path.resolve(adjacentRoot, '..');
 const dist = path.join(root, 'dist');
+const clean = process.argv.includes('--clean');
 
-if (process.argv.includes('--clean'))
-  await rm(dist, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+if (clean) await rm(dist, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
 await mkdir(dist, { recursive: true });
+
+// A clean build has just removed the emitted bootstrap tool that is currently
+// running. Recreate the strict tooling slice before rebuilding the application
+// so dist remains self-contained after the command exits.
+if (clean) {
+  const tooling = spawnSync(
+    process.execPath,
+    [
+      path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
+      '--project',
+      'tsconfig.tools.json',
+    ],
+    { cwd: root, stdio: 'inherit' },
+  );
+  if (tooling.status !== 0) process.exit(tooling.status ?? 1);
+}
 
 // --listEmittedFiles reports the exact set of files this compilation wrote,
 // so a source that was deleted or renamed since the previous build can be
@@ -26,14 +48,16 @@ const typeScript = spawnSync(
   ],
   { cwd: root, stdio: ['inherit', 'pipe', 'inherit'], encoding: 'utf8' },
 );
-const emittedByTypeScript = new Set();
+const emittedByTypeScript = new Set<string>();
 for (const line of (typeScript.stdout ?? '').split(/\r?\n/)) {
   const match = /^TSFILE:\s*(.+)$/.exec(line);
   if (!match) {
     if (line.trim()) process.stdout.write(`${line}\n`);
     continue;
   }
-  const relative = path.relative(dist, path.resolve(match[1].trim())).split(path.sep).join('/');
+  const emittedPath = match[1]?.trim();
+  if (!emittedPath) continue;
+  const relative = path.relative(dist, path.resolve(emittedPath)).split(path.sep).join('/');
   if (relative && !relative.startsWith('..')) emittedByTypeScript.add(relative);
 }
 if (typeScript.status !== 0) process.exit(typeScript.status ?? 1);
@@ -42,7 +66,7 @@ if (typeScript.status !== 0) process.exit(typeScript.status ?? 1);
 // over from a source that no longer exists can be reclaimed immediately.
 // reconcileDirectory reports paths relative to the directory it is given,
 // so the "src/" prefix from the dist-relative TSFILE paths is stripped here.
-const emittedUnder = (prefix) =>
+const emittedUnder = (prefix: string): string[] =>
   [...emittedByTypeScript]
     .filter((relative) => relative.startsWith(`${prefix}/`))
     .map((relative) => relative.slice(prefix.length + 1));
@@ -74,6 +98,8 @@ const browserBuild = await esbuild.build({
 });
 // collectBrowserLicenses reconciles its own destination against the
 // packages it actually wrote this run before returning.
+if (!browserBuild.metafile)
+  throw new Error('esbuild did not return required browser license metadata.');
 await collectBrowserLicenses(root, path.join(dist, 'web', 'licenses'), browserBuild.metafile);
 
 const skillFiles = await listFiles(path.join(root, 'skills'));

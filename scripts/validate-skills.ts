@@ -1,10 +1,18 @@
 import { access, readdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export function resolveRepositoryRoot(scriptDirectory: string): string {
+  const adjacentRoot = path.resolve(scriptDirectory, '..');
+  return existsSync(path.join(adjacentRoot, 'tsconfig.json'))
+    ? adjacentRoot
+    : path.resolve(adjacentRoot, '..');
+}
 
-function parseFrontMatter(content, relativePath) {
+const repositoryRoot = resolveRepositoryRoot(path.dirname(fileURLToPath(import.meta.url)));
+
+function parseFrontMatter(content: string, relativePath: string): Map<string, string> {
   const lines = content.split(/\r?\n/);
   if (lines[0] !== '---')
     throw new Error(`${relativePath}: missing YAML front matter opening delimiter`);
@@ -14,14 +22,17 @@ function parseFrontMatter(content, relativePath) {
   for (const line of lines.slice(1, end)) {
     const match = /^([A-Za-z][\w-]*):\s*(.+)$/.exec(line);
     if (!match) throw new Error(`${relativePath}: invalid metadata line: ${line}`);
-    metadata.set(match[1], match[2].trim());
+    const key = match[1];
+    const value = match[2];
+    if (!key || !value) throw new Error(`${relativePath}: invalid metadata line: ${line}`);
+    metadata.set(key, value.trim());
   }
   return metadata;
 }
 
-export async function findSkillFiles(root) {
-  const found = [];
-  async function visit(directory) {
+export async function findSkillFiles(root: string): Promise<string[]> {
+  const found: string[] = [];
+  async function visit(directory: string): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) await visit(entryPath);
@@ -32,7 +43,7 @@ export async function findSkillFiles(root) {
   return found.sort();
 }
 
-export async function validateSkillTree(root) {
+export async function validateSkillTree(root: string): Promise<string[]> {
   const files = await findSkillFiles(root);
   if (!files.length) throw new Error(`No SKILL.md files found under ${root}`);
   const names = new Set();
@@ -49,7 +60,7 @@ export async function validateSkillTree(root) {
       throw new Error(`${relativePath}: duplicate skill name ${expectedName}`);
     names.add(expectedName);
     for (const match of content.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
-      const reference = match[1].split(/[?#]/, 1)[0];
+      const reference = match[1]?.split(/[?#]/, 1)[0];
       if (!reference || /^[a-z][a-z+.-]*:/i.test(reference) || reference.startsWith('#')) continue;
       try {
         await access(path.resolve(path.dirname(file), reference));
