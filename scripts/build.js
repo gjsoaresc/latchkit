@@ -1,6 +1,7 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { collectBrowserLicenses } from './browser-licenses.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 const dist = path.join(root, 'dist');
@@ -32,7 +33,7 @@ await writeFile(
   `${utilities.css}\n${await readFile(path.join(root, 'web', 'style.css'), 'utf8')}`,
 );
 const esbuild = await import('esbuild');
-await esbuild.build({
+const browserBuild = await esbuild.build({
   entryPoints: [path.join(root, 'web', 'app.tsx')],
   bundle: true,
   format: 'esm',
@@ -40,7 +41,9 @@ await esbuild.build({
   outfile: path.join(dist, 'web', 'app.js'),
   sourcemap: false,
   minify: true,
+  metafile: true,
   define: { 'process.env.NODE_ENV': '"production"' },
 });
+await collectBrowserLicenses(root, path.join(dist, 'web', 'licenses'), browserBuild.metafile);
 await cp(path.join(root, 'skills'), path.join(dist, 'skills'), { recursive: true });
 await cp(path.join(root, 'schemas'), path.join(dist, 'schemas'), { recursive: true });
