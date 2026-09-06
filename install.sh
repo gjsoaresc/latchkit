@@ -11,7 +11,23 @@ if [ -z "$artifact" ] && [ "$version" = latest ]; then release=$(curl --fail --l
 version=${version#v}
 [ -n "$artifact" ] || artifact="https://github.com/willahealm/latchkit/releases/download/v$version/latchkit-$version-$target.tar.gz"
 [ -n "$checksum" ] || checksum="$artifact.sha256"
-temporary=$(mktemp -d "${TMPDIR:-/tmp}/latchkit-install.XXXXXX"); trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/latchkit-install.XXXXXX")
+# On Windows, a just-exited private Node runtime can remain locked briefly.
+# Cleanup is best effort, but must never turn an already successful (or failed)
+# installation into a different result.
+cleanup() {
+  cleanup_status=$?
+  trap - EXIT HUP INT TERM
+  cleanup_attempt=1
+  while [ "$cleanup_attempt" -le 3 ]; do
+    if rm -rf "$temporary"; then exit "$cleanup_status"; fi
+    cleanup_attempt=$((cleanup_attempt + 1))
+    [ "$cleanup_attempt" -le 3 ] && sleep 1 || :
+  done
+  printf 'Warning: could not remove installer temporary directory: %s\n' "$temporary" >&2
+  exit "$cleanup_status"
+}
+trap cleanup EXIT HUP INT TERM
 fetch() { if [ -f "$1" ]; then cp "$1" "$2"; else curl --fail --location --silent --show-error "$1" -o "$2"; fi; }
 fetch "$artifact" "$temporary/archive.tar.gz"; fetch "$checksum" "$temporary/checksum"
 expected=$(awk '{print $1; exit}' "$temporary/checksum"); actual=$( (sha256sum "$temporary/archive.tar.gz" 2>/dev/null || shasum -a 256 "$temporary/archive.tar.gz") | awk '{print $1}')

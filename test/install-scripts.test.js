@@ -17,11 +17,11 @@
 // test/installation.test.js). The unsupported-OS/architecture tests do use
 // the genuine, unmodified install.sh gate and require no stub.
 //
-// install.sh needs a POSIX `sh` plus coreutils (mktemp, sha256sum, tar, awk,
-// cp, mkdir, rm, uname). On non-Windows hosts these are assumed to be the
-// system's own. On Windows this suite looks for Git for Windows' bundled
-// MSYS `sh.exe`/coreutils and skips the install.sh tests with an explicit
-// reason if it is not present.
+// install.sh needs a POSIX `sh` plus coreutils (mktemp, sha256sum, tar, gzip,
+// awk, cp, mkdir, rm, uname, sleep). On non-Windows hosts these are assumed to
+// be the system's own. On Windows this suite supplies Git for Windows' bundled
+// MSYS toolchain only to its child processes, and skips the install.sh tests
+// with an explicit reason if that complete fixture capability is unavailable.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -56,22 +56,58 @@ async function exists(file) {
   }
 }
 
+function toMsysPath(value) {
+  const normalized = value.replaceAll('\\', '/');
+  const drive = /^([A-Za-z]):(\/.*)$/.exec(normalized);
+  return drive ? `/${drive[1].toLowerCase()}${drive[2]}` : normalized;
+}
+
+function posixPath(...directories) {
+  if (process.platform !== 'win32') return directories.join(path.delimiter);
+  return directories.map(toMsysPath).join(':');
+}
+
+function posixEnvironment(...directories) {
+  return {
+    ...process.env,
+    PATH:
+      process.platform === 'win32'
+        ? posixPath(...directories, GIT_USR_BIN)
+        : posixPath(...directories, process.env.PATH ?? ''),
+  };
+}
+
 async function findPosixShell() {
   if (process.platform !== 'win32') return '/bin/sh';
   const candidate = path.join(GIT_USR_BIN, 'sh.exe');
-  return (await exists(candidate)) ? candidate : null;
+  if (!(await exists(candidate))) return null;
+  const required = [
+    'uname',
+    'mktemp',
+    'sha256sum',
+    'tar',
+    'gzip',
+    'awk',
+    'cp',
+    'mkdir',
+    'rm',
+    'sleep',
+  ];
+  try {
+    await run(candidate, ['-c', `command -v ${required.join(' ')} >/dev/null`], {
+      env: posixEnvironment(),
+      timeout: 15_000,
+    });
+    return candidate;
+  } catch {
+    return null;
+  }
 }
 
 const posixShell = await findPosixShell();
 const skipPosix = posixShell
   ? false
   : 'requires a POSIX sh (Git for Windows was not found at the conventional path)';
-
-function posixPath() {
-  return process.platform === 'win32'
-    ? `${GIT_USR_BIN}${path.delimiter}${process.env.PATH ?? ''}`
-    : (process.env.PATH ?? '');
-}
 
 async function writeFakeUname(directory, { s, m }) {
   await mkdir(directory, { recursive: true });
@@ -180,6 +216,7 @@ async function tarGzBundle(bundleDirectory, archive) {
   const tool = process.platform === 'win32' ? path.join(GIT_USR_BIN, 'tar.exe') : 'tar';
   const forceLocal = process.platform === 'win32' ? ['--force-local'] : [];
   await run(tool, [...forceLocal, '-czf', archive, '-C', bundleDirectory, '.'], {
+    env: posixEnvironment(),
     timeout: 60_000,
   });
 }
@@ -208,7 +245,10 @@ test(
         ],
         {
           windowsHide: true,
-          timeout: 30_000,
+          // Windows Defender and concurrent CI process creation can delay even
+          // this refusal-only PowerShell child. Keep the test bounded without
+          // mistaking transient startup delay for a missing refusal.
+          timeout: 60_000,
           env: { ...process.env, PROCESSOR_ARCHITECTURE: 'ARM64' },
         },
       ),
@@ -377,7 +417,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--root', targetRoot], {
         timeout: 30_000,
-        env: { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` },
+        env: posixEnvironment(fakebin),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Unsupported operating system/);
@@ -399,7 +439,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--root', targetRoot], {
         timeout: 30_000,
-        env: { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` },
+        env: posixEnvironment(fakebin),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Unsupported architecture/);
@@ -424,7 +464,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--root', targetRoot], {
         timeout: 30_000,
-        env: { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` },
+        env: posixEnvironment(fakebin),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Unsupported target: linux-arm64/);
@@ -445,7 +485,7 @@ test(
       s: 'Darwin',
       m: 'x86_64',
     });
-    const env = { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` };
+    const env = posixEnvironment(fakebin);
     const version = '9.9.9-fixture';
     const target = 'darwin-x64';
     const bundle = await stubPosixBundle(scratch, version, target);
@@ -491,7 +531,7 @@ test(
       s: 'Darwin',
       m: 'x86_64',
     });
-    const env = { ...process.env, PATH: `${fakebin}${path.delimiter}${posixPath()}` };
+    const env = posixEnvironment(fakebin);
     const target = 'darwin-x64';
     const root = path.join(scratch, 'root');
 
@@ -561,7 +601,7 @@ test(
     await assert.rejects(
       run(posixShell, [path.join(repository, 'install.sh'), '--bogus-flag'], {
         timeout: 15_000,
-        env: { ...process.env, PATH: posixPath() },
+        env: posixEnvironment(),
       }),
       (error) => {
         assert.match(String(error.stderr ?? error.message), /Usage: install\.sh/);
