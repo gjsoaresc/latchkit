@@ -275,9 +275,8 @@ export function renderEvaluationMarkdown(result: EvaluationResult): string {
  * mechanically applies the scenario's seeded change and records a change log. The runner
  * hashes every workspace file before and after that call — it does not rely solely on the
  * change log's self-report — then grades the result against the deterministic correctness
- * gate and the fixed metric set. The reconciliation arm (the #110-#112 intent/reconciliation
- * flow) is always reported as an explicit, schema-level "unavailable" result: this increment
- * does not stub a fake outcome for work that has not merged yet.
+ * gate and the fixed metric set. An arm that cannot run remains an explicit, schema-level
+ * "unavailable" result rather than a fabricated outcome.
  */
 export interface ApplyChangeInput {
   workspace: string;
@@ -323,11 +322,7 @@ interface RequirementChangeSuiteOptions {
 }
 
 const RECONCILIATION_UNAVAILABLE_REASON =
-  'The intent/reconciliation flow depends on issues #110 (decision/assumption/observation ' +
-  'identities), #111 (amend intent, inspect impact, invalidate stale evidence), and #112 ' +
-  '(bounded resume brief). None of those are available in this repository slice, so this arm ' +
-  'is an explicit schema-level placeholder rather than a stubbed or fabricated result. It will ' +
-  'be filled in once #110-#112 merge.';
+  'No reconciliation result was collected because the scripted controller was unavailable.';
 
 /** The second arm from issue #116 acceptance criterion 4: explicit and schema-level, never a stub. */
 export function unavailableReconciliationArm(
