@@ -337,14 +337,11 @@ test('exceeding the feature-directory or per-file byte limit truncates and warns
   assert.ok(bigEntry.warnings.some((warning) => warning.code === 'file-exceeds-limit'));
 });
 
-test('unknown or not-yet-implemented adapters and an invalid root fail with a distinct code', async (t) => {
+test('an unknown adapter and an invalid root fail with a distinct code', async (t) => {
   const root = await emptyProject(t);
-  await assert.rejects(discoverSpecImport(root, { adapter: 'openspec' }), {
-    code: 'SPEC_IMPORT_ADAPTER_NOT_YET_SUPPORTED',
-  });
-  await assert.rejects(discoverSpecImport(root, { adapter: 'tinyspec' }), {
-    code: 'SPEC_IMPORT_ADAPTER_NOT_YET_SUPPORTED',
-  });
+  // Spec Kit, OpenSpec (test/spec-imports-openspec.test.js), and TinySpec
+  // (test/spec-imports-tinyspec.test.js) are all implemented; only a truly
+  // unknown adapter id or an invalid root should fail here.
   await assert.rejects(discoverSpecImport(root, { adapter: 'made-up' }), {
     code: 'SPEC_IMPORT_UNKNOWN_ADAPTER',
   });

@@ -11,7 +11,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["id", "version", "upstream"],
       "properties": {
-        "id": { "const": "spec-kit" },
+        "id": { "enum": ["spec-kit", "openspec", "tinyspec"] },
         "version": { "type": "string", "minLength": 1 },
         "upstream": {
           "type": "object", "additionalProperties": false,
@@ -104,7 +104,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["id", "checked", "parallel", "userStory", "description"],
       "properties": {
-        "id": { "type": "string", "pattern": "^T\\d{3,}$" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 },
         "checked": { "type": "boolean" },
         "parallel": { "type": "boolean" },
         "userStory": { "type": ["string", "null"] },
@@ -123,7 +123,7 @@
     "entry": {
       "type": "object", "additionalProperties": false,
       "required": [
-        "id", "slug", "directory", "status", "sourceDeclaredStatus", "artifacts",
+        "id", "slug", "directory", "status", "lifecycle", "sourceDeclaredStatus", "artifacts",
         "declaredLinks", "inferredReferences", "parsedIdentifiers", "warnings"
       ],
       "properties": {
@@ -131,6 +131,7 @@
         "slug": { "type": "string" },
         "directory": { "$ref": "#/$defs/relativePath" },
         "status": { "enum": ["complete", "partial", "ambiguous", "unsupported-version", "malformed", "inaccessible"] },
+        "lifecycle": { "enum": ["current", "active", "archived", null] },
         "sourceDeclaredStatus": {
           "type": "object", "additionalProperties": false,
           "required": ["value", "provenance"],
