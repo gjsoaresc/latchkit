@@ -67,11 +67,13 @@ async function add(root, clock, overrides = {}) {
 }
 const wait = () => new Promise((resolve) => setTimeout(resolve, 25));
 async function until(check) {
-  for (let tries = 0; tries < 200; tries += 1) {
+  // Slow CI runners have exceeded a 5-second ceiling; the wait ends as soon as the
+  // condition holds, so a wider bound only affects genuine failures.
+  for (let tries = 0; tries < 800; tries += 1) {
     if (await check()) return;
     await wait();
   }
-  assert.fail('Condition did not settle within 5 seconds.');
+  assert.fail('Condition did not settle within 20 seconds.');
 }
 
 function heldRunner() {
