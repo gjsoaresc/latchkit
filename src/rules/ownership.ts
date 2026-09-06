@@ -23,7 +23,7 @@ export function findManagedSection(
 
 export function renderManagedSection(body: string, newline: '\n' | '\r\n' = '\n'): string {
   const normalized = body.replaceAll('\r\n', '\n').trimEnd().replaceAll('\n', newline);
-  return `${SECTION_START}${newline}${normalized}${newline}${SECTION_END}`;
+  return `${SECTION_START}${newline}${newline}${normalized}${newline}${newline}${SECTION_END}`;
 }
 
 export function mergeManagedSection(current: string, body: string): string {
