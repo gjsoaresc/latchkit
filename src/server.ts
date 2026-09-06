@@ -45,7 +45,7 @@ import {
   approveResultDecision,
 } from './workflows/result-decision-service.js';
 import { addSpecDecisionNotes, approveSpecDecision } from './workflows/spec-decision-service.js';
-import { createAcceptanceVerifier } from './acceptance/service.js';
+import { createAcceptanceVerifier, runEnhancedWorkflowChecks } from './acceptance/service.js';
 import {
   inspectTask,
   listTasks,
@@ -905,6 +905,9 @@ export async function startServer(root: string, options: StartServerOptions = {}
         } else if (pathname === '/api/spec/verify' && req.method === 'POST') {
           const body = await readJson<Parameters<typeof verifyTask>[1]>(req);
           respond(res, 200, await serialize(() => verifyTask(root, body)));
+        } else if (pathname === '/api/spec/run' && req.method === 'POST') {
+          const body = await readJson<Parameters<typeof runEnhancedWorkflowChecks>[1]>(req);
+          respond(res, 200, await serialize(() => runEnhancedWorkflowChecks(root, body)));
         } else if (pathname === '/api/reviews' && req.method === 'GET') {
           respond(res, 200, await reviewOrchestrator.inspect());
         } else if (pathname === '/api/reviews' && req.method === 'POST') {

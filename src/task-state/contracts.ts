@@ -128,6 +128,7 @@ export type TaskEvidence = {
   source: SourceSnapshot;
   authorizationId: string | null;
   createdAt: string;
+  enhanced?: { workflowRevision: number; definitionSha256: string };
 };
 export type TaskEvent = {
   id: string;
@@ -149,6 +150,7 @@ export type EnhancedCheck = {
   criterionId: string;
   type: 'cli' | 'http' | 'browser' | 'manual';
   definitionSha256: string;
+  definition?: Record<string, unknown>;
 };
 export type EnhancedWorkflow = {
   schemaVersion: 1;
@@ -455,6 +457,7 @@ function validateEvidence(value: TaskEvidence, path: string) {
       'source',
       'authorizationId',
       'createdAt',
+      'enhanced',
     ],
     [
       'id',
@@ -494,6 +497,16 @@ function validateEvidence(value: TaskEvidence, path: string) {
   if (value.authorizationId !== null)
     id(value.authorizationId, `${path}.authorizationId`, 'authorization');
   timestamp(value.createdAt, `${path}.createdAt`);
+  if (value.enhanced !== undefined) {
+    keys(
+      value.enhanced,
+      ['workflowRevision', 'definitionSha256'],
+      ['workflowRevision', 'definitionSha256'],
+      `${path}.enhanced`,
+    );
+    integer(value.enhanced.workflowRevision, `${path}.enhanced.workflowRevision`, 1);
+    hash(value.enhanced.definitionSha256, `${path}.enhanced.definitionSha256`);
+  }
   return value;
 }
 
@@ -578,7 +591,7 @@ function validateEnhancedWorkflow(value: EnhancedWorkflow | null, task: Task, pa
     const at = `${path}.checks[${index}]`;
     keys(
       check,
-      ['id', 'criterionId', 'type', 'definitionSha256'],
+      ['id', 'criterionId', 'type', 'definitionSha256', 'definition'],
       ['id', 'criterionId', 'type', 'definitionSha256'],
       at,
     );
@@ -597,6 +610,17 @@ function validateEnhancedWorkflow(value: EnhancedWorkflow | null, task: Task, pa
     if (!['cli', 'http', 'browser', 'manual'].includes(check.type))
       throw new TaskStateError('Unknown enhanced check type.', 'TASK_STATE_INVALID', `${at}.type`);
     hash(check.definitionSha256, `${at}.definitionSha256`);
+    if (
+      check.definition !== undefined &&
+      (check.definition === null ||
+        typeof check.definition !== 'object' ||
+        Array.isArray(check.definition))
+    )
+      throw new TaskStateError(
+        'Enhanced check definition must be an object.',
+        'TASK_STATE_INVALID',
+        `${at}.definition`,
+      );
   }
   for (const criterion of task.criteria.filter((item) => item.required)) {
     if (!value.checks.some((check) => check.criterionId === criterion.id))

@@ -8,7 +8,7 @@ import { errorCode, errorMessage } from '../types.js';
 import { providerById } from '../providers/registry.js';
 import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../runtime/process-runner.js';
 import type { ProcessRunResult, RunProviderProcessOptions } from '../runtime/process-runner.js';
-import { inspectTask, recordEvidence } from '../task-state/service.js';
+import { canonicalSha256, inspectTask, recordEvidence } from '../task-state/service.js';
 import type { SourceSnapshot, Task } from '../task-state/contracts.js';
 import { safePath, writeAtomic } from '../storage.js';
 import { AcceptanceError, safeArtifactLocation, validateAcceptanceDocument } from './contracts.js';
@@ -714,6 +714,19 @@ export function createAcceptanceVerifier({
           'CRITERION_NOT_FOUND',
         );
     }
+    // An enrolled workflow is executable only through its persisted declarations.
+    // This prevents a caller from reusing an ID with weaker assertions.
+    if (inspected.task.enhancedWorkflow) {
+      const mapped = new Map(inspected.task.enhancedWorkflow.checks.map((item) => [item.id, item]));
+      for (const [id, mapping] of mapped) {
+        const declaredCheck = declared.checks.find((item) => item.id === id);
+        if (!declaredCheck || canonicalSha256(declaredCheck) !== mapping.definitionSha256)
+          throw new AcceptanceError(
+            `Enhanced check ${id} must use its registered executable definition.`,
+            'ENHANCED_CHECK_DEFINITION_MISMATCH',
+          );
+      }
+    }
     if (ACTIVE.has(key(projectRoot, taskId)))
       throw new AcceptanceError(
         'Acceptance verification is already running.',
@@ -837,6 +850,15 @@ export function createAcceptanceVerifier({
           command: check.label,
           environmentDetails: `acceptance-${check.type}; artifact=${executedCheck.stored.location}`,
           artifact,
+          ...(task.enhancedWorkflow?.checks.find((item) => item.id === check.id)
+            ? {
+                kind: `enhanced-check:${check.id}`,
+                enhanced: {
+                  workflowRevision: task.enhancedWorkflow.revision,
+                  definitionSha256: canonicalSha256(check),
+                },
+              }
+            : {}),
         });
         results.push({
           checkId: check.id,
@@ -886,4 +908,29 @@ export function createAcceptanceVerifier({
     return { taskId, cancelled: Boolean(active) };
   }
   return Object.freeze({ verify, cancel });
+}
+
+/** Runs the immutable declarations enrolled with an enhanced workflow. Callers
+ * never supply a second, potentially weaker check document for this path. */
+export async function runEnhancedWorkflowChecks(
+  root: string,
+  input: Omit<VerifyInput, 'document'> & { taskId: string },
+) {
+  const inspected = await inspectTask(root, input.taskId);
+  const workflow = inspected.task.enhancedWorkflow;
+  if (!workflow)
+    throw new AcceptanceError(
+      'Task is not enrolled in an enhanced workflow.',
+      'ENHANCED_WORKFLOW_MISSING',
+    );
+  const checks = workflow.checks.map((item) => item.definition);
+  if (checks.some((item) => item === undefined))
+    throw new AcceptanceError(
+      'Enhanced workflow has legacy check mappings without executable definitions.',
+      'ENHANCED_CHECK_DEFINITION_MISSING',
+    );
+  return createAcceptanceVerifier({ root }).verify({
+    ...input,
+    document: { schemaVersion: 1, checks },
+  });
 }
