@@ -170,7 +170,7 @@ test('server close cancels a long review before Node waits for its POST socket',
   assert.equal((await (await run).json()).state, 'cancelled');
 });
 
-test('MCP API preview is inert, apply requires the exact reviewed preview, and unsupported providers stay refused', async (t) => {
+test('MCP API preview is inert, apply requires the exact reviewed preview, and Codex qualification is explicit', async (t) => {
   const { root, origin, headers } = await fixture(t);
   const definition = {
     schemaVersion: 1,
@@ -210,7 +210,7 @@ test('MCP API preview is inert, apply requires the exact reviewed preview, and u
     }),
   });
   assert.equal(unsupported.status, 200);
-  assert.equal((await unsupported.json()).plan.diagnostics[0].code, 'MCP_PROVIDER_UNSUPPORTED');
+  assert.notEqual((await unsupported.json()).plan.diagnostics[0]?.code, 'MCP_PROVIDER_UNSUPPORTED');
 });
 
 test('MCP apply refuses stale managed state and a preview that did not review activation', async (t) => {

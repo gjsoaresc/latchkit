@@ -44,7 +44,11 @@ The input may be one definition or an array, bounded to 64 definitions and 64 Ki
 
 ## Ownership and permissions
 
-Only Claude Code's project `.mcp.json` serializer is currently supported. Managed server subentries are recorded in `.latchkit/mcp-state.json`; unrelated servers and unknown JSON fields remain user-owned. Later edits to unrelated entries do not block removal. A changed owned entry, duplicate identity, unowned collision, malformed JSON, or unsafe managed path blocks mutation. JSON formatting may be normalized; comments are unsupported by this JSON format and invalid JSON is refused. Global configuration and provider permission settings are never written.
+Claude Code's project `.mcp.json` serializer is supported through the console and CLI flow. A separate Codex project serializer is qualified for Codex CLI `0.153.2` and its documented `.codex/config.toml` `mcp_servers` schema: stdio and streamable HTTP entries, plus native `enabled_tools` narrowing. It is deliberately exact-version gated; an unknown, older, or upgraded Codex CLI must be requalified before an existing activation can be reused. Legacy SSE and HTTP credential references remain refused. The Codex serializer is a transaction-backed integration primitive pending the same preview/API wiring as the Claude flow; it does not claim a live provider activation.
+
+The current managed preview/apply operation accepts either a complete Claude set or a complete Codex set. A mixed Claude-and-Codex definition set is refused until one registered transaction can atomically update both provider files; it is never presented as a combined activation.
+
+Managed server subentries are recorded in provider-specific state files; unrelated entries and unknown configuration remain user-owned. Later edits to unrelated entries do not block removal. A changed owned entry, duplicate identity, unowned collision, malformed configuration, or unsafe managed path blocks mutation. Global configuration and provider permission settings are never written.
 
 Provider configuration and ownership state share the registered-resource transaction journal and protected snapshots. A provider file created by Latchkit is removed when it becomes empty; pre-existing files and unrelated content are preserved. After an interrupted mutation:
 
@@ -57,7 +61,7 @@ Recovery uses a fixed resource registry and needs no imported definition file. C
 
 The shared provider process runner checks each managed entry immediately before launch. Changed configuration, missing required environment variables, or a changed Latchkit provider contract refuses that launch until the entry is reconciled, removed, or explicitly reauthorized. This checks the Latchkit runtime contract; it does not inspect the installed provider binary's version or guard sessions launched outside Latchkit. Project-local ownership records are bookkeeping, not a cryptographic authorization boundary against an attacker who can edit the repository. Provider trust and tool approvals remain the actual tool-execution boundary.
 
-`toolAllowlist` is representable for import but **activation is unsupported**: writing an allowlist into configuration without runtime enforcement would falsely imply restricted tool access. Latchkit has no MCP tool-dispatch API and issues no tool grants. Enforceable tool narrowing, installed-provider version qualification, and other provider serializers remain open parts of issue #19.
+For Claude, `toolAllowlist` remains representable for import but **activation is unsupported**. For the exact qualified Codex schema, it serializes to native `enabled_tools`; Codex documents this as the allowlist of tool names exposed by that MCP server. Latchkit never changes Codex approval policy or grants tools itself, and `disabled_tools`/approval-mode expansion is not emitted.
 
 ## Local console and HTTP controls
 
@@ -83,7 +87,8 @@ Health is a separately invoked diagnostic for already-enabled managed HTTP defin
 | Loopback HTTP MCP initialization and tool discovery             | Tested with local JSON/SSE fixtures, redirects, malformed replies, limits and cancellation      |
 | Stdio health, remote health, legacy SSE health                  | Unsupported; no process or remote request is started                                            |
 | Configured tool allowlists and runtime tool dispatch            | Unsupported; activation refuses allowlists                                                      |
-| Codex, Cursor, Cursor CLI, Antigravity serializers              | Unsupported in this slice; these products may support MCP independently                         |
+| Codex project stdio/streamable HTTP TOML and `enabled_tools`    | Qualified serializer fixture for CLI 0.153.2; live provider activation unknown                  |
+| Cursor, Cursor CLI, Antigravity serializers                     | Unsupported in this slice; these products may support MCP independently                         |
 | Other operating systems and real-provider credentialed sessions | Unknown                                                                                         |
 
 Format evidence comes from [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp). The fixture protocol follows MCP's [2025-06-18 lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle) and [HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports). Documentation evidence does not establish a credentialed provider test.
