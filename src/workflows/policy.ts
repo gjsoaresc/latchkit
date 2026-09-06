@@ -23,6 +23,10 @@ export class WorkflowSnapshot {
   policy_version!: string;
   capability_ready!: boolean;
   context!: string;
+  /** New routed workflows supply their selected stages.  Omitted means the
+   * historical six-stage policy, which keeps old persisted records stable. */
+  allowed_phases?: WorkflowPhase[];
+  requires_approval?: boolean;
 
   constructor(init: {
     phase: WorkflowPhase;
@@ -32,6 +36,8 @@ export class WorkflowSnapshot {
     policy_version: string;
     capability_ready: boolean;
     context: string;
+    allowed_phases?: WorkflowPhase[];
+    requires_approval?: boolean;
   }) {
     Object.assign(this, init);
   }
@@ -207,13 +213,19 @@ export function next_step(snapshot: WorkflowSnapshot, outcome: WorkflowOutcome):
   if (outcome.status === 'error') return action('blocked', snapshot.phase, outcome.summary, '');
   if (outcome.status === 'needs-input')
     return action('await-input', snapshot.phase, outcome.summary, '');
-  if (snapshot.phase !== 'requirements' && snapshot.phase !== 'plan' && !snapshot.approval_valid)
-    return action(
-      'await-approval',
-      'plan',
-      'The current requirements, plan and checks require approval.',
-      '',
-    );
+  const allowed = snapshot.allowed_phases ?? [
+    'requirements',
+    'plan',
+    'implementation',
+    'verification',
+    'review',
+    'handoff',
+  ];
+  const next = (phase: WorkflowPhase): WorkflowPhase | undefined => {
+    const index = allowed.indexOf(phase);
+    return index < 0 ? undefined : allowed[index + 1];
+  };
+  const needsApproval = snapshot.requires_approval ?? true;
   if (outcome.status === 'none') {
     if (snapshot.phase === 'verification')
       return action('verify', 'verification', 'Run approved acceptance checks.', '');
@@ -221,6 +233,13 @@ export function next_step(snapshot: WorkflowSnapshot, outcome: WorkflowOutcome):
       return action('review', 'review', 'Run an independent review.', '');
     return action('invoke', snapshot.phase, 'Run the pending phase.', snapshot.context);
   }
+  if (needsApproval && snapshot.phase !== 'requirements' && !snapshot.approval_valid)
+    return action(
+      'await-approval',
+      'plan',
+      'The current requirements, plan and checks require approval.',
+      '',
+    );
   if (outcome.status === 'failed') {
     if (snapshot.phase === 'verification' || snapshot.phase === 'review') {
       if (snapshot.repair_attempts < 3)
@@ -235,26 +254,22 @@ export function next_step(snapshot: WorkflowSnapshot, outcome: WorkflowOutcome):
     }
     return action('blocked', snapshot.phase, outcome.summary, '');
   }
-  switch (snapshot.phase) {
-    case 'requirements':
-      return action('invoke', 'plan', 'Prepare a reviewable plan.', snapshot.context);
+  const following = next(snapshot.phase);
+  if (!following)
+    return action('complete', 'handoff', 'Request completion using recorded host evidence.', '');
+  switch (following) {
     case 'plan':
-      return snapshot.approval_valid
-        ? action('invoke', 'implementation', 'Implement the approved plan.', snapshot.context)
-        : action(
-            'await-approval',
-            'plan',
-            'Review and approve the exact plan and acceptance checks.',
-            '',
-          );
+      return action('invoke', 'plan', 'Prepare a reviewable plan.', snapshot.context);
     case 'implementation':
-      return action('verify', 'verification', 'Verify implementation independently.', '');
+      return action('invoke', 'implementation', 'Implement the selected route.', snapshot.context);
     case 'verification':
-      return action('review', 'review', 'Inspect the verified changes independently.', '');
+      return action('verify', 'verification', 'Verify implementation independently.', '');
     case 'review':
-      return action('invoke', 'handoff', 'Prepare the delivery handoff.', snapshot.context);
+      return action('review', 'review', 'Inspect the verified changes independently.', '');
     case 'handoff':
-      return action('complete', 'handoff', 'Request completion using recorded host evidence.', '');
+      return action('invoke', 'handoff', 'Prepare the delivery handoff.', snapshot.context);
+    default:
+      return action('blocked', snapshot.phase, 'The selected route has an invalid transition.', '');
   }
 }
 

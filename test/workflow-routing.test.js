@@ -8,7 +8,7 @@ test('routing keeps a local button colour edit lightweight without relying on si
     changedPaths: ['web/settings.tsx'],
   });
   assert.equal(route.id, 'visual-local');
-  assert.deepEqual(route.phases, ['implementation', 'verification', 'handoff']);
+  assert.deepEqual(route.phases, ['implementation', 'verification']);
   assert.equal(route.requiresIndependentReview, false);
   assert.equal(route.policyVersion, ROUTING_POLICY_VERSION);
 });
@@ -26,7 +26,6 @@ test('routing overlays high-impact authorization changes over an explicit lightw
     'implementation',
     'verification',
     'review',
-    'handoff',
   ]);
 });
 

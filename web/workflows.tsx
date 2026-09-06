@@ -23,6 +23,12 @@ function WorkflowCard({
       <p>
         {workflow.status} · {workflow.phase} · Repairs {workflow.repairAttempts}/3
       </p>
+      {workflow.route && (
+        <p>
+          Route: {workflow.route.id} · stages: {workflow.route.phases.join(' → ') || 'answer only'}
+          {workflow.route.reasons.length ? ` · ${workflow.route.reasons.join(' ')}` : ''}
+        </p>
+      )}
       <p>{workflow.lastOutcome.summary}</p>
       {(
         [
@@ -186,6 +192,7 @@ export function WorkflowConsole({
   const [provider, setProvider] = useState('');
   const [reviewer, setReviewer] = useState('');
   const [verificationMode, setVerificationMode] = useState('standard');
+  const [route, setRoute] = useState('');
   const selected = providers.some((item) => item.id === provider)
     ? provider
     : providers[0]?.id || '';
@@ -229,6 +236,7 @@ export function WorkflowConsole({
                 ...(selectedReviewer ? { reviewProviderId: selectedReviewer } : {}),
                 executionAuthorized: values.get('authorized') === 'on',
                 verificationMode,
+                ...(route ? { route } : {}),
               },
             });
             form.reset();
@@ -239,6 +247,20 @@ export function WorkflowConsole({
         <Label className="memory-text-label">
           What should be delivered?
           <Textarea name="prompt" required maxLength={16384} />
+        </Label>
+        <Label>
+          Workflow route
+          <NativeSelect value={route} onChange={(event) => setRoute(event.target.value)}>
+            <option value="">Automatic (inspectable)</option>
+            <option value="documentation">Documentation</option>
+            <option value="visual-local">Local visual</option>
+            <option value="bug-fix">Bug fix</option>
+            <option value="feature">Feature</option>
+            <option value="refactor">Refactor</option>
+            <option value="maintenance">Maintenance</option>
+            <option value="high-impact">High impact</option>
+            <option value="investigate">Investigate uncertainty</option>
+          </NativeSelect>
         </Label>
         <Label>
           Coding provider
