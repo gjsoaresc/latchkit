@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "kind": "live-workflow-qualification",
+  "attemptId": "2f445abc-5da9-44c4-bdcd-6fd31f80dbfc",
+  "startedAt": "2026-09-06T14:49:20.553Z",
+  "finishedAt": "2026-09-06T14:51:24.368Z",
+  "candidate": {
+    "archiveSha256": "76639da0cc748eefdba4db7e7ce03121fcc8427559258ddc9efac486fa1177a9",
+    "commit": "42889f7b54db2009483d9c54d63a16b77f5b8f5c",
+    "version": "1.0.0-dogfood.20260906.1",
+    "target": "win32-x64",
+    "nodeVersion": "24.20.0",
+    "privateNodeVersion": "v24.20.0"
+  },
+  "provider": {
+    "id": "codex",
+    "version": "codex-cli 0.153.2",
+    "modelOverride": "gpt-5.6-luna",
+    "reasoningEffortOverride": "medium",
+    "settingsPreserved": true
+  },
+  "bounds": {
+    "providerTimeoutMs": 120000,
+    "totalTimeoutMs": 900000,
+    "outputLimitBytes": 1048576,
+    "providerProcessStarts": 6
+  },
+  "workflow": {
+    "workflowId": "workflow_18b9c318-eaf7-4bb7-93d0-daf309a09103",
+    "taskId": "task_4848f754-88e9-4882-896a-2f5af60a8ad8",
+    "revision": 17,
+    "status": "verified",
+    "phase": "handoff",
+    "policyVersion": "latchkit-workflow-v1",
+    "policyDigest": "dcdd68d7939b7c97ae74c511bf0e4c0b4c008b9908a4f5a93cd205c13a550cfe",
+    "packagedPolicyDigest": "dcdd68d7939b7c97ae74c511bf0e4c0b4c008b9908a4f5a93cd205c13a550cfe",
+    "promptDigest": "46ca35f4190db4709ef69673332e50f8f4fbda3c51fbd5f3734c47e2b7c2eb17",
+    "requirementsDigest": "831aa40063cfa4f388d9309b9701a9e81fc17fc98e10eb4dd09973ed19c832b8",
+    "planDigest": "f563e7fc7e219d2bc116fa20fab31b8c0dd322b4bf53522e4f10f75e964abe96",
+    "checksDigest": "9cd9974e5999233e860dbce3440fd55f83420428db0af3ba2e0b4fa996f2c385",
+    "approval": {
+      "planDigest": "f563e7fc7e219d2bc116fa20fab31b8c0dd322b4bf53522e4f10f75e964abe96",
+      "requirementsDigest": "831aa40063cfa4f388d9309b9701a9e81fc17fc98e10eb4dd09973ed19c832b8",
+      "checksDigest": "9cd9974e5999233e860dbce3440fd55f83420428db0af3ba2e0b4fa996f2c385",
+      "criteriaDigest": "cf76f24b7751da10199181bc8c078d63d90640aa66848f8afbf55850d316fe23",
+      "scope": "src/calculator.js only; requirements and tests are immutable",
+      "reference": "archive:76639da0cc748eefdba4db7e7ce03121fcc8427559258ddc9efac486fa1177a9;commit:42889f7b54db2009483d9c54d63a16b77f5b8f5c;version:1.0.0-dogfood.20260906.1",
+      "source": {
+        "revision": "07ba0aac10c908a1d651bc54f290be76474df87c",
+        "dirtyFingerprint": null
+      },
+      "approvedAt": "2026-09-06T14:49:50.482Z"
+    },
+    "repairAttempts": 0,
+    "actions": [
+      {
+        "kind": "invoke",
+        "phase": "requirements",
+        "status": "passed",
+        "inputDigest": "19c27434832cc144ff293ffc844ecdaac6600135bb3b54f82662f439d410a963",
+        "resultDigest": "fa477053a621c07f1c4c3d2b2eb71743239309d223c92ec0aab07b844b56c28e"
+      },
+      {
+        "kind": "invoke",
+        "phase": "plan",
+        "status": "passed",
+        "inputDigest": "e4fd97554205a303a2fae1fb8effde0773a5e2eeb6fbd19a53c7846139c8cc77",
+        "resultDigest": "870585c318fca1dfc42d4247b50b3acc10e786271d4e585cc61e0e3b1941ff46"
+      },
+      {
+        "kind": "invoke",
+        "phase": "implementation",
+        "status": "passed",
+        "inputDigest": "0c5df239819442018d009e170e5ae7cea25542fd8ed8716e3c14d5567fa91d1d",
+        "resultDigest": "f56e9dd04d5e4e9ec957f04395550c5eed2f4f1dba2b92710069fea77a2082d7"
+      },
+      {
+        "kind": "verify",
+        "phase": "verification",
+        "status": "passed",
+        "inputDigest": "9cd9974e5999233e860dbce3440fd55f83420428db0af3ba2e0b4fa996f2c385",
+        "resultDigest": "f061520bcf95a74757eb85db159e87f5e9c26fad73da7205ba4c18c4793de687"
+      },
+      {
+        "kind": "review",
+        "phase": "review",
+        "status": "passed",
+        "inputDigest": "1a22e567ef6bc422dfbe82fff385b9badf8ebc4f99fe0cf19629078d35805b7f",
+        "resultDigest": "6d05396a16d7e28c0447a89b30b7082bac3d35d3a02def95f90b62e00f83f610"
+      },
+      {
+        "kind": "invoke",
+        "phase": "handoff",
+        "status": "passed",
+        "inputDigest": "c3812ebd7ee7ac271e65759326083d6c712099556cf5f76467356ee2db5f4dea",
+        "resultDigest": "cdc99d9a0bc9d57dadd59b03982851cf1923289a9f0abbec8f1e01efa880b2e7"
+      },
+      {
+        "kind": "complete",
+        "phase": "handoff",
+        "status": "passed",
+        "inputDigest": "da065e3a46de14518089ed7a0e0775aefbc4a3950bc49ca59e637ca07e578824",
+        "resultDigest": "bccf4aaf95df5312dbc68fa06aa507c884f0e24ab5294c5ab4f240dfcf88fc5b"
+      }
+    ],
+    "handoffDigest": "1d22326e60e6d02e9bab2cda7bf1e765a4cc8607ac8246ea4e41d40d859d0d94"
+  },
+  "proof": {
+    "awaitedExactApproval": true,
+    "exactChecksApproved": true,
+    "immutableRequirementsSha256": "fd7045a64c030930eed0e70513496ca4e8ac003cf777a16a933d18000722ef4b",
+    "immutableTestsSha256": "9db91024964f4e252209cf8249b72e3c0f45c01625b9c97bd78d8c10765b363d",
+    "implementationSha256": "a6e255c2ee8460672928b14f36f16fea04a18c69c54820ef985856c2c4746490",
+    "finalPrivateNodeCheck": "passed",
+    "independentReview": "passed",
+    "handoff": "present",
+    "taskState": "verified",
+    "gitScope": {
+      "headUnchanged": true,
+      "changedPaths": [
+        "src/calculator.js"
+      ],
+      "unexpectedPathCount": 0
+    }
+  }
+}

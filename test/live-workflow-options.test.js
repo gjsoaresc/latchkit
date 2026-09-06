@@ -85,3 +85,18 @@ test('qualification refuses malformed effort and model flags before invocation',
       effort,
     );
 });
+
+test('usage qualification opt-in survives forwarding and version probes remain model-free', () => {
+  const { values } = parseArgs({
+    args: workflowProviderInnerArgs({ 'collect-usage': true, model: 'gpt-5.6-luna' }),
+    options: {
+      'collect-usage': { type: 'boolean' },
+      model: { type: 'string' },
+      'reasoning-effort': { type: 'string' },
+    },
+  });
+  assert.equal(values['collect-usage'], true);
+  const versionProbe = { ...invocation(), plan: { ...invocation().plan, args: ['--version'] } };
+  assert.equal(workflowProviderInvocation(versionProbe, values), versionProbe);
+  assert.ok(!workflowProviderInnerArgs({}).includes('--collect-usage'));
+});

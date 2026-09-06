@@ -26,6 +26,7 @@ const stages = new Set([
   'implementation-verification',
   'final-git-scope',
   'final-acceptance',
+  'usage-observation',
   'write-evidence',
 ]);
 const identifier = (value) =>

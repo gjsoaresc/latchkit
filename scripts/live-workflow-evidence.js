@@ -168,10 +168,13 @@ async function inner(values) {
   const { createTask, inspectTask } = await import(moduleAt('dist/src/task-state/service.js'));
   const { runProviderProcess } = await import(moduleAt('dist/src/runtime/process-runner.js'));
   const { validateAcceptanceDocument } = await import(moduleAt('dist/src/acceptance/contracts.js'));
+  const { configureUsage, inspectUsage } = await import(moduleAt('dist/src/usage/service.js'));
 
   const base = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-workflow-inner-'));
   const root = path.join(base, 'fixture');
   const providerEvents = [];
+  const processStarts = { inference: 0, versionProbe: 0, acceptance: 0 };
+  const inferenceSessionIds = new Set();
   let controller;
   const startedAt = iso();
   let stage = 'fixture-setup';
@@ -187,6 +190,7 @@ async function inner(values) {
     await git(root, ['add', '-A']);
     await git(root, ['commit', '-m', 'fixture: accepted failing multiply requirement']);
     const fixtureHead = (await git(root, ['rev-parse', 'HEAD'])).stdout.trim();
+    if (values['collect-usage']) await configureUsage(root, { enabled: true, retentionDays: 30 });
     const protectedPaths = (await git(root, ['ls-files', '-z'])).stdout
       .split('\0')
       .filter((name) => name && name !== 'src/calculator.js');
@@ -230,16 +234,36 @@ async function inner(values) {
         },
       ],
     });
-    const launch = (options = {}) =>
-      runProviderProcess({
+    const launch = async (options = {}) => {
+      const kind =
+        options.provider?.id !== 'codex'
+          ? 'acceptance'
+          : options.plan?.args?.length === 1 && options.plan.args[0] === '--version'
+            ? 'versionProbe'
+            : 'inference';
+      const result = await runProviderProcess({
         ...workflowProviderInvocation(options, values),
         timeoutMs: Math.min(options.timeoutMs ?? 120_000, 120_000),
         outputLimitBytes: Math.min(options.outputLimitBytes ?? 1024 * 1024, 1024 * 1024),
         onEvent: (event) => {
           options.onEvent?.(event);
           providerEvents.push(event.type);
+          if (event.type === 'process-start') processStarts[kind] += 1;
         },
       });
+      if (kind === 'inference') {
+        for (const line of (result.stdout ?? '').split(/\r?\n/)) {
+          try {
+            const event = JSON.parse(line);
+            if (event.type === 'thread.started' && typeof event.thread_id === 'string')
+              inferenceSessionIds.add(event.thread_id);
+          } catch {
+            /* Non-JSON provider output is not usage evidence. */
+          }
+        }
+      }
+      return result;
+    };
     controller = createWorkflowController({ root, launch });
     stage = 'requirements-plan';
     const started = await controller.run({
@@ -345,6 +369,33 @@ async function inner(values) {
     if (!review || !handoff?.artifact.trim())
       throw new Error('Independent review or handoff artifact is missing.');
 
+    stage = 'usage-observation';
+    let usageEvidence = null;
+    if (values['collect-usage']) {
+      const usage = await inspectUsage(root);
+      if (
+        !usage.settings.enabled ||
+        inferenceSessionIds.size !== processStarts.inference ||
+        [...inferenceSessionIds].some(
+          (id) => !usage.records.some((record) => record.sessionId === id),
+        ) ||
+        usage.records.length < processStarts.inference ||
+        usage.records.some((record) => record.taskId !== task.id) ||
+        usage.summary.unavailable > 0
+      )
+        throw new Error('Opted-in workflow usage did not cover every inference invocation.');
+      usageEvidence = {
+        enabled: true,
+        ...usage.summary,
+        billing: usage.billing,
+        providers: [...new Set(usage.records.map((record) => record.provider))],
+        providerVersions: [...new Set(usage.records.map((record) => record.providerVersion))],
+        sources: [...new Set(usage.records.map((record) => record.source))],
+        allRecordsBelongToTask: true,
+        everyInferenceSessionRecorded: true,
+      };
+    }
+
     const evidence = {
       schemaVersion: 1,
       kind: 'live-workflow-qualification',
@@ -371,7 +422,9 @@ async function inner(values) {
         totalTimeoutMs: 900_000,
         outputLimitBytes: 1024 * 1024,
         providerProcessStarts: providerEvents.filter((event) => event === 'process-start').length,
+        processStarts,
       },
+      usage: usageEvidence,
       workflow: {
         workflowId: completed.workflowId,
         taskId: completed.taskId,
@@ -523,6 +576,7 @@ const parsed = parseArgs({
     provider: { type: 'string', default: 'codex' },
     model: { type: 'string' },
     'reasoning-effort': { type: 'string' },
+    'collect-usage': { type: 'boolean' },
     output: { type: 'string' },
     artifact: { type: 'string' },
     'artifact-sha256': { type: 'string' },
