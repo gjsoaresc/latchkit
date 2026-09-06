@@ -89,7 +89,7 @@ test('unknown-impact dependency is flagged, not resolved, and never coerced to a
   );
 });
 
-test('reconciliation arm is always an explicit, schema-level unavailable result citing #110-#112', async () => {
+test('reconciliation arm exercises #110/#111 and marks only #112 resume context unavailable', async () => {
   const scenario = await loadScenario('export-visibility');
   const result = await runRequirementChangeScenario({
     spec: scenario,
@@ -97,12 +97,28 @@ test('reconciliation arm is always an explicit, schema-level unavailable result 
     now: fixedNow,
   });
   const reconciliation = result.arms.reconciliation;
-  assert.equal(reconciliation.status, 'unavailable');
-  assert.equal(reconciliation.metrics.length, 0);
-  assert.match(reconciliation.reason, /#110/);
-  assert.match(reconciliation.reason, /#111/);
-  assert.match(reconciliation.reason, /#112/);
+  assert.equal(reconciliation.status, 'completed');
+  assert.equal(reconciliation.controller, 'scripted');
+  assert.equal(reconciliation.correctnessGate.passed, true);
+  assert.equal(reconciliation.reconciliationEvidence.intentSuperseded, true);
+  assert.equal(reconciliation.reconciliationEvidence.stalePreviewRejected, true);
+  assert.equal(reconciliation.reconciliationEvidence.unknownImpactExplicit, true);
+  assert.equal(reconciliation.reconciliationEvidence.preservedArtifacts, true);
+  assert.equal(reconciliation.reconciliationEvidence.resumeContext.status, 'unavailable');
+  assert.match(reconciliation.reconciliationEvidence.resumeContext.reason, /#112/);
   assert.equal(unavailableReconciliationArm().arm, 'reconciliation');
+});
+
+test('reconciliation evidence does not claim unknown impact without the seeded dependency proof', async () => {
+  const scenario = structuredClone(await loadScenario('export-visibility'));
+  scenario.unknownImpactDependencies = [];
+  const result = await runRequirementChangeScenario({
+    spec: scenario,
+    fixturesRoot,
+    now: fixedNow,
+  });
+  assert.equal(result.arms.reconciliation.status, 'completed');
+  assert.equal(result.arms.reconciliation.reconciliationEvidence.unknownImpactExplicit, false);
 });
 
 test('gate fails a mandatory constraint that a no-op controller drops', async () => {
