@@ -17,7 +17,7 @@ import {
   inspectTransaction,
   recoverTransaction,
 } from '../installer/transactions.js';
-import { readOptional, resolveProjectRoot } from '../storage.js';
+import { readOptional, resolveProjectRoot, safePath } from '../storage.js';
 import { quoteWindowsCommandArgument } from '../runtime/process-runner.js';
 import { inspectProjectLock, removeProvenStaleLock, withProjectLock } from '../installer/lock.js';
 
@@ -26,6 +26,10 @@ const SKILLS_DOCS = 'https://cursor.com/docs/skills';
 export const CURSOR_IDE_HOOKS_PATH = '.cursor/hooks.json';
 export const CURSOR_IDE_HANDLER_PATH = '.latchkit/providers/cursor-ide/hook-handler.cjs';
 export const CURSOR_IDE_STATE_PATH = '.latchkit/providers/cursor-ide/ownership.json';
+export const CURSOR_IDE_EVIDENCE_DIRECTORY = '.latchkit/providers/cursor-ide/evidence';
+export const CURSOR_IDE_EVIDENCE_SCHEMA_VERSION = 1;
+export const CURSOR_IDE_EVIDENCE_MAX_RECORDS = 256;
+export const CURSOR_IDE_EVIDENCE_MAX_BYTES = 64 * 1024;
 export const CURSOR_IDE_AGENT_EVENTS = Object.freeze([
   'sessionStart',
   'sessionEnd',
@@ -100,6 +104,70 @@ const opaque = (value, field) => {
     throw new ProviderContractError(`Expected bounded opaque ${field}.`, `$.${field}`);
   return value;
 };
+
+function cursorIdeEvidencePath(value) {
+  if (
+    typeof value !== 'string' ||
+    value.length > 240 ||
+    !new RegExp(
+      `^${CURSOR_IDE_EVIDENCE_DIRECTORY.replaceAll('.', '\\.')}/[A-Za-z0-9][A-Za-z0-9._-]{0,80}\\.json$`,
+    ).test(value)
+  )
+    throw new Error(
+      `Cursor IDE evidence output must be a bounded JSON file directly under ${CURSOR_IDE_EVIDENCE_DIRECTORY}.`,
+    );
+  return value;
+}
+
+function cursorIdeEvidenceConfiguration(value) {
+  if (value === undefined || value === false) return { enabled: false };
+  if (!isRecord(value)) throw new Error('Cursor IDE evidence configuration must be an object.');
+  const unknown = Object.keys(value).filter((key) => !['enabled', 'outputPath'].includes(key));
+  if (unknown.length)
+    throw new Error(`Unknown Cursor IDE evidence option: ${unknown.sort().join(', ')}.`);
+  if (value.enabled !== true) {
+    if (value.enabled === false && value.outputPath === undefined) return { enabled: false };
+    throw new Error('Cursor IDE evidence mode must be explicitly enabled.');
+  }
+  return {
+    schemaVersion: CURSOR_IDE_EVIDENCE_SCHEMA_VERSION,
+    enabled: true,
+    outputPath: cursorIdeEvidencePath(value.outputPath),
+    format: 'json',
+    maxRecords: CURSOR_IDE_EVIDENCE_MAX_RECORDS,
+    maxBytes: CURSOR_IDE_EVIDENCE_MAX_BYTES,
+  };
+}
+
+function validateCursorIdeEvidenceDocument(document) {
+  if (!isRecord(document)) throw new Error('Cursor IDE evidence must contain an object.');
+  const topLevel = Object.keys(document).sort();
+  if (topLevel.join(',') !== 'records,schemaVersion')
+    throw new Error('Cursor IDE evidence contains unsupported fields.');
+  if (document.schemaVersion !== CURSOR_IDE_EVIDENCE_SCHEMA_VERSION)
+    throw new Error('Unsupported Cursor IDE evidence schema version.');
+  if (!Array.isArray(document.records))
+    throw new Error('Cursor IDE evidence records must be an array.');
+  if (document.records.length > CURSOR_IDE_EVIDENCE_MAX_RECORDS)
+    throw new Error('Cursor IDE evidence exceeds the record limit.');
+  let sequence = 0;
+  for (const record of document.records) {
+    if (!isRecord(record)) throw new Error('Cursor IDE evidence record must be an object.');
+    const keys = Object.keys(record).sort();
+    if (keys.join(',') !== 'classification,event,schemaVersion,sequence')
+      throw new Error('Cursor IDE evidence record contains unsupported fields.');
+    if (record.schemaVersion !== CURSOR_IDE_EVIDENCE_SCHEMA_VERSION)
+      throw new Error('Unsupported Cursor IDE evidence record schema version.');
+    if (record.sequence !== sequence + 1)
+      throw new Error('Cursor IDE evidence sequence is not contiguous.');
+    if (!CURSOR_IDE_AGENT_EVENTS.includes(record.event))
+      throw new Error('Cursor IDE evidence contains an unsupported event.');
+    if (!['success', 'failure', 'refusal'].includes(record.classification))
+      throw new Error('Cursor IDE evidence contains an unsupported classification.');
+    sequence = record.sequence;
+  }
+  return document;
+}
 
 function defaultEditorCandidates(platform, env) {
   if (platform === 'win32') {
@@ -243,8 +311,17 @@ function quoteCommandToken(value, platform = process.platform) {
 export function cursorIdeHookCommand(
   nodeExecutable = process.execPath,
   platform = process.platform,
+  evidence = { enabled: false },
 ) {
-  return `${quoteCommandToken(nodeExecutable, platform)} ${quoteCommandToken(CURSOR_IDE_HANDLER_PATH, platform)}`;
+  const configuration = cursorIdeEvidenceConfiguration(
+    evidence?.enabled === true
+      ? { enabled: true, outputPath: evidence.outputPath }
+      : { enabled: false },
+  );
+  const command = `${quoteCommandToken(nodeExecutable, platform)} ${quoteCommandToken(CURSOR_IDE_HANDLER_PATH, platform)}`;
+  return configuration.enabled
+    ? `${command} --evidence ${quoteCommandToken(configuration.outputPath, platform)}`
+    : command;
 }
 
 const managedEntry = (command) => ({ command, timeout: 10 });
@@ -293,11 +370,12 @@ function removeCursorIdeHooks(raw, state) {
   return `${JSON.stringify(next, null, 2)}\n`;
 }
 
-function ownershipFor(command, handlerBytes) {
+function ownershipFor(command, handlerBytes, evidence) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     command,
     handlerSha256: digest(handlerBytes),
+    evidence,
     entries: Object.fromEntries(
       CURSOR_IDE_AGENT_EVENTS.map((event) => [
         event,
@@ -315,6 +393,8 @@ async function handlerSource() {
 export async function planCursorIdeHookExport(root, options = {}) {
   root = await resolveProjectRoot(root);
   const enabled = options.enabled === true;
+  const evidence = cursorIdeEvidenceConfiguration(options.evidence);
+  if (evidence.enabled) await safePath(root, evidence.outputPath);
   const currentHooks = await readOptional(root, CURSOR_IDE_HOOKS_PATH);
   const currentHandler = await readOptional(root, CURSOR_IDE_HANDLER_PATH);
   const currentStateRaw = await readOptional(root, CURSOR_IDE_STATE_PATH);
@@ -348,14 +428,14 @@ export async function planCursorIdeHookExport(root, options = {}) {
   let nextHandler;
   let nextState;
   if (enabled) {
-    const command = cursorIdeHookCommand(options.nodeExecutable, options.platform);
+    const command = cursorIdeHookCommand(options.nodeExecutable, options.platform, evidence);
     nextHooks = currentState
       ? currentState.command === command
         ? currentHooks
         : mergeCursorIdeHooks(removeCursorIdeHooks(currentHooks, currentState), command)
       : mergeCursorIdeHooks(currentHooks, command);
     nextHandler = source;
-    nextState = `${JSON.stringify(ownershipFor(command, source), null, 2)}\n`;
+    nextState = `${JSON.stringify(ownershipFor(command, source, evidence), null, 2)}\n`;
   } else {
     nextHooks = removeCursorIdeHooks(currentHooks, currentState);
     nextHandler = null;
@@ -368,6 +448,7 @@ export async function planCursorIdeHookExport(root, options = {}) {
   ];
   return {
     configured: enabled,
+    evidence,
     instructions: cursorActivationInstructions(),
     backup:
       currentHooks !== null && nextHooks !== currentHooks
@@ -390,6 +471,53 @@ export async function planCursorIdeHookExport(root, options = {}) {
         action: after === null ? 'remove' : before === null ? 'create' : 'update',
         bytes: after,
       })),
+  };
+}
+
+/** Read and validate only the bounded allowlisted qualification evidence. */
+export async function inspectCursorIdeHookEvidence(root) {
+  root = await resolveProjectRoot(root);
+  const stateRaw = await readOptional(root, CURSOR_IDE_STATE_PATH);
+  if (stateRaw === null) return { configured: false, records: [], events: {} };
+  const state = JSON.parse(stateRaw);
+  const evidence = cursorIdeEvidenceConfiguration(
+    state.evidence?.enabled === true
+      ? { enabled: true, outputPath: state.evidence.outputPath }
+      : { enabled: false },
+  );
+  if (JSON.stringify(state.evidence ?? { enabled: false }) !== JSON.stringify(evidence))
+    throw new Error('Invalid Cursor IDE evidence ownership configuration.');
+  if (!evidence.enabled) return { configured: false, records: [], events: {} };
+  const raw = await readOptional(root, evidence.outputPath);
+  if (raw === null)
+    return {
+      configured: true,
+      path: evidence.outputPath,
+      records: [],
+      events: Object.fromEntries(
+        CURSOR_IDE_AGENT_EVENTS.map((event) => [event, { observed: false, count: 0 }]),
+      ),
+    };
+  if (Buffer.byteLength(raw) > CURSOR_IDE_EVIDENCE_MAX_BYTES)
+    throw new Error('Cursor IDE evidence exceeds the byte limit.');
+  const document = validateCursorIdeEvidenceDocument(JSON.parse(raw));
+  return {
+    configured: true,
+    path: evidence.outputPath,
+    records: clone(document.records),
+    events: Object.fromEntries(
+      CURSOR_IDE_AGENT_EVENTS.map((event) => {
+        const matching = document.records.filter((record) => record.event === event);
+        return [
+          event,
+          {
+            observed: matching.length > 0,
+            count: matching.length,
+            classifications: [...new Set(matching.map((record) => record.classification))],
+          },
+        ];
+      }),
+    ),
   };
 }
 

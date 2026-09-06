@@ -173,6 +173,8 @@ export function createReviewOrchestrator({
     taskId,
     reviewers,
     executionAuthorized = false,
+    sandbox,
+    approvalPolicy,
     limits = {},
     depth = 0,
   } = {}) {
@@ -267,6 +269,8 @@ export function createReviewOrchestrator({
                 'prompt',
               ),
               cwd: owned.path ?? root,
+              sandbox,
+              approvalPolicy,
             }),
           );
           if (abort.signal.aborted)

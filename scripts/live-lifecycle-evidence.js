@@ -329,8 +329,10 @@ async function main() {
       taskId: task.id,
       providerId: 'codex',
       executionAuthorized: true,
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
       prompt:
-        'This is an explicitly authorized implementation request; do not stop after planning. REQUIREMENTS.md is accepted. Use the installed $latchkit-requirements, $latchkit-spec, and $latchkit-build workflows as applicable: inspect the failing test, write a concise implementation spec to .latchkit/notes/lifecycle-spec.md, directly implement only multiply in src/calculator.js, run npm test, and do not commit.',
+        'This is an explicitly authorized implementation request; do not stop after planning. REQUIREMENTS.md is accepted. Follow the installed $latchkit-spec and $latchkit-build workflows: inspect only REQUIREMENTS.md, test/calculator.test.js, and src/calculator.js; write a concise implementation spec to .latchkit/notes/lifecycle-spec.md; implement only multiply; run exactly node --test once; when it passes, stop immediately. Do not invoke git, npm, another package manager, network access, or any additional command. Do not commit.',
     });
     if (implementation.process.status !== 'exited' || implementation.process.exitCode !== 0)
       throw new Error(`Codex implementation ended as ${implementation.process.status}.`);
@@ -359,8 +361,10 @@ async function main() {
       taskId: task.id,
       sessionId: implementation.session.id,
       executionAuthorized: true,
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
       prompt:
-        'Use the installed $latchkit-handoff workflow. Review the current committed state and write a concise handoff to .latchkit/notes/lifecycle-handoff.md. Do not change source or tests and do not commit.',
+        'Use the installed $latchkit-handoff workflow. Read only REQUIREMENTS.md, src/calculator.js, test/calculator.test.js, and .latchkit/notes/lifecycle-spec.md; write a concise handoff to .latchkit/notes/lifecycle-handoff.md; then stop immediately. Do not change source or tests, invoke git/npm/network access, run unrelated commands, or commit.',
     });
     if (handoff.process.status !== 'exited' || handoff.process.exitCode !== 0)
       throw new Error(`Codex handoff resume ended as ${handoff.process.status}.`);
@@ -372,12 +376,14 @@ async function main() {
     const review = await createReviewOrchestrator({ root, launch }).run({
       taskId: task.id,
       executionAuthorized: true,
+      sandbox: 'read-only',
+      approvalPolicy: 'never',
       reviewers: [
         {
           id: 'codex-independent',
           providerId: 'codex',
           prompt:
-            'Review the current commit against REQUIREMENTS.md. Do not edit files or run destructive commands. Return only a JSON object with schemaVersion 1, state completed, findings as an array of objects with severity/title/detail/path when applicable, and a concise summary.',
+            'Review only REQUIREMENTS.md, src/calculator.js, test/calculator.test.js, and .latchkit/notes/lifecycle-spec.md. Run node --test once, do not edit files or invoke git/npm/network access, and stop after returning only a JSON object with schemaVersion 1, state completed, findings as an array of objects with severity/title/detail/path when applicable, and a concise summary.',
         },
       ],
       limits: { maxReviewers: 1, concurrency: 1, timeoutMs: 120_000, maxIterations: 1 },

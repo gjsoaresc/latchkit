@@ -53,9 +53,31 @@ task progress. It does not enable Cursor's Claude Code compatibility import.
 Project commands run from the project root according to Cursor's hook contract. The generated
 command quotes the absolute Node executable and relative handler path, with the repository's tested
 native Windows command quoting. The handler accepts at most 64 KB of JSON on stdin and returns an
-advisory no-op; it does not read environment credentials, log raw payloads, start sessions, or
-override provider permissions. Workspace trust, a local disabled-hooks setting, or managed policy
-can prevent execution and is reported separately from configuration.
+advisory no-op. By default it is non-persistent: it does not read environment credentials, log raw
+payloads, start sessions, or override provider permissions. Workspace trust, a local disabled-hooks
+setting, or managed policy can prevent execution and is reported separately from configuration.
+
+Release qualification may explicitly enable privacy-safe hook evidence through the export API:
+
+```js
+await applyCursorIdeHookExport(root, {
+  enabled: true,
+  evidence: {
+    enabled: true,
+    outputPath: '.latchkit/providers/cursor-ide/evidence/manual-run.json',
+  },
+});
+```
+
+The output must be a bounded `.json` file directly under the owned evidence directory. The handler
+records only schema version, contiguous sequence, normalized event name, and
+`success`/`failure`/`refusal` classification. It never stores timestamps, prompts, transcripts,
+tool arguments or results, workspace paths, conversation/session IDs, account identifiers,
+environment values, or credentials. Updates are cross-process serialized, size/count bounded,
+written through an fsynced temporary file and rename, and use restrictive permissions where the
+filesystem supports them. Unsafe paths, links/junctions, malformed state, unknown events, and full
+evidence files are refused without replacing existing evidence. Disabling the integration leaves
+the evidence file for explicit review and removal.
 
 Normalized translation allowlists event metadata and omits email, transcript paths, tool input,
 commands, and other credential-bearing raw fields. Cursor conversation IDs remain opaque
@@ -70,12 +92,14 @@ exact commit tested. Do not mark a step verified without observing it in that ed
 
 1. Sync a project selecting only Cursor IDE. In Settings > Rules, confirm one copy of each selected
    skill under `.agents/skills` and each expected scoped `.mdc` rule. Reload Cursor and check again.
-2. Enable the Cursor hook export explicitly. Preview first, confirm only the seven Agent events and
-   the packaged Node handler are proposed, then apply. Confirm existing custom hooks and unknown
-   keys remain.
+2. Enable the Cursor hook export explicitly with qualification evidence directed to a new file
+   under `.latchkit/providers/cursor-ide/evidence/`. Preview first, confirm only the seven Agent
+   events and the packaged Node handler are proposed, then apply. Confirm existing custom hooks and
+   unknown keys remain.
 3. Trust the workspace and confirm hooks are enabled by local and managed policy. Start Agent Chat
    manually and exercise session start, a read/write or shell tool, compaction where practical,
-   stop, and session end. Record raw fixture shapes with credentials and content removed.
+   stop, and session end. Inspect the allowlisted evidence with `inspectCursorIdeHookEvidence`;
+   missing records remain missing and must not be inferred from configured entries.
 4. Confirm a Tab completion and workspace reopen do not appear as Agent task progress. Confirm no
    automatic Tab or workspace hook was added and Claude compatibility was not enabled.
 5. Confirm the handler starts with the project root as its working directory on the tested OS.

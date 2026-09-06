@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import {
   CURSOR_IDE_AGENT_EVENTS,
+  CURSOR_IDE_EVIDENCE_MAX_RECORDS,
   CURSOR_IDE_HANDLER_PATH,
   CURSOR_IDE_HOOKS_PATH,
   CURSOR_IDE_STATE_PATH,
@@ -14,6 +15,7 @@ import {
   cursorIdeAdapter,
   cursorIdeHookCommand,
   inspectCursorIde,
+  inspectCursorIdeHookEvidence,
   inspectCursorIdeRecovery,
   mergeCursorIdeHooks,
   planCursorIdeHookExport,
@@ -35,6 +37,27 @@ const temporaryRoot = async (t) => {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 };
+
+const runHook = (root, input, args = []) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(root, CURSOR_IDE_HANDLER_PATH), ...args], {
+      cwd: root,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.once('error', reject);
+    child.once('exit', (exitCode) =>
+      resolve({
+        exitCode,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      }),
+    );
+    child.stdin.end(typeof input === 'string' ? input : JSON.stringify(input));
+  });
 
 test('inspection separates editor installation, PATH launcher, configuration, and observation', async () => {
   for (const [platform, editor] of [
@@ -237,6 +260,174 @@ test('opt-in export is transactional, stable, preserves conflicts, and removes o
   assert.deepEqual(removed.hooks.preToolUse, [{ command: 'human-handler', matcher: 'Read' }]);
   await assert.rejects(fs.readFile(path.join(root, CURSOR_IDE_HANDLER_PATH)), /ENOENT/);
   await assert.rejects(fs.readFile(path.join(root, CURSOR_IDE_STATE_PATH)), /ENOENT/);
+});
+
+test('Cursor hook evidence is disabled by default and retains no payload fields', async (t) => {
+  const root = await temporaryRoot(t);
+  await applyCursorIdeHookExport(root, { enabled: true, nodeExecutable: process.execPath });
+  const result = await runHook(root, {
+    hook_event_name: 'sessionStart',
+    conversation_id: 'private-conversation',
+    user_email: 'private@example.test',
+    transcript_path: 'C:/private/transcript.jsonl',
+    tool_input: { command: 'private command' },
+  });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.stdout, '{}\n');
+  assert.equal(result.stderr, '');
+  await assert.rejects(
+    fs.access(path.join(root, '.latchkit', 'providers', 'cursor-ide', 'evidence')),
+    /ENOENT/,
+  );
+});
+
+test('explicit Cursor hook evidence records only bounded normalized events under concurrency', async (t) => {
+  const root = await temporaryRoot(t);
+  const evidencePath = '.latchkit/providers/cursor-ide/evidence/manual-run.json';
+  await fs.mkdir(path.join(root, '.cursor'), { recursive: true });
+  await fs.writeFile(
+    path.join(root, CURSOR_IDE_HOOKS_PATH),
+    `${JSON.stringify({ version: 1, custom: { preserve: true }, hooks: {} }, null, 2)}\n`,
+  );
+  const applied = await applyCursorIdeHookExport(root, {
+    enabled: true,
+    nodeExecutable: process.execPath,
+    evidence: { enabled: true, outputPath: evidencePath },
+  });
+  assert.equal(applied.evidence.enabled, true);
+  const hooks = JSON.parse(await fs.readFile(path.join(root, CURSOR_IDE_HOOKS_PATH), 'utf8'));
+  assert.deepEqual(hooks.custom, { preserve: true });
+  assert.match(hooks.hooks.sessionStart.at(-1).command, /--evidence/);
+
+  const inputs = CURSOR_IDE_AGENT_EVENTS.map((event) => ({
+    hook_event_name: event,
+    conversation_id: `private-${event}`,
+    user_email: 'private@example.test',
+    transcript_path: 'C:/Users/private/transcript.jsonl',
+    tool_input: { command: 'print private material' },
+    tool_output: 'private result',
+  }));
+  const first = await runHook(root, inputs[0], ['--evidence', evidencePath]);
+  assert.equal(first.exitCode, 0);
+  const concurrent = await Promise.all(
+    inputs.slice(1).map((input) => runHook(root, input, ['--evidence', evidencePath])),
+  );
+  assert.ok(concurrent.every((result) => result.exitCode === 0));
+
+  const inspection = await inspectCursorIdeHookEvidence(root);
+  assert.equal(inspection.configured, true);
+  assert.equal(inspection.records.length, CURSOR_IDE_AGENT_EVENTS.length);
+  assert.deepEqual(
+    inspection.records.map((record) => record.sequence),
+    CURSOR_IDE_AGENT_EVENTS.map((_, index) => index + 1),
+  );
+  assert.ok(CURSOR_IDE_AGENT_EVENTS.every((event) => inspection.events[event].observed));
+  assert.deepEqual(inspection.events.postToolUseFailure.classifications, ['failure']);
+  const serialized = JSON.stringify(inspection);
+  assert.doesNotMatch(
+    serialized,
+    /private|example\.test|transcript|tool_input|tool_output|command/i,
+  );
+
+  await applyCursorIdeHookExport(root, { enabled: false });
+  assert.ok(await fs.readFile(path.join(root, evidencePath), 'utf8'));
+  const removed = JSON.parse(await fs.readFile(path.join(root, CURSOR_IDE_HOOKS_PATH), 'utf8'));
+  assert.deepEqual(removed.custom, { preserve: true });
+});
+
+test('Cursor hook evidence refuses malformed input, unknown events, unsafe paths, and malformed state', async (t) => {
+  const root = await temporaryRoot(t);
+  const evidencePath = '.latchkit/providers/cursor-ide/evidence/adversarial.json';
+  await applyCursorIdeHookExport(root, {
+    enabled: true,
+    nodeExecutable: process.execPath,
+    evidence: { enabled: true, outputPath: evidencePath },
+  });
+  await assert.rejects(
+    planCursorIdeHookExport(root, {
+      enabled: true,
+      evidence: { enabled: true, outputPath: '../outside.json' },
+    }),
+    /directly under/,
+  );
+  const malformedInput = await runHook(root, '{not-json', ['--evidence', evidencePath]);
+  assert.equal(malformedInput.exitCode, 1);
+  assert.match(malformedInput.stderr, /Invalid Cursor hook JSON input/);
+  const unknown = await runHook(root, { hook_event_name: 'workspaceOpen' }, [
+    '--evidence',
+    evidencePath,
+  ]);
+  assert.equal(unknown.exitCode, 1);
+  assert.match(unknown.stderr, /Unsupported Cursor hook event/);
+  const traversal = await runHook(root, { hook_event_name: 'sessionStart' }, [
+    '--evidence',
+    '../outside.json',
+  ]);
+  assert.equal(traversal.exitCode, 1);
+  assert.match(traversal.stderr, /Unsafe Cursor hook evidence path/);
+  await assert.rejects(fs.access(path.join(root, evidencePath)), /ENOENT/);
+
+  await fs.mkdir(path.dirname(path.join(root, evidencePath)), { recursive: true });
+  const malformedEvidence = '{"schemaVersion":1,"records":[],"secret":"preserve"}\n';
+  await fs.writeFile(path.join(root, evidencePath), malformedEvidence);
+  const refused = await runHook(root, { hook_event_name: 'sessionStart' }, [
+    '--evidence',
+    evidencePath,
+  ]);
+  assert.equal(refused.exitCode, 1);
+  assert.match(refused.stderr, /unsupported fields/);
+  assert.equal(await fs.readFile(path.join(root, evidencePath), 'utf8'), malformedEvidence);
+});
+
+test('Cursor hook evidence enforces its record limit without replacing valid evidence', async (t) => {
+  const root = await temporaryRoot(t);
+  const evidencePath = '.latchkit/providers/cursor-ide/evidence/full.json';
+  await applyCursorIdeHookExport(root, {
+    enabled: true,
+    nodeExecutable: process.execPath,
+    evidence: { enabled: true, outputPath: evidencePath },
+  });
+  const document = {
+    schemaVersion: 1,
+    records: Array.from({ length: CURSOR_IDE_EVIDENCE_MAX_RECORDS }, (_, index) => ({
+      schemaVersion: 1,
+      sequence: index + 1,
+      event: 'sessionStart',
+      classification: 'success',
+    })),
+  };
+  const original = `${JSON.stringify(document, null, 2)}\n`;
+  await fs.mkdir(path.dirname(path.join(root, evidencePath)), { recursive: true });
+  await fs.writeFile(path.join(root, evidencePath), original);
+  const result = await runHook(root, { hook_event_name: 'stop' }, ['--evidence', evidencePath]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /record limit/);
+  assert.equal(await fs.readFile(path.join(root, evidencePath), 'utf8'), original);
+});
+
+test('Cursor hook evidence refuses linked output directories where supported', async (t) => {
+  const root = await temporaryRoot(t);
+  const outside = await temporaryRoot(t);
+  const evidencePath = '.latchkit/providers/cursor-ide/evidence/linked.json';
+  await applyCursorIdeHookExport(root, {
+    enabled: true,
+    nodeExecutable: process.execPath,
+    evidence: { enabled: true, outputPath: evidencePath },
+  });
+  const evidenceDirectory = path.join(root, '.latchkit', 'providers', 'cursor-ide', 'evidence');
+  try {
+    await fs.symlink(outside, evidenceDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) return t.skip(error.code);
+    throw error;
+  }
+  const result = await runHook(root, { hook_event_name: 'sessionStart' }, [
+    '--evidence',
+    evidencePath,
+  ]);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /crosses a link/);
+  await assert.rejects(fs.access(path.join(outside, 'linked.json')), /ENOENT/);
 });
 
 test('edited owned entries block removal and transaction failures restore exact bytes', async (t) => {
