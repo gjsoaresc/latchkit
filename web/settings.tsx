@@ -74,7 +74,7 @@ function SkillGrid({ state }: { state: ConsoleState }) {
                 onChange={(event) => store.select('skills', skill.id, event.target.checked)}
                 aria-label={`${skill.label}: ${skill.description}`}
               />
-              <strong>{skill.label}</strong>
+              <strong className="skill-name">{skill.label}</strong>
               <span className="skill-description">{skill.description}</span>
             </label>
           );
