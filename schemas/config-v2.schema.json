@@ -27,12 +27,22 @@
         "cursor": { "$ref": "#/$defs/settings" },
         "cursor-cli": { "$ref": "#/$defs/settings" }
       }
-    }
+    },
+    "workspace": { "$ref": "#/$defs/workspace" }
   },
   "$defs": {
     "settings": {
       "type": "object",
       "description": "Provider-owned JSON settings. Provider contracts define their nested fields."
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executionPreference", "worktreeRoot"],
+      "properties": {
+        "executionPreference": { "enum": ["ask", "always-worktree", "direct"] },
+        "worktreeRoot": { "type": "string", "minLength": 1 }
+      }
     }
   }
 }

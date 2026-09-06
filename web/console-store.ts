@@ -6,7 +6,13 @@ import {
   type SyncPreview,
   type Workbench,
   type MemoryPage,
+  type WorkspacePreference,
 } from './types.js';
+
+const DEFAULT_WORKSPACE_PREFERENCE: WorkspacePreference = {
+  executionPreference: 'direct',
+  worktreeRoot: '.latchkit/worktrees',
+};
 
 interface Snapshot {
   state?: ConsoleState;
@@ -122,6 +128,15 @@ export function createConsoleStore() {
           ...snapshot.selection,
           [kind]: checked ? [...values, id] : values.filter((value) => value !== id),
         },
+        plan: undefined,
+        changed: true,
+      });
+    },
+    setWorkspace(patch: Partial<WorkspacePreference>) {
+      if (snapshot.busy) return;
+      const current = { ...DEFAULT_WORKSPACE_PREFERENCE, ...snapshot.selection.workspace };
+      update({
+        selection: { ...snapshot.selection, workspace: { ...current, ...patch } },
         plan: undefined,
         changed: true,
       });

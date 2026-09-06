@@ -16,6 +16,18 @@
       "type": "array",
       "uniqueItems": true,
       "items": { "enum": ["requirements", "spec", "build", "fix", "review", "handoff", "setup"] }
+    },
+    "workspace": { "$ref": "#/$defs/workspace" }
+  },
+  "$defs": {
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executionPreference", "worktreeRoot"],
+      "properties": {
+        "executionPreference": { "enum": ["ask", "always-worktree", "direct"] },
+        "worktreeRoot": { "type": "string", "minLength": 1 }
+      }
     }
   }
 }

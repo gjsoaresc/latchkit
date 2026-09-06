@@ -97,6 +97,42 @@ Stale revisions are rejected. Re-read the workflow before retrying a rejected
 mutation. Direct `task` commands remain available and share task ownership with
 delivery workflows.
 
+## Task worktree isolation is optional
+
+Starting a direct task session decides, once, whether its implementation runs
+in an isolated Git worktree or directly in the project checkout — see the
+[configuration guide](configuration.md#task-workspace-preference) for the
+persisted `workspace.executionPreference` project setting and its
+`worktreeRoot` location. An explicit per-start choice always overrides that
+default:
+
+```sh
+latchkit task start --project <path> --task <task-id> --provider codex \
+  --host-local-authorized --workspace-choice worktree \
+  --worktree-root .latchkit/worktrees
+latchkit task start --project <path> --task <task-id> --provider codex \
+  --host-local-authorized --workspace-choice direct
+```
+
+If the project preference is `ask` and a start omits `--workspace-choice`, the
+start is refused with `WORKSPACE_CHOICE_REQUIRED` rather than silently picking
+a side — the caller (an eventual UI prompt, or an explicit flag) must supply
+the choice before anything starts. `--workspace-choice`/`--worktree-root`
+apply only to a fresh start; `latchkit task resume` always reuses whatever
+workspace (or lack of one) the task's session already recorded and never
+re-decides, so changing the project default afterward cannot move an active
+or resumed task or weaken provider permissions. If worktree isolation is
+requested but Git or worktree creation is unavailable, the start fails with
+`WORKSPACE_UNAVAILABLE` instead of silently falling back to direct execution.
+
+This implementation-workspace choice is independent of the reviewer isolation
+`latchkit review` always uses (see [review orchestration](review-orchestration.md));
+changing one never affects the other. It currently applies to direct task
+execution (`latchkit task start`/`resume`, `POST /api/tasks/start`) only — the
+higher-level delivery `workflow run` implementation phase still always runs in
+the project checkout, unchanged from prior releases; extending it to honor the
+same preference is a follow-up.
+
 ## HTTP and console
 
 The local console exposes the same workflow controller through the versioned
