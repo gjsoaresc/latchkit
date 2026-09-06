@@ -1,30 +1,37 @@
-# Foreign spec-artifact discovery and preview (issue #114)
+# Foreign spec-artifact discovery, preview, and registration (issue #114)
 
-This covers all three adapter increments of issue #114: read-only discovery
-and preview of an external specification framework's local files, one
-adapter at a time (Spec Kit, then OpenSpec, then TinySpec). It does not
-import, register, or write anything. Registration into task state,
-reinspection/detach, and any browser UI are separate, later increments —
-see the issue and its parent epic,
-[#109](https://github.com/willahealm/latchkit/issues/109).
+This covers all three adapter increments of issue #114 (read-only discovery
+and preview of an external specification framework's local files — Spec
+Kit, then OpenSpec, then TinySpec) plus the registration increment
+(`src/spec-imports/registration-service.ts`): an explicit operation that
+binds a selected, previewed entry into existing Latchkit task state.
+Browser UI for selection/preview, semantic mapping generation, and
+automatic migration remain out of scope — see the issue and its parent
+epic, [#109](https://github.com/willahealm/latchkit/issues/109).
 
 ## What this does and does not do
 
-`src/spec-imports/` enumerates a user-selected local root for one documented
-adapter's artifact layout, hashes and parses what it finds, and returns a
-bounded, versioned manifest. It never:
+`src/spec-imports/service.ts` (`discoverSpecImport`, `previewSpecImport`)
+enumerates a user-selected local root for one documented adapter's artifact
+layout, hashes and parses what it finds, and returns a bounded, versioned
+manifest. Discovery and preview never:
 
-- installs, downloads, or invokes the upstream tool, its CLI, scripts,
+- install, download, or invoke the upstream tool, its CLI, scripts,
   templates, or package hooks;
-- follows a reference outside the selected root, or a symlink/junction
+- follow a reference outside the selected root, or a symlink/junction
   anywhere along a scanned path;
-- treats a source checkbox or status line as verification evidence — those
+- treat a source checkbox or status line as verification evidence — those
   are recorded as an imported claim only;
-- writes to disk, including `.latchkit/`; every call is explicitly invoked
+- write to disk, including `.latchkit/`; every call is explicitly invoked
   and returns a fresh manifest computed from the current files on disk;
-- creates a Latchkit task, record, or association. `preview` describes
-  exactly what a later, separate registration action would create and
-  returns a `manifestDigest` that action would need to bind to.
+- create a Latchkit task, record, or association on their own. `preview`
+  describes exactly what a later, separate `register` call would create and
+  returns the `manifestDigest` that call binds to.
+
+`src/spec-imports/registration-service.ts` (`registerSpecImport`,
+`reinspectSpecImportRegistrations`, `detachSpecImportRegistration`) adds the
+explicit registration operation; see "Registration" below for its contract
+and limitations.
 
 ## Adapter compatibility table
 
@@ -253,6 +260,161 @@ managed-FCC tool routes already accept an explicit `root` distinct from the
 project. Both routes are read-only `GET`s and do not wait on the project's
 own pending-mutation queue.
 
+## Registration
+
+`src/spec-imports/registration-service.ts` explicitly registers one
+selected, previously previewed entry into existing Latchkit task state.
+Registration is a distinct increment from discovery/preview above and has a
+narrower requirement: unlike `--root` for `discover`/`preview`, the
+selected source root for `register` **must be the Latchkit project itself
+or a subdirectory of it** (`SPEC_IMPORT_REGISTRATION_ROOT_OUTSIDE_PROJECT`
+otherwise), because registration records a project-relative task-record
+source link (see below), and that link can only ever name a path inside
+the project it belongs to.
+
+### What registration creates
+
+Registering a `complete` or `partial` entry creates one ordinary Latchkit
+task (`awaiting-decision`, exactly like `task import`'s existing Markdown
+import — no authorization is granted) plus one `observation` task record on
+it (issue #110's record contract; `provenance.kind: 'imported'`) whose text
+summarizes the source entry (adapter, directory, source-declared status,
+source-declared task counts) and whose single `source`-type link names the
+project-relative path and SHA-256 of the entry's primary artifact (the
+`plan.md`/`design.md` when present, else `spec.md`/`proposal.md`, else
+`tasks.md` — the same file `preview`'s `wouldCreate[].wouldCreate.importSource`
+already names). `observation` is the only record kind with **no**
+authoritative status: moving one to `verified` requires a linked, current,
+`passed` task-evidence entry, never import text alone (see
+[task records](task-state.md#task-records)). Registration therefore creates
+no execution authorization, approved plan, verified task, passing evidence,
+or enhanced-workflow enrollment; source checkboxes and status lines remain
+imported claims only. Required criteria and runnable checks still require
+the existing, separate `spec register`/`registerEnhancedWorkflow` contract
+— nothing here calls it. A user who later wants this imported record to
+participate in adopted intent explicitly transitions/supersedes it through
+the ordinary `task record-transition`/`record-add --supersedes` operations;
+issue #111's freshness rules (`intentDigest`, approval invalidation) apply
+from that point on exactly as they do for any other record.
+
+Latchkit's own association metadata — which discovered entry maps to which
+task/record, and at what source hash — is tracked separately from the task
+record, in a small store at `.latchkit/spec-imports/registrations-v1.json`
+(schema: [spec-import-registration-v1](../schemas/spec-import-registration-v1.schema.json)).
+This is the "reviewable revision of the same source association" criterion
+(4) asks for: it is what `reinspect` and `detach` operate on. It never
+holds a copy of the source file, only its path and hash.
+
+### Freshness binding and idempotency
+
+`register` takes the exact `manifestDigest` from a `preview` the caller
+reviewed, plus the exact `wouldCreate[].wouldCreate.importSource.sha256`
+for the selected entry from that same preview. Before any write, it rebuilds
+the manifest fresh from the current files on disk and rechecks both: a
+mismatch on either (a source file changed anywhere in the discovery, or
+specifically the selected entry's primary artifact) fails closed with
+`SPEC_IMPORT_STALE_PREVIEW` before any mutation — never a partial or
+best-guess import.
+
+Repeating an identical `register` call (same adapter/source root/entry,
+content unchanged since the last registration) is idempotent: it makes no
+new task-state mutation and returns `action: 'unchanged'` with the existing
+association. When the artifact's content changed since the last
+registration, `register` supersedes the prior task record with a new one
+(`recordTaskRecord` with `supersedes`) on the **same** task and association
+— `action: 'revised'` — rather than creating a duplicate task; this call
+requires `expectedTaskRevision` (the task revision the caller last
+observed, e.g. from `reinspect`), checked with the same
+`TASK_REVISION_CONFLICT` semantics as every other Latchkit task mutation,
+so an intervening, unrelated mutation to that same task is never silently
+overwritten.
+
+When a selected entry does not match any currently active registration,
+but a **different**, now-missing registration (same adapter/source root)
+has byte-identical primary-artifact content, this is reported as an
+`ambiguities` entry (`matchesRegistrationId`, `matchesPreviousDirectory`)
+rather than silently treated as the same source moved or renamed. The new
+entry is still registered as its own, independent association; detach the
+prior one explicitly if it is in fact the same artifact.
+
+### Reinspection
+
+`reinspect` (no `--id`: every registration in the project; with `--id`: one)
+recomputes each registration's primary artifact's current state against its
+registered snapshot, without rewriting anything: `current` (unchanged),
+`changed` (hash differs), `missing` (`ENOENT`), or `unreadable` (any other
+read failure, e.g. the path now resolves to a directory). The historical
+hash is always preserved in the registration's `history`. It also reports
+the associated task's current revision when the task can still be read, so
+a caller has the value `register`'s `expectedTaskRevision` needs for a
+subsequent revision update.
+
+### Detach
+
+`detach` (`--id`, `--expected-revision`) marks a registration `detached` in
+the association store only: it never touches the source file or the task
+record it points at. Detaching an already-detached registration is a
+no-op. A stale `--expected-revision` fails with
+`SPEC_IMPORT_REGISTRATION_REVISION_CONFLICT` rather than silently
+overwriting a concurrent change to the same registration.
+
+### CLI
+
+```powershell
+latchkit spec-import register --project <path> --root <path> [--adapter spec-kit|openspec|tinyspec] \
+  --entry <entryId> --manifest-digest <sha256> --source-sha256 <sha256> \
+  [--expected-task-revision <n>]
+latchkit spec-import reinspect --project <path> [--id <registrationId>]
+latchkit spec-import detach --project <path> --id <registrationId> --expected-revision <n>
+```
+
+### HTTP API
+
+```
+POST /api/spec-imports/register   { sourceRoot, adapter?, entryId, manifestDigest, sourceSha256, expectedTaskRevision? }
+GET  /api/spec-imports/reinspect?id=<registrationId>
+POST /api/spec-imports/detach     { id, expectedRevision }
+```
+
+All three require the same per-launch bearer token as every other route and
+operate on the console's own project (unlike `discover`/`preview`, which
+accept an unrelated `root`). `register` and `detach` are serialized through
+the same pending-mutation queue as every other task-state-touching route.
+
+### Persistence and locking
+
+The association store is written with the same atomic-rename primitive
+(`writeAtomic`) every other Latchkit-owned store uses, and every
+registration/detach operation holds the project-wide lock
+(`withProjectLock`, `src/installer/lock.ts` — the same lock
+`src/managed-tools/fcc.ts` and `src/integrations/mcp/managed.ts` use for
+their own managed state) across the whole operation. The task-state half
+(the task and its imported record) commits first, through the existing,
+separate task-state lock/expected-revision/idempotency boundary
+(`src/task-state/lock.ts`, `mutate()`); the association-store write is a
+secondary, idempotent index kept consistent with it, mirroring how
+`applyTaskReconciliation` treats its workflow acknowledgment as secondary to
+the task-state commit (see
+[reconciling changed intent](task-state.md#reconciling-changed-intent)). If
+the process is interrupted between the two commits, no file is left
+partially written (`writeAtomic` never leaves a partial file), and a
+retried `register` call for the same entry detects the already-committed
+task record by its deterministic (non-secret) provenance reference and
+completes only the missing association, rather than creating a duplicate
+task.
+
+This module deliberately does not route the association store through
+`src/installer/transactions.ts`'s `applyRegisteredTransaction`, even though
+that is the registered-resource/transaction facility other managed state
+(FCC, managed MCP config, provider install) uses: that facility's
+before/after journal is anchored to one project-wide `.latchkit/manifest.json`
+file, which is installer-owned state describing generated provider files —
+coupling an unrelated feature's writes to it would either require depending
+on a prior `latchkit install` for no real reason, or silently overwriting
+that shared file's content. `writeAtomic` plus `withProjectLock` gives the
+same interruption- and collision-safety (atomic replace; no concurrent
+writer) without that coupling.
+
 ## Known limitations
 
 - Parsing is line-based regular expressions tuned to each pinned template's
@@ -284,7 +446,18 @@ own pending-mutation queue.
   (`YYYY-MM-DD-HH-MM-`) is a naming-convention check this adapter adds for
   honest reporting — the pinned upstream CLI itself does not validate the
   prefix's characters when reading an existing file, only when creating one.
-- No adapter in this increment writes an import manifest to disk; a caller
-  that wants to keep one must save the `preview` response itself. A durable,
-  Latchkit-owned manifest store is part of the deferred registration
-  increment.
+- `discover`/`preview` still write nothing to disk; a caller that wants to
+  keep a manifest must save the response itself. Only the explicit
+  `register`/`detach` operations write the durable, Latchkit-owned
+  association store described above.
+- Registration tracks only the entry's single primary artifact (the same
+  one `wouldCreate[].wouldCreate.importSource` names); it does not create a
+  separate task record per supporting artifact or declared link. A future
+  increment could extend this without changing the association shape.
+- Registration requires the selected source root to be the Latchkit
+  project or a subdirectory of it (see "Registration" above); it cannot
+  register an entry discovered from an unrelated local root the way
+  `discover`/`preview` can.
+- Browser UI for reviewing and selecting entries to register, semantic
+  mapping generation/confirmation, and automatic migration remain out of
+  scope for this increment, matching the parent issue.

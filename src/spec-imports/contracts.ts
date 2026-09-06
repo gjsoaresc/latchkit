@@ -598,3 +598,297 @@ export function validateSpecImportManifest(input: unknown): SpecImportManifest {
   value.warnings.forEach((warning, index) => validateWarning(warning, `$.warnings[${index}]`));
   return value;
 }
+
+// ---------------------------------------------------------------------------
+// Registration (issue #114, registration increment): an explicit, reviewed
+// binding of one selected discovered entry into existing Latchkit task
+// state. This never copies, moves, or reformats the source file; it stores a
+// project-relative path and the SHA-256 observed at registration time,
+// exactly like the task record `source` link (src/task-state/records.ts)
+// that registration creates. See docs/spec-imports.md.
+// ---------------------------------------------------------------------------
+
+export const SPEC_IMPORT_REGISTRATION_SCHEMA_VERSION = 1;
+/** Bounds the association store itself; registered tasks/records use the existing,
+ * separately bounded task-state limits (MAX_RECORDS_PER_TASK, etc). */
+export const MAX_SPEC_IMPORT_REGISTRATIONS = 2000;
+export const MAX_SPEC_IMPORT_REGISTRATION_HISTORY = 40;
+
+export type SpecImportRegistrationStatus = 'registered' | 'detached';
+export type SpecImportRegistrationAction = 'registered' | 'revised' | 'detached';
+
+export type SpecImportRegisteredArtifact = { path: string; sha256: string };
+
+export type SpecImportRegistrationHistoryEntry = {
+  revision: number;
+  action: SpecImportRegistrationAction;
+  manifestDigest: string;
+  entryDirectory: string;
+  primaryArtifact: SpecImportRegisteredArtifact;
+  taskId: string;
+  recordId: string;
+  at: string;
+};
+
+export type SpecImportRegistration = {
+  id: string;
+  revision: number;
+  status: SpecImportRegistrationStatus;
+  adapter: SpecImportAdapterId;
+  /** Project-relative, "/"-separated path to the adapter's source root; "" when the source
+   * root is the Latchkit project root itself (the common case). */
+  sourceRoot: string;
+  /** The adapter-scoped entry identity (directory-derived) at the time of the last
+   * registration/revision. A renamed source directory produces a different entry ID; see
+   * `docs/spec-imports.md` on ambiguous moves/renames. */
+  entryId: string;
+  entryDirectory: string;
+  manifestDigest: string;
+  /** Project-relative path + hash of the entry's primary artifact, as last registered. */
+  primaryArtifact: SpecImportRegisteredArtifact;
+  taskId: string;
+  /** The current (non-superseded) imported task record carrying this registration's claim. */
+  recordId: string;
+  registeredAt: string;
+  updatedAt: string;
+  detachedAt: string | null;
+  history: SpecImportRegistrationHistoryEntry[];
+};
+
+export type SpecImportRegistrationStore = {
+  schemaVersion: 1;
+  registrations: SpecImportRegistration[];
+};
+
+export function emptySpecImportRegistrationStore(): SpecImportRegistrationStore {
+  return { schemaVersion: SPEC_IMPORT_REGISTRATION_SCHEMA_VERSION, registrations: [] };
+}
+
+function projectRelativeRootPath(value: unknown, path: string): string {
+  if (typeof value !== 'string')
+    throw new SpecImportError('Expected a string.', 'SPEC_IMPORT_INVALID', path);
+  if (value === '') return value;
+  if (
+    value.includes('\\') ||
+    value.startsWith('/') ||
+    value.split('/').some((part) => !part || part === '.' || part === '..')
+  )
+    throw new SpecImportError(
+      'Expected a project-relative, "/"-separated path, or "".',
+      'SPEC_IMPORT_INVALID',
+      path,
+    );
+  return value;
+}
+
+function stableId(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !value || value.length > 128)
+    throw new SpecImportError(
+      'Expected a non-empty ID no longer than 128 characters.',
+      'SPEC_IMPORT_INVALID',
+      path,
+    );
+  return value;
+}
+
+function isoDateTime(value: unknown, path: string): string {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)))
+    throw new SpecImportError('Expected an ISO date-time.', 'SPEC_IMPORT_INVALID', path);
+  return value;
+}
+
+const REGISTRATION_HASH_PATTERN = /^[a-f0-9]{64}$/;
+
+function validateRegisteredArtifact(value: unknown, path: string): SpecImportRegisteredArtifact {
+  fields(value, ['path', 'sha256'], ['path', 'sha256'], path);
+  const artifact = value as SpecImportRegisteredArtifact;
+  relativePath(artifact.path, `${path}.path`);
+  if (typeof artifact.sha256 !== 'string' || !REGISTRATION_HASH_PATTERN.test(artifact.sha256))
+    throw new SpecImportError(
+      'Expected a lowercase SHA-256 digest.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.sha256`,
+    );
+  return artifact;
+}
+
+const REGISTRATION_ACTIONS = ['registered', 'revised', 'detached'];
+const REGISTRATION_STATUSES = ['registered', 'detached'];
+
+function validateRegistrationHistoryEntry(value: unknown, path: string) {
+  fields(
+    value,
+    [
+      'revision',
+      'action',
+      'manifestDigest',
+      'entryDirectory',
+      'primaryArtifact',
+      'taskId',
+      'recordId',
+      'at',
+    ],
+    [
+      'revision',
+      'action',
+      'manifestDigest',
+      'entryDirectory',
+      'primaryArtifact',
+      'taskId',
+      'recordId',
+      'at',
+    ],
+    path,
+  );
+  const entry = value as SpecImportRegistrationHistoryEntry;
+  if (!Number.isInteger(entry.revision) || entry.revision < 1)
+    throw new SpecImportError(
+      'Expected a positive integer.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.revision`,
+    );
+  if (!REGISTRATION_ACTIONS.includes(entry.action))
+    throw new SpecImportError(
+      'Unknown registration action.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.action`,
+    );
+  if (
+    typeof entry.manifestDigest !== 'string' ||
+    !REGISTRATION_HASH_PATTERN.test(entry.manifestDigest)
+  )
+    throw new SpecImportError(
+      'Expected a lowercase SHA-256 digest.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.manifestDigest`,
+    );
+  relativePath(entry.entryDirectory, `${path}.entryDirectory`);
+  validateRegisteredArtifact(entry.primaryArtifact, `${path}.primaryArtifact`);
+  stableId(entry.taskId, `${path}.taskId`);
+  stableId(entry.recordId, `${path}.recordId`);
+  isoDateTime(entry.at, `${path}.at`);
+}
+
+function validateRegistration(value: unknown, path: string) {
+  fields(
+    value,
+    [
+      'id',
+      'revision',
+      'status',
+      'adapter',
+      'sourceRoot',
+      'entryId',
+      'entryDirectory',
+      'manifestDigest',
+      'primaryArtifact',
+      'taskId',
+      'recordId',
+      'registeredAt',
+      'updatedAt',
+      'detachedAt',
+      'history',
+    ],
+    [
+      'id',
+      'revision',
+      'status',
+      'adapter',
+      'sourceRoot',
+      'entryId',
+      'entryDirectory',
+      'manifestDigest',
+      'primaryArtifact',
+      'taskId',
+      'recordId',
+      'registeredAt',
+      'updatedAt',
+      'detachedAt',
+      'history',
+    ],
+    path,
+  );
+  const registration = value as SpecImportRegistration;
+  stableId(registration.id, `${path}.id`);
+  if (!Number.isInteger(registration.revision) || registration.revision < 1)
+    throw new SpecImportError(
+      'Expected a positive integer.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.revision`,
+    );
+  if (!REGISTRATION_STATUSES.includes(registration.status))
+    throw new SpecImportError(
+      'Unknown registration status.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.status`,
+    );
+  if (!KNOWN_ADAPTER_IDS.includes(registration.adapter))
+    throw new SpecImportError('Unknown adapter ID.', 'SPEC_IMPORT_INVALID', `${path}.adapter`);
+  projectRelativeRootPath(registration.sourceRoot, `${path}.sourceRoot`);
+  stableId(registration.entryId, `${path}.entryId`);
+  relativePath(registration.entryDirectory, `${path}.entryDirectory`);
+  if (
+    typeof registration.manifestDigest !== 'string' ||
+    !REGISTRATION_HASH_PATTERN.test(registration.manifestDigest)
+  )
+    throw new SpecImportError(
+      'Expected a lowercase SHA-256 digest.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.manifestDigest`,
+    );
+  validateRegisteredArtifact(registration.primaryArtifact, `${path}.primaryArtifact`);
+  stableId(registration.taskId, `${path}.taskId`);
+  stableId(registration.recordId, `${path}.recordId`);
+  isoDateTime(registration.registeredAt, `${path}.registeredAt`);
+  isoDateTime(registration.updatedAt, `${path}.updatedAt`);
+  if (registration.detachedAt !== null) isoDateTime(registration.detachedAt, `${path}.detachedAt`);
+  if (registration.status === 'detached' && registration.detachedAt === null)
+    throw new SpecImportError(
+      'A detached registration must record when it was detached.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.detachedAt`,
+    );
+  if (!Array.isArray(registration.history))
+    throw new SpecImportError('Expected an array.', 'SPEC_IMPORT_INVALID', `${path}.history`);
+  if (registration.history.length > MAX_SPEC_IMPORT_REGISTRATION_HISTORY)
+    throw new SpecImportError(
+      'Registration history exceeds its bound.',
+      'SPEC_IMPORT_INVALID',
+      `${path}.history`,
+    );
+  registration.history.forEach((entry, index) =>
+    validateRegistrationHistoryEntry(entry, `${path}.history[${index}]`),
+  );
+}
+
+/** Structural validation only; used to keep the store this module reads/writes honest. */
+export function validateSpecImportRegistrationStore(input: unknown): SpecImportRegistrationStore {
+  const value = input as SpecImportRegistrationStore;
+  fields(value, ['schemaVersion', 'registrations'], ['schemaVersion', 'registrations'], '$');
+  if (value.schemaVersion !== SPEC_IMPORT_REGISTRATION_SCHEMA_VERSION)
+    throw new SpecImportError(
+      `Unsupported spec-import registration schema version ${String(value.schemaVersion)}.`,
+      'SPEC_IMPORT_UNSUPPORTED_VERSION',
+      '$.schemaVersion',
+    );
+  if (!Array.isArray(value.registrations))
+    throw new SpecImportError('Expected an array.', 'SPEC_IMPORT_INVALID', '$.registrations');
+  if (value.registrations.length > MAX_SPEC_IMPORT_REGISTRATIONS)
+    throw new SpecImportError(
+      'This project has reached its spec-import registration limit.',
+      'SPEC_IMPORT_REGISTRATION_LIMIT_EXCEEDED',
+      '$.registrations',
+    );
+  const seen = new Set<string>();
+  value.registrations.forEach((registration, index) => {
+    validateRegistration(registration, `$.registrations[${index}]`);
+    if (seen.has(registration.id))
+      throw new SpecImportError(
+        'Duplicate registration id.',
+        'SPEC_IMPORT_INVALID',
+        `$.registrations[${index}].id`,
+      );
+    seen.add(registration.id);
+  });
+  return value;
+}
