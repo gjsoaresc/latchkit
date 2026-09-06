@@ -44,6 +44,24 @@ export interface InstallationInspection {
   launchers: string[];
   retained: string[];
 }
+/**
+ * Result of staging a verified bundle into its immutable `versions/<key>`
+ * directory without touching `current`, the managed launchers, or the
+ * runtime any already-running or newly launched process resolves. Consumers
+ * that need to activate a staged version later reuse the existing
+ * `rollbackInstallation` primitive (see `src/installation/updates/service.ts`),
+ * which re-verifies and re-smokes the target directory before flipping
+ * `current` — the same "point current at an existing immutable version
+ * directory" operation, whether the version is new or previously installed.
+ */
+export interface StagedBundleRecord {
+  root: string;
+  version: string;
+  target: string;
+  key: string;
+  directory: string;
+  manifest: BundleManifest;
+}
 export interface HookHandlerBinding {
   id: string;
   relativeHandler: string;
@@ -409,11 +427,25 @@ async function preflightManagedRemoval(root: string, relatives: readonly string[
   }
 }
 
-async function withInstallationLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+export async function withInstallationLock<T>(
+  root: string,
+  operation: () => Promise<T>,
+): Promise<T> {
   await ensureRoot(root);
   // Reuse the challenged ownership lock inside the installation root. A PID
   // lookup failure alone cannot establish that another installer is absent.
   return withTaskStateLock(root, operation);
+}
+
+/**
+ * Canonicalize and prepare an installation root for reuse by other
+ * installation-local modules (for example the update service's settings and
+ * staged-record stores), so every reader/writer of installation-scoped state
+ * agrees on the same real directory and shares the same installation lock
+ * via `withInstallationLock`.
+ */
+export async function resolveInstallationRoot(root: string): Promise<string> {
+  return ensureRoot(root);
 }
 
 async function copyVerifiedBundle(
@@ -588,6 +620,105 @@ async function promoteStagedVersion(root: string, staged: string, destination: s
   }
 }
 
+/**
+ * Verify and stage a bundle into its immutable `versions/<key>` directory.
+ * Deliberately does not touch `current`, the managed launchers, or create
+ * any hook dispatcher — a prepared update must not change what a new launch
+ * resolves to. Must run inside `withInstallationLock`. Idempotent: retrying
+ * with the same bundle content re-verifies and re-smokes an already-staged
+ * directory instead of erroring or re-copying.
+ */
+async function stageVerifiedBundle(
+  root: string,
+  bundle: string,
+  manifest: BundleManifest,
+  target: string,
+): Promise<StagedBundleRecord> {
+  const key = versionKey(manifest);
+  const versions = await ensureDirectoryWithinRoot(root, 'versions');
+  const destination = path.join(versions, key);
+  try {
+    const existing = await lstat(destination);
+    if (!existing.isDirectory() || existing.isSymbolicLink())
+      throw new Error(`Installed version is invalid: ${key}`);
+    await rejectSymlinksWithin(root, destination);
+    const existingManifest = await verifyBundle(destination, target);
+    const inventoryDigest = (files: BundleFile[]) =>
+      digest(
+        Buffer.from(
+          JSON.stringify([...files].sort((left, right) => left.path.localeCompare(right.path))),
+        ),
+      );
+    if (inventoryDigest(existingManifest.files) !== inventoryDigest(manifest.files))
+      throw new Error(`An immutable version with different bundle content already exists: ${key}`);
+    await smoke(destination, manifest.version);
+    return {
+      root,
+      version: manifest.version,
+      target,
+      key,
+      directory: destination,
+      manifest: existingManifest,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const staged = path.join(versions, `.${key}.${randomUUID()}.staging`);
+  try {
+    await mkdir(staged);
+    const stagedInfo = await lstat(staged);
+    if (!stagedInfo.isDirectory() || stagedInfo.isSymbolicLink())
+      throw new Error(`Refusing symlink or non-directory staging path: ${staged}`);
+    await copyVerifiedBundle(bundle, staged, manifest);
+    if (!target.startsWith('win32-')) await chmod(path.join(staged, 'runtime', 'node'), 0o755);
+    await smoke(staged, manifest.version);
+    await promoteStagedVersion(root, staged, destination);
+  } catch (error) {
+    await rm(staged, { recursive: true, force: true });
+    throw error;
+  }
+  return { root, version: manifest.version, target, key, directory: destination, manifest };
+}
+
+/**
+ * Activate an already-staged immutable version directory: (re)create the
+ * managed launchers and hook dispatchers, then atomically flip `current`.
+ * Must run inside `withInstallationLock`. This is the only step that changes
+ * what a new launch resolves to.
+ */
+async function activateStagedUnlocked(
+  root: string,
+  key: string,
+  target: string,
+): Promise<InstallationInspection> {
+  await createStableLaunchers(root, target);
+  await createStableHookLaunchers(root, target, DEFAULT_HOOKS);
+  await writeAtomic(root, ACTIVE, `${key}\n`);
+  return inspectInstallation(root);
+}
+
+/**
+ * Verify and stage a bundle without activating it. Exposed for the update
+ * service (issue #139 slice 1): staging (download/verify/copy/smoke) and
+ * activation (switching `current`) are deliberately separate operations so a
+ * prepared update can be inspected, retried, or abandoned without ever
+ * changing what a new launch resolves to. `installBundle` below composes
+ * this with `activateStagedUnlocked` inside one lock to preserve the
+ * existing combined `self install`/`self upgrade` behavior exactly.
+ */
+export async function stageBundle(
+  request: Omit<InstallationRequest, 'command'>,
+): Promise<StagedBundleRecord> {
+  if (!request.bundle) throw new Error('A verified extracted bundle path is required.');
+  const bundle = await canonicalLocation(request.bundle);
+  const root = await ensureRoot(request.root);
+  const target = request.target ?? targetOf();
+  const manifest = await verifyBundle(bundle, target);
+  if (request.version && request.version !== manifest.version)
+    throw new Error('Requested version does not match bundle version.');
+  return withInstallationLock(root, () => stageVerifiedBundle(root, bundle, manifest, target));
+}
+
 export async function installBundle(
   request: Omit<InstallationRequest, 'command'>,
 ): Promise<InstallationInspection> {
@@ -599,51 +730,8 @@ export async function installBundle(
   if (request.version && request.version !== manifest.version)
     throw new Error('Requested version does not match bundle version.');
   return withInstallationLock(root, async () => {
-    const key = versionKey(manifest);
-    const versions = await ensureDirectoryWithinRoot(root, 'versions');
-    const destination = path.join(versions, key);
-    try {
-      const existing = await lstat(destination);
-      if (!existing.isDirectory() || existing.isSymbolicLink())
-        throw new Error(`Installed version is invalid: ${key}`);
-      await rejectSymlinksWithin(root, destination);
-      const existingManifest = await verifyBundle(destination, target);
-      const inventoryDigest = (files: BundleFile[]) =>
-        digest(
-          Buffer.from(
-            JSON.stringify([...files].sort((left, right) => left.path.localeCompare(right.path))),
-          ),
-        );
-      if (inventoryDigest(existingManifest.files) !== inventoryDigest(manifest.files))
-        throw new Error(
-          `An immutable version with different bundle content already exists: ${key}`,
-        );
-      await smoke(destination, manifest.version);
-      await createStableLaunchers(root, target);
-      await createStableHookLaunchers(root, target, DEFAULT_HOOKS);
-      await writeAtomic(root, ACTIVE, `${key}\n`);
-      return inspectInstallation(root);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    const staged = path.join(versions, `.${key}.${randomUUID()}.staging`);
-    try {
-      await mkdir(staged);
-      const stagedInfo = await lstat(staged);
-      if (!stagedInfo.isDirectory() || stagedInfo.isSymbolicLink())
-        throw new Error(`Refusing symlink or non-directory staging path: ${staged}`);
-      await copyVerifiedBundle(bundle, staged, manifest);
-      if (!target.startsWith('win32-')) await chmod(path.join(staged, 'runtime', 'node'), 0o755);
-      await smoke(staged, manifest.version);
-      await createStableLaunchers(root, target);
-      await promoteStagedVersion(root, staged, destination);
-      await createStableHookLaunchers(root, target, DEFAULT_HOOKS);
-      await writeAtomic(root, ACTIVE, `${key}\n`);
-    } catch (error) {
-      await rm(staged, { recursive: true, force: true });
-      throw error;
-    }
-    return inspectInstallation(root);
+    const staged = await stageVerifiedBundle(root, bundle, manifest, target);
+    return activateStagedUnlocked(root, staged.key, target);
   });
 }
 

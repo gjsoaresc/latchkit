@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/update-status-v1.schema.json",
+  "title": "Latchkit update status snapshot v1",
+  "description": "A pure, non-network read (issue #139) combining the persisted update settings, the last release check performed (if any), and any staged record. `status` distinguishes checking, unavailable/no releases, current, update available, downloading, verifying, ready, waiting for idle/compatibility, restarting, completed, and failed. Slice 1's synchronous inspect/check/stage calls only ever produce unavailable, current, update-available, ready, and failed; checking/downloading/verifying are transient progress values a stage operation may report through a callback rather than a resting persisted state, and waiting/restarting/completed are reserved for later #139 slices (installation-wide quiescence and restart handoff).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "installedVersion",
+    "target",
+    "mode",
+    "settingsRevision",
+    "status",
+    "reason",
+    "staged",
+    "lastCheck"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "installedVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "target": { "type": "string", "pattern": "^[a-z0-9]+-[a-z0-9]+$" },
+    "mode": { "enum": ["manual", "notify", "automatic"] },
+    "settingsRevision": { "type": "integer", "minimum": 0 },
+    "status": {
+      "enum": [
+        "checking",
+        "unavailable",
+        "current",
+        "update-available",
+        "downloading",
+        "verifying",
+        "ready",
+        "waiting",
+        "restarting",
+        "completed",
+        "failed"
+      ]
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "description": "Actionable for every status except update-available/current (which need none) and the normal no-releases case folded into unavailable."
+    },
+    "staged": {
+      "oneOf": [{ "type": "null" }, { "$ref": "update-staged-v1.schema.json" }]
+    },
+    "lastCheck": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "checkedAt",
+            "source",
+            "outcome",
+            "currentVersion",
+            "candidate",
+            "majorUpdate",
+            "excludedCount",
+            "reason"
+          ],
+          "properties": {
+            "schemaVersion": { "const": 1 },
+            "checkedAt": { "type": "string", "format": "date-time" },
+            "source": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["owner", "name", "target"],
+              "properties": {
+                "owner": { "type": "string", "minLength": 1 },
+                "name": { "type": "string", "minLength": 1 },
+                "target": { "type": "string", "minLength": 1 }
+              }
+            },
+            "outcome": {
+              "enum": [
+                "no-releases",
+                "offline",
+                "rate-limited",
+                "missing-asset",
+                "current",
+                "update-available"
+              ]
+            },
+            "currentVersion": { "type": "string", "minLength": 1 },
+            "candidate": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "version",
+                    "tag",
+                    "draft",
+                    "prerelease",
+                    "publishedAt",
+                    "notesUrl",
+                    "notes",
+                    "asset"
+                  ],
+                  "properties": {
+                    "version": { "type": "string", "minLength": 1 },
+                    "tag": { "type": "string", "minLength": 1 },
+                    "draft": { "type": "boolean" },
+                    "prerelease": { "type": "boolean" },
+                    "publishedAt": { "type": ["string", "null"], "format": "date-time" },
+                    "notesUrl": { "type": ["string", "null"], "minLength": 1 },
+                    "notes": {
+                      "type": "string",
+                      "description": "Untrusted release body text; render as plain/escaped text, never interpreted HTML/markdown."
+                    },
+                    "asset": {
+                      "oneOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["name", "url", "size"],
+                          "properties": {
+                            "name": { "type": "string", "minLength": 1 },
+                            "url": { "type": "string", "minLength": 1 },
+                            "size": { "type": ["number", "null"] }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "majorUpdate": { "type": "boolean" },
+            "excludedCount": { "type": "integer", "minimum": 0 },
+            "reason": { "type": ["string", "null"], "minLength": 1 }
+          }
+        }
+      ]
+    }
+  }
+}

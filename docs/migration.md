@@ -4,10 +4,38 @@ Latchkit does not perform background upgrades. Treat the project configuration, 
 
 ## Upgrade the CLI and project files
 
-Install the desired package version, inspect the project, then migrate and preview synchronization:
+Latchkit end users install and upgrade the CLI itself as a standalone,
+user-local bundle from GitHub Releases (see [installation](installation.md)
+and [releases](releases.md)) — never through npm. `npm install --global
+latchkit` remains development tooling for working inside this repository's
+own checkout; it is not the supported end-user installation or upgrade path.
+
+Upgrade an already-installed standalone bundle in place, either directly:
+
+```powershell
+latchkit self upgrade --to X.Y.Z --bundle <path-to-extracted-candidate>
+latchkit self inspect
+```
+
+or by re-running the bootstrap script with an explicit version, which
+downloads, verifies, and hands off to the same installation manager (see
+[install/upgrade/rollback/uninstall](releases.md#install-upgrade-rollback-and-uninstall)):
+
+```powershell
+./install.ps1 -Version X.Y.Z -Root "$env:LOCALAPPDATA\Latchkit"
+```
+
+A narrow console/CLI updater (`latchkit update status|check|preview|stage|rollback`,
+issue #139) can check the configured official release source and stage a
+compatible update without a separate bootstrap invocation — see
+[Update ownership and channel detection](installation.md#update-ownership-and-channel-detection).
+`stage` never activates the update it prepares; console-driven install-and-restart
+and opt-in automatic updates are later slices of that same issue.
+
+Once the CLI itself is at the desired version, inspect the project and
+migrate/sync its configuration exactly as before:
 
 ```sh
-npm install --global latchkit@X.Y.Z
 latchkit --version
 latchkit config --project <path>
 latchkit migrate --project <path> --dry-run
@@ -24,13 +52,15 @@ For immutable Git packs, run `latchkit pack fetch --id <pack-id>` after changing
 
 ## Roll back configuration or the CLI
 
-Automatic downgrade is not supported. Stop Latchkit, preserve the newer configuration, restore a reviewed backup atomically to `.latchkit/config.json`, run `latchkit config`, and preview sync before applying it. To roll back the CLI, install a known package version and repeat the same preview:
+Automatic downgrade is not supported. Stop Latchkit, preserve the newer configuration, restore a reviewed backup atomically to `.latchkit/config.json`, run `latchkit config`, and preview sync before applying it. To roll back a standalone-installed CLI, point the installed bundle's own rollback command at a previously staged version — staging retains every prior version until explicitly detached (see [install/upgrade/rollback/uninstall](releases.md#install-upgrade-rollback-and-uninstall)) — and repeat the same preview:
 
-```sh
-npm install --global latchkit@X.Y.Z
+```powershell
+latchkit self rollback --to X.Y.Z
 latchkit migrate --project <path> --dry-run
 latchkit sync --project <path> --dry-run
 ```
+
+Inside a repository development checkout, `npm install --global latchkit@X.Y.Z` remains available for local development use only; it is not the end-user rollback path.
 
 Never restore a backup over a newer file without reviewing provider and skill selections that may not exist in the older schema.
 
@@ -52,10 +82,12 @@ latchkit sync --project <path> --dry-run
 latchkit remove --project <path>
 ```
 
-Removal preserves `.latchkit/config.json`, notes, user-authored text, custom skills, provider settings, and changed managed files. Uninstall the CLI separately:
+Removal preserves `.latchkit/config.json`, notes, user-authored text, custom skills, provider settings, and changed managed files. Uninstall the standalone CLI itself separately — it retains every project's `.latchkit/` state and every staged version directory, both requiring deliberate manual cleanup (see [install/upgrade/rollback/uninstall](releases.md#install-upgrade-rollback-and-uninstall)):
 
-```sh
-npm uninstall --global latchkit
+```powershell
+latchkit self uninstall
 ```
+
+Inside a repository development checkout, `npm uninstall --global latchkit` removes the development-only global link; it is not the end-user uninstall path.
 
 Removal is not deletion of history. Project memory deletion cannot revoke older exports, backups, or Git history; delete those separately after review.

@@ -78,9 +78,19 @@ qualifies a Linux/macOS release archive.
 
 Both scripts accept an exact `--version`/`-Version` and a custom
 `--root`/`-Root`. Re-running either script with the same version and root is
-idempotent: the installation manager recognizes an already-staged,
-byte-identical version and re-activates it without re-downloading or
-re-staging, rather than erroring. Running with a *different* version simply
+idempotent, but only at the manager's staging step, not the bootstrap's own
+download: `install.ps1`/`install.sh` always download (or re-copy, for a local
+`-Artifact`) the archive and its checksum sidecar first, exactly as on a first
+install — the script itself has no way to know the requested version is
+already staged before fetching it. Only after that download does the
+installation manager recognize an already-staged, byte-identical version and
+re-activate it without re-copying or re-staging its files, rather than
+erroring. This split is intentional: staging/verification and activation are
+separate operations in `src/installation/manager.ts` (`stageBundle` vs.
+pointing `current` at an already-staged version), and only the latter is
+deduplicated here. A console/CLI-driven update (issue #139) that already has
+a local, verified candidate can skip the redundant re-download that the
+bootstrap scripts cannot avoid. Running with a *different* version simply
 stages and activates that version alongside the existing ones (see
 [upgrade/rollback/uninstall](releases.md#install-upgrade-rollback-and-uninstall)).
 Requesting a version that does not match the resolved archive's own embedded
@@ -269,3 +279,54 @@ given. This means:
   refuses to overwrite a launcher it does not recognize as its own, so a
   conflict fails loudly rather than corrupting either installation, but
   mixing them is still not a supported configuration).
+
+## Update ownership and channel detection
+
+Issue #139's console/CLI updater must never silently fall back to a direct
+self-install on an installation it does not actually own. Ownership is
+detected by `detectInstallationOwnership` in
+`src/installation/updates/ownership.ts`, which classifies exactly four kinds
+before any release check or staging is attempted:
+
+- **`source-development`** — running directly from a source checkout (no
+  `LATCHKIT_INSTALL_ROOT`, which only a stable launcher sets — see
+  `createStableLaunchers` in `src/installation/manager.ts`). There is no
+  standalone bundle to update; use `git`/`npm` on the checkout instead.
+- **`unsupported-platform`** — the running `<platform>-<arch>` pair is not
+  one either installer script even accepts (see the
+  [supported/deferred target table](#supported-vs-deferred-targets) above).
+  No update route exists.
+- **`package-manager`** — the resolved root sits under a recognized
+  Homebrew (`Cellar`/`homebrew`) or WinGet (`Microsoft\WinGet\Packages`) path
+  segment. The updater must defer to that manager's own upgrade/uninstall
+  commands (see [above](#package-manager-upgradeuninstall-ownership)), never
+  overwrite that prefix directly.
+- **`unowned`** — the root exists (or does not exist yet) but the manager's
+  own `inspectInstallation` finds no active version and no recognized
+  managed launcher there. Direct self-install is still refused; the correct
+  action is running the installer to adopt the root, exactly as today.
+- **`self-managed`** — a real direct install with its own recognized,
+  owned launchers. This is the only kind the console/CLI updater may act on.
+
+**Override contract:** `detectInstallationOwnership`'s `root` and
+`runningFromInstallRoot` parameters must only ever come from a trusted
+caller — the CLI (an operator's own `--install-root`, or the process's own
+`LATCHKIT_INSTALL_ROOT`) or a test fixture. A future authenticated local API
+(issue #139 slice 2) must resolve both only from the current server
+process's own verified installation identity and must never accept a root,
+path, or override from request/browser input; doing so would let a caller
+nominate an arbitrary managed root for update operations to act on. This
+mirrors the existing constraint that the registered-resource transaction
+layer and the installation manager's own path checks already enforce for
+every other managed-filesystem operation in this repository.
+
+The narrow CLI fallback `latchkit update status|check|preview|stage|rollback`
+(see `src/cli.ts`) operates the same way `latchkit self ...` already does:
+`--install-root` is required explicitly (or `LATCHKIT_INSTALL_ROOT` from the
+environment), never inferred from an unauthenticated source. `stage` never
+activates — it downloads, verifies, extracts, and stages a compatible update
+exactly like `self upgrade` does internally, but stops before touching
+`current`, the managed launchers, or the runtime a new launch resolves to;
+`rollback` reuses the existing `self rollback` activation primitive
+directly. Restart handoff, the console UI, and onboarding/Settings
+automation are later #139 slices.

@@ -198,6 +198,9 @@ Usage: latchkit <command> [options]
              end-of-spec decision (approve and build, add notes, or keep for later)
   workflow   Run, inspect, approve, resume, or cancel a delivery workflow
   self       Inspect, upgrade, roll back, or uninstall this standalone installation
+  update     Narrow inspect/recovery fallback for the console updater: status, check,
+             preview, stage, or roll back a compatible release (never activates on
+             stage; console/API/restart handoff and automation are later slices)
   review     Run bounded independent reviews
   diff       Inspect a revision-bound Git diff or record review feedback
   acceptance Run CLI, HTTP, browser, or manual acceptance checks
@@ -300,8 +303,8 @@ Options:
   --every-minutes <n> schedule create/edit: recurrence interval
   --scope <text>      schedule create: authorized task scope
   --reference <text>  schedule create: authorization reference
-  --install-root <path> self: user-local installation directory
-  --to <version>      self upgrade/rollback: exact release version
+  --install-root <path> self/update: user-local installation directory
+  --to <version>      self upgrade/rollback and update rollback: exact release version
   --bundle <path>     self install/upgrade: extracted local bundle
   --archive <path>    tool fcc preview/install: pinned local FCC archive
   --tool-root <path>  tool fcc: recorded user-local FCC tool directory
@@ -433,6 +436,7 @@ try {
         'onboarding',
         'projects',
         'spec-import',
+        'update',
       ].includes(command) &&
       extra.length
     )
@@ -448,6 +452,7 @@ try {
       ui: ['project', 'port'],
       diagnostics: ['project', 'export', 'clear'],
       self: ['install-root', 'to', 'bundle'],
+      update: ['install-root', 'to'],
       tool: ['archive', 'tool-root', 'python', 'uv'],
       workflow: [
         'project',
@@ -661,6 +666,35 @@ try {
           bundle: values.bundle,
         }),
       );
+      // Narrow inspect/recovery CLI fallback for the update service (issue
+      // #139 slice 1). The authenticated local API and console are later
+      // slices; this exists so an operator (or a script) can inspect update
+      // settings/status, check the official release source, preview and
+      // stage a compatible update, or roll back without either surface.
+    } else if (command === 'update') {
+      const action = extra[0];
+      if (
+        extra.length !== 1 ||
+        !action ||
+        !['status', 'check', 'preview', 'stage', 'rollback'].includes(action)
+      )
+        throw new Error('Usage: latchkit update <status|check|preview|stage|rollback> [options].');
+      const installRoot =
+        values['install-root'] ?? requiredOption(process.env.LATCHKIT_INSTALL_ROOT, 'install-root');
+      const updates = await import('./installation/updates/service.js');
+      if (action === 'status') print(await updates.inspectUpdateStatus(installRoot));
+      else if (action === 'check') print(await updates.checkForUpdates(installRoot));
+      else if (action === 'preview') print(await updates.previewUpdate(installRoot));
+      else if (action === 'stage') {
+        // A narrow CLI convenience: perform a fresh check, bind a preview,
+        // and stage it in one step. The service module's `previewUpdate`/
+        // `stageUpdate` split still exists for a future console/API that
+        // shows the preview before an operator confirms staging.
+        const preview = await updates.previewUpdate(installRoot);
+        print(await updates.stageUpdate(installRoot, preview));
+      } else {
+        print(await updates.rollbackUpdate(installRoot, requiredOption(values.to, 'to')));
+      }
     } else if (command === 'init') {
       const initialized = await initProject(root, {
         ...(values.providers !== undefined
