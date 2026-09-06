@@ -7,10 +7,10 @@
 // The baseline arm always uses each fixture's own bundled, deterministic
 // scripted controller (apply-change.mjs) — never a live model or provider
 // call, so this command never spends on a provider session. The
-// reconciliation arm exercises the merged #110/#111 task-record and
-// reconciliation APIs in a separate fixture copy. Only #112's provider resume
-// context remains explicitly unavailable; this script never fabricates it or
-// starts a provider session. A future increment can drive the SAME API with a
+// reconciliation arm exercises merged #110-#112 task-record, reconciliation,
+// and context-brief APIs in a separate fixture copy. It passes the real bounded
+// brief to the next scripted controller, but never starts a provider or claims
+// that a provider consumed it. A future increment can drive the SAME API with a
 // model-driven `applyChange`/`runAcceptance` pair; the result schema already
 // distinguishes `controller: "scripted"` from `controller: "model"`, but no
 // such run is authorized or executed by this command.
@@ -53,13 +53,16 @@ const result = await runRequirementChangeSuite({
     baselineController: 'scripted',
     baselineConfiguration: 'fixture scripted controller v1',
     reconciliationController: 'scripted',
-    reconciliationConfiguration: 'task-record/reconcile API integration v1 (#110/#111)',
-    reconciliationStatus: 'completed with merged #110/#111 APIs; #112 resume context unavailable',
+    reconciliationConfiguration:
+      'task-record/reconcile/context-brief API integration v1 (#110-#112)',
+    reconciliationStatus:
+      'completed with merged #110-#112 APIs; context brief handed to scripted controller only',
     limitations:
       'The scripted-controller baseline is a deterministic fixed patch used to validate the ' +
       'harness and its correctness gate end to end offline; it is not a claim about live agent ' +
-      'or human behavior on ordinary current Latchkit, and totalElapsedTimeMs measures only the ' +
-      'injected controller call, not full workflow latency, productivity, or cost.',
+      'or human behavior on ordinary current Latchkit. totalElapsedTimeMs includes the whole ' +
+      'harness arm and controllerElapsedTimeMs isolates the injected controller call; neither ' +
+      'measures workflow latency, productivity, or cost.',
   },
 });
 

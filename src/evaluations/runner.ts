@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { redact } from '../diagnostics/redact.js';
+import { buildContextBrief } from '../context-brief/service.js';
+import type { ContextBrief } from '../context-brief/contracts.js';
 import {
   applyTaskReconciliation,
   createTask,
@@ -280,6 +282,8 @@ export function renderEvaluationMarkdown(result: EvaluationResult): string {
 export interface ApplyChangeInput {
   workspace: string;
   scenario: RequirementChangeScenario;
+  /** Present only for the reconciliation arm's next-session handoff. */
+  resumeContext?: ContextBrief;
 }
 export interface ApplyChangeOutcome {
   skip?: unknown;
@@ -386,15 +390,13 @@ const defaultRunAcceptance: RunAcceptance = async ({ workspace, scenario }) => {
   return (candidate as RunAcceptance)({ workspace, scenario });
 };
 
-const RESUME_CONTEXT_UNAVAILABLE =
-  'Issue #112 is not merged: this offline arm does not fabricate a provider resume-context result.';
-
 async function runReconciliationArm(input: {
   source: string;
   scenario: RequirementChangeScenario;
   applyChange: ApplyChange;
   runAcceptance: RunAcceptance;
 }): Promise<RequirementChangeArmResult> {
+  const armStarted = process.hrtime.bigint();
   const workspace = await realpath(
     await mkdtemp(path.join(os.tmpdir(), 'latchkit-reconciliation-')),
   );
@@ -491,11 +493,28 @@ async function runReconciliationArm(input: {
       patch,
       previewDigest: freshPreview.digest,
     });
+    const changedDecision = applied.task.records?.find(
+      (record) => record.text === input.scenario.changedRequirement,
+    );
+    if (!changedDecision) throw new Error('Failed to create the changed requirement decision.');
+    task = await transitionTaskRecord(workspace, {
+      taskId: task.id,
+      expectedRevision: applied.task.revision,
+      recordId: changedDecision.id,
+      recordRevision: changedDecision.revision,
+      status: 'accepted',
+      reason: 'seeded changed requirement authorization',
+      authorization,
+    });
+    // Build the actual #112 projection from the persisted reconciled task and hand it to the
+    // next scripted-controller call. This remains offline evidence: no provider is launched or
+    // claimed to have consumed the brief.
+    const resumeContext = await buildContextBrief(workspace, { taskId: task.id });
     const started = process.hrtime.bigint();
     const controllerResult = await Promise.resolve(
-      input.applyChange({ workspace, scenario: input.scenario }),
+      input.applyChange({ workspace, scenario: input.scenario, resumeContext }),
     );
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+    const controllerElapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
     const changeLog: RequirementChangeLog = controllerResult.changeLog ?? {};
     const postFiles = await collectWorkspaceFiles(workspace);
     const postHashes = await hashWorkspaceFiles(workspace, [
@@ -520,7 +539,8 @@ async function runReconciliationArm(input: {
         changeLog,
         preHashes,
         postHashes,
-        elapsedMs,
+        totalElapsedMs: Number(process.hrtime.bigint() - armStarted) / 1_000_000,
+        controllerElapsedMs,
         acceptanceResults,
       }),
       correctnessGate: gate,
@@ -528,8 +548,7 @@ async function runReconciliationArm(input: {
       flaggedDependencies: redact(changeLog.flaggedDependencies ?? []) as string[],
       reconciliationEvidence: {
         intentSuperseded:
-          applied.task.records?.find((record) => record.id === accepted.id)?.status ===
-          'superseded',
+          task.records?.find((record) => record.id === accepted.id)?.status === 'superseded',
         stalePreviewRejected,
         unknownImpactExplicit:
           Boolean(unknownDependency) &&
@@ -549,7 +568,14 @@ async function runReconciliationArm(input: {
         preservedArtifacts: input.scenario.preserveArtifacts.every(
           (file) => preHashes[file] === postHashes[file],
         ),
-        resumeContext: { status: 'unavailable', reason: RESUME_CONTEXT_UNAVAILABLE },
+        resumeContext: {
+          status: 'delivered',
+          digest: resumeContext.digest,
+          schemaVersion: resumeContext.schemaVersion,
+          bytes: resumeContext.budget.usedBytes,
+          nextAction: resumeContext.nextAction.kind,
+          delivery: 'scripted-controller-handoff',
+        },
       },
     };
   } finally {
@@ -658,10 +684,19 @@ function computeRequirementChangeMetrics(input: {
   changeLog: RequirementChangeLog;
   preHashes: Record<string, string | null>;
   postHashes: Record<string, string | null>;
-  elapsedMs: number;
+  totalElapsedMs: number;
+  controllerElapsedMs: number;
   acceptanceResults: Record<string, boolean>;
 }): RequirementChangeMetricResult[] {
-  const { scenario, changeLog, preHashes, postHashes, elapsedMs, acceptanceResults } = input;
+  const {
+    scenario,
+    changeLog,
+    preHashes,
+    postHashes,
+    totalElapsedMs,
+    controllerElapsedMs,
+    acceptanceResults,
+  } = input;
   const changedFiles = new Set(
     Object.keys(postHashes).filter((file) => postHashes[file] !== (preHashes[file] ?? null)),
   );
@@ -757,8 +792,14 @@ function computeRequirementChangeMetrics(input: {
     requirementChangeMetric(
       'totalElapsedTimeMs',
       'measured',
-      Math.round(elapsedMs),
-      'Wall-clock time for the injected controller call only; excludes fixture copy, reconciliation, hashing, and acceptance checks.',
+      Math.round(totalElapsedMs),
+      'Wall-clock time for the complete arm, including fixture copy, task-state work, hashing, and acceptance checks; it is not productivity or cost.',
+    ),
+    requirementChangeMetric(
+      'controllerElapsedTimeMs',
+      'measured',
+      Math.round(controllerElapsedMs),
+      'Wall-clock time inside the injected controller call only; reported separately from totalElapsedTimeMs and not a productivity or cost measure.',
     ),
     requirementChangeMetric(
       'coordinatorUsage',
@@ -792,7 +833,8 @@ function summarizeRequirementChangeAcceptance(
 /**
  * Evaluate one requirement-change scenario's scripted-controller (baseline) arm in a fresh
  * fixture copy, and pair it with a separate workspace that exercises the merged task-record and
- * reconciliation APIs. Resume-context delivery remains explicitly unavailable until #112 lands.
+ * reconciliation and context-brief APIs. The reconciliation arm hands a real #112 projection to
+ * its scripted controller, but remains offline provider-unconsumed evidence.
  * The mkdtemp root is resolved through `fs.promises.realpath` before use so expected paths
  * remain correct on hosts (including CI) that resolve the OS temp directory to an 8.3 short
  * path.
@@ -804,6 +846,7 @@ export async function runRequirementChangeScenario({
   runAcceptance = defaultRunAcceptance,
   now = () => new Date().toISOString(),
 }: RequirementChangeScenarioOptions): Promise<RequirementChangeScenarioResult> {
+  const armStarted = process.hrtime.bigint();
   const scenario = validateRequirementChangeSpec(spec);
   const source = path.resolve(fixturesRoot, safe(scenario.fixture));
   const workspace = await realpath(
@@ -815,7 +858,7 @@ export async function runRequirementChangeScenario({
     const preHashes = await hashWorkspaceFiles(workspace, preFiles);
     const started = process.hrtime.bigint();
     const applied = await Promise.resolve(applyChange({ workspace, scenario }));
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+    const controllerElapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
     if (applied.skip)
       return {
         id: scenario.id,
@@ -851,7 +894,8 @@ export async function runRequirementChangeScenario({
       changeLog,
       preHashes,
       postHashes,
-      elapsedMs,
+      totalElapsedMs: Number(process.hrtime.bigint() - armStarted) / 1_000_000,
+      controllerElapsedMs,
       acceptanceResults,
     });
     const baseline: RequirementChangeArmResult = {

@@ -261,10 +261,17 @@ export const REQUIREMENT_CHANGE_METRICS: readonly MetricDefinition[] = Object.fr
   },
   {
     id: 'totalElapsedTimeMs',
-    label: 'Wall-clock milliseconds spent in the injected controller call only.',
+    label: 'Wall-clock milliseconds spent in the complete arm.',
     unit: 'milliseconds',
     limitation:
-      'Excludes fixture copy, task-state reconciliation, hashing, and acceptance checks. It is not total workflow latency, human/model effort, productivity, or cost, and must not be compared across arms as one.',
+      'Includes harness and filesystem overhead. It is not full workflow latency, human/model effort, productivity, or cost, and must not be compared across arms as one.',
+  },
+  {
+    id: 'controllerElapsedTimeMs',
+    label: 'Wall-clock milliseconds spent inside the injected controller call.',
+    unit: 'milliseconds',
+    limitation:
+      'Excludes fixture copy, task-state reconciliation, context projection, hashing, and acceptance checks. It is not a measure of productivity or cost.',
   },
   {
     id: 'coordinatorUsage',
@@ -487,7 +494,17 @@ export interface RequirementChangeArmResult {
     stalePreviewRejected: boolean;
     unknownImpactExplicit: boolean;
     preservedArtifacts: boolean;
-    resumeContext: { status: 'unavailable'; reason: string };
+    /** Offline handoff of a real #112 projection; not provider-consumption evidence. */
+    resumeContext:
+      | {
+          status: 'delivered';
+          digest: string;
+          schemaVersion: number;
+          bytes: number;
+          nextAction: string;
+          delivery: 'scripted-controller-handoff';
+        }
+      | { status: 'unavailable'; reason: string };
   };
 }
 

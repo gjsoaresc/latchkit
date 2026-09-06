@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://latchkit.dev/schemas/skill-evaluation-result-v2.schema.json",
   "title": "Latchkit requirement-change evaluation result v2",
-  "description": "Result shape for skill-evaluation-v2.schema.json requirement-change scenarios (issue #116). Each scenario reports two deterministic scripted-controller arms: a baseline and a local reconciliation integration using #110/#111 task-state APIs. reconciliationEvidence records its narrow API proofs and keeps #112 provider resume-context delivery explicitly unavailable. Neither arm is a provider, model, or human comparison; deterministic scripted-controller results are never merged with model-driven outcomes in the same field.",
+  "description": "Result shape for skill-evaluation-v2.schema.json requirement-change scenarios (issue #116). Each scenario reports two deterministic scripted-controller arms: a baseline and a local reconciliation/context integration using #110-#112 APIs. reconciliationEvidence records narrow API proofs and an offline scripted-controller handoff of the #112 brief; it is not provider-consumption evidence. Neither arm is a provider, model, or human comparison; deterministic scripted-controller results are never merged with model-driven outcomes in the same field.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -138,12 +138,28 @@
             "unknownImpactExplicit": { "type": "boolean" },
             "preservedArtifacts": { "type": "boolean" },
             "resumeContext": {
-              "type": "object",
-              "required": ["status", "reason"],
-              "properties": {
-                "status": { "const": "unavailable" },
-                "reason": { "type": "string" }
-              }
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": ["status", "digest", "schemaVersion", "bytes", "nextAction", "delivery"],
+                  "properties": {
+                    "status": { "const": "delivered" },
+                    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                    "schemaVersion": { "type": "integer", "minimum": 1 },
+                    "bytes": { "type": "integer", "minimum": 0 },
+                    "nextAction": { "type": "string" },
+                    "delivery": { "const": "scripted-controller-handoff" }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": ["status", "reason"],
+                  "properties": {
+                    "status": { "const": "unavailable" },
+                    "reason": { "type": "string" }
+                  }
+                }
+              ]
             }
           }
         }
