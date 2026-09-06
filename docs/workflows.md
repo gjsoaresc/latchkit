@@ -110,13 +110,29 @@ credentials.
 
 ## Portable skill scenarios
 
-### Plan-only request
+### Plan-only request and the end-of-spec decision
 
 Ask for `latchkit-requirements` and then `latchkit-spec` with: “Clarify the
 acceptance criteria and write a plan; do not edit files.” The expected result is
 a requirements/specification note under `.latchkit/notes/`, no source edits,
 and explicit unresolved decisions. Approval to implement is not invented by a
 skill or workflow.
+
+At that stopping point, `latchkit-spec` offers a concise end-of-spec decision:
+approve and build, add revision notes, or keep the plan for later — preferring
+the host agent's own native question/plan-approval control when one is
+actually present in the running session (documented today only for Claude
+Code; see [the Claude Code adapter](providers/claude.md#interactive-decision-surface))
+and otherwise a concise text choice. The decision itself is recorded through
+`latchkit spec decision-present/-approve/-notes/-pause/-build/-inspect` (see
+[task-state persistence](task-state.md#cli-boundary)), a small state machine
+additive to the typed delivery workflow: an approval is bound to the exact
+plan digest shown, notes update the plan and clear a now-stale approval before
+re-presenting the same choice, and pausing or leaving the prompt unanswered
+persists the plan without starting implementation. Resuming reads that same
+pending decision and its current revision back with `decision-inspect`, and a
+repeated completion event never duplicates the prompt, the decision record, or
+the build it authorizes.
 
 ### Authorized feature
 
