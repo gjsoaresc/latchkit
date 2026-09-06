@@ -762,13 +762,22 @@ try {
       else {
         if (!values.provider || !values.file)
           throw new Error('usage import requires --provider and --file.');
+        const input = await readFile(path.resolve(values.file), 'utf8');
+        if (Buffer.byteLength(input, 'utf8') > 1024 * 1024)
+          throw new Error('Usage input exceeds the 1 MiB limit.');
+        let output: unknown = input;
+        try {
+          output = JSON.parse(input);
+        } catch {
+          /* Documented JSONL is parsed by the usage service. */
+        }
         print(
           await recordProviderUsage(root, {
             provider: values.provider,
             providerVersion: values['provider-version'],
             taskId: values.task,
             sessionId: values.session,
-            output: JSON.parse(await readFile(path.resolve(values.file), 'utf8')),
+            output,
           }),
         );
       }

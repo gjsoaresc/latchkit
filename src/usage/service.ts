@@ -20,15 +20,21 @@ export type ProviderUsageInput = {
   providerVersion?: string | null;
   taskId?: string | null;
   sessionId?: string | null;
+  sourceEventId?: string;
   output: unknown;
   observedAt?: string;
   price?: UsagePrice;
 };
 const iso = (clock: () => Date) => clock().toISOString();
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-const secret = /(?:authorization|bearer|token|secret|password|api[_-]?key)\s*[=:]/i;
+const secret =
+  /(?:authorization|bearer|token|secret|password|api[_-]?key)\s*[=:]|\b(?:nvapi-|sk-)[A-Za-z0-9_-]{12,}/i;
 const nonnegative = (value: unknown) =>
-  Number.isInteger(value) && (value as number) >= 0 ? (value as number) : null;
+  Number.isSafeInteger(value) && (value as number) >= 0 ? (value as number) : null;
+const identifier = (value: unknown): string | null =>
+  typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,200}$/.test(value) && !secret.test(value)
+    ? value
+    : null;
 const asObject = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -84,6 +90,7 @@ function unavailable(
       input.sessionId ?? null,
       at,
       source,
+      input.sourceEventId ?? null,
     ]),
   );
   return {
@@ -92,8 +99,8 @@ function unavailable(
     provider,
     providerVersion,
     model: null,
-    taskId: input.taskId ?? null,
-    sessionId: input.sessionId ?? null,
+    taskId: identifier(input.taskId),
+    sessionId: identifier(input.sessionId),
     occurredAt: at,
     observedAt: at,
     status: 'unavailable',
@@ -108,6 +115,31 @@ function unavailable(
 }
 function estimate(tokens: TokenTotals, price: UsagePrice | undefined): UsageEstimate | null {
   if (!price) return null;
+  // Incomplete counts cannot support a total cost estimate.
+  if (
+    [tokens.input, tokens.output, tokens.cacheRead, tokens.cacheCreation].some(
+      (count) => count === null,
+    )
+  )
+    return null;
+  let sourceUrl: URL;
+  try {
+    sourceUrl = new URL(price.sourceUrl);
+  } catch {
+    return null;
+  }
+  if (
+    sourceUrl.protocol !== 'https:' ||
+    sourceUrl.username ||
+    sourceUrl.password ||
+    sourceUrl.search ||
+    sourceUrl.hash
+  )
+    throw new UsageError(
+      'Pricing source must be a public HTTPS URL without credentials or parameters.',
+      'USAGE_REDACTED',
+      '$.price',
+    );
   if (secret.test(`${price.sourceUrl} ${price.sourceVersion} ${price.assumptions}`))
     throw new UsageError(
       'Pricing metadata must not contain credential material.',
@@ -161,12 +193,18 @@ function parsed(
       source,
       clock,
     );
-  const sessionId = input.sessionId ?? null;
-  const taskId = input.taskId ?? null;
-  const normalizedModel =
-    typeof model === 'string' && model.trim() && !secret.test(model) ? model : null;
+  const sessionId = identifier(input.sessionId);
+  const taskId = identifier(input.taskId);
+  const normalizedModel = identifier(model);
   const key = digest(
-    JSON.stringify([input.provider, providerVersion, sessionId, taskId, at, source]),
+    JSON.stringify([
+      input.provider,
+      providerVersion,
+      sessionId,
+      taskId,
+      input.sourceEventId ?? at,
+      source,
+    ]),
   );
   const resultStatus = status(values);
   return {
@@ -193,6 +231,10 @@ export function parseProviderUsage(
   input: ProviderUsageInput,
   { clock = () => new Date() }: ClockOptions = {},
 ): UsageRecord[] {
+  const serialized =
+    typeof input.output === 'string' ? input.output : JSON.stringify(input.output ?? null);
+  if (Buffer.byteLength(serialized, 'utf8') > 1024 * 1024)
+    throw new UsageError('Usage input exceeds the 1 MiB limit.', 'USAGE_TOO_LARGE', '$.output');
   const object = asObject(input.output);
   if (input.provider === 'claude') {
     const observedUsage = object ? asObject(object.usage) : null;
@@ -234,11 +276,16 @@ export function parseProviderUsage(
         ),
       ];
     const usage = asObject(result.usage)!;
+    const modelUsage = asObject(result.modelUsage);
+    const models = modelUsage ? Object.keys(modelUsage) : [];
     return [
       parsed(
-        input,
+        {
+          ...input,
+          sourceEventId: input.sourceEventId ?? identifier(result.uuid) ?? digest(serialized),
+        },
         'claude-result-json',
-        result.model,
+        result.model ?? (models.length === 1 ? models[0] : null),
         result.timestamp,
         totals(
           usage.input_tokens,
@@ -264,10 +311,10 @@ export function parseProviderUsage(
           clock,
         ),
       ];
-    return result.map((event) => {
+    return result.map((event, index) => {
       const usage = event.usage as Record<string, unknown>;
       return parsed(
-        input,
+        { ...input, sourceEventId: `${input.sourceEventId ?? digest(serialized)}:${index}` },
         'codex-jsonl-turn-completed',
         event.model,
         event.timestamp,
@@ -321,14 +368,13 @@ export async function inspectUsage(
         clock().getTime() - state.settings.retentionDays * 86_400_000 &&
       (includeUnavailable || item.status !== 'unavailable'),
   );
-  const tokens = records.reduce(
-    (total, item) => {
-      for (const key of Object.keys(total) as Array<keyof TokenTotals>)
-        total[key] += item.tokens[key] ?? 0;
-      return total;
-    },
-    { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, thinking: 0 },
-  );
+  const tokens = totals(null, null, null, null, null);
+  const knownTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, thinking: 0 };
+  for (const key of Object.keys(tokens) as Array<keyof TokenTotals>) {
+    knownTokens[key] = records.reduce((sum, item) => sum + (item.tokens[key] ?? 0), 0);
+    if (records.length && records.every((item) => item.tokens[key] !== null))
+      tokens[key] = knownTokens[key];
+  }
   return {
     project: state.project,
     revision: state.revision,
@@ -342,10 +388,11 @@ export async function inspectUsage(
       records: records.length,
       unavailable: records.filter((item) => item.status === 'unavailable').length,
       tokens,
-      estimatedPublicApiListPriceUsd: records.reduce(
-        (sum, item) => sum + (item.estimate?.amount ?? 0),
-        0,
-      ),
+      knownTokens,
+      estimatedPublicApiListPriceUsd:
+        records.length && records.every((item) => item.estimate !== null)
+          ? records.reduce((sum, item) => sum + (item.estimate?.amount ?? 0), 0)
+          : null,
       estimates: records.filter((item) => item.estimate !== null).map((item) => item.estimate),
     },
   };
@@ -402,6 +449,9 @@ export async function recordProviderUsage(
         stored.push(candidate);
       } else stored.push(state.records[index]!);
     }
+    // Keep storage bounded even for projects with many sessions per day.
+    state.records.sort((a, b) => Date.parse(a.occurredAt) - Date.parse(b.occurredAt));
+    if (state.records.length > 10_000) state.records.splice(0, state.records.length - 10_000);
     return { status: 'recorded' as const, records: structuredClone(stored) };
   });
 }

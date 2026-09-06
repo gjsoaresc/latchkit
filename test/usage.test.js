@@ -9,6 +9,7 @@ import {
   exportUsage,
   inspectUsage,
   recordProviderUsage,
+  parseProviderUsage,
 } from '../dist/src/usage/service.js';
 import { USAGE_PATH } from '../dist/src/usage/store.js';
 
@@ -30,6 +31,48 @@ const observedClaude = (overrides = {}) => ({
     output_tokens_details: { thinking_tokens: 2701 },
   },
   ...overrides,
+});
+
+test('timestamp-free Codex turns retain their identities across re-imports', async (t) => {
+  const root = await fixture(t);
+  await configureUsage(root, { enabled: true });
+  const output = [10, 20]
+    .map((input_tokens) =>
+      JSON.stringify({ type: 'turn.completed', usage: { input_tokens, output_tokens: 4 } }),
+    )
+    .join('\n');
+  const input = { provider: 'codex', providerVersion: '0.42.1', sessionId: 'thread_one', output };
+  await recordProviderUsage(root, input);
+  await recordProviderUsage(root, input, { clock: () => new Date(Date.now() + 1000) });
+  const usage = await inspectUsage(root);
+  assert.equal(usage.records.length, 2);
+  assert.equal(usage.summary.tokens.input, 30);
+  assert.equal(usage.summary.tokens.cacheRead, null);
+  assert.equal(usage.summary.estimatedPublicApiListPriceUsd, null);
+});
+
+test('partial, empty, and unsafe observations cannot become measured zero usage', async (t) => {
+  const root = await fixture(t);
+  const empty = await inspectUsage(root);
+  assert.equal(empty.summary.tokens.input, null);
+  assert.equal(empty.summary.estimatedPublicApiListPriceUsd, null);
+  const records = parseProviderUsage({
+    provider: 'claude',
+    providerVersion: '2.1.258',
+    taskId: 'token=private',
+    output: {
+      type: 'result',
+      modelUsage: { 'claude-haiku-4-5': {} },
+      usage: { input_tokens: Number.MAX_SAFE_INTEGER + 1, output_tokens: 3 },
+    },
+  });
+  assert.equal(records[0].tokens.input, null);
+  assert.equal(records[0].taskId, null);
+  assert.equal(records[0].model, 'claude-haiku-4-5');
+  assert.throws(
+    () => parseProviderUsage({ provider: 'codex', output: 'x'.repeat(1024 * 1024 + 1) }),
+    { code: 'USAGE_TOO_LARGE' },
+  );
 });
 
 test('usage is opt-in and imports the sanitized Claude observation without retaining output', async (t) => {
@@ -60,6 +103,7 @@ test('deduplicates imports, replaces corrections, and preserves partial/unknown 
     provider: 'claude',
     taskId: 'task_one',
     sessionId: 'session_one',
+    observedAt: '2026-09-06T13:38:54.333Z',
     output: observedClaude(),
   };
   await recordProviderUsage(root, input);

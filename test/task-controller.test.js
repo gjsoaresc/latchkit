@@ -8,6 +8,7 @@ import { createProviderAdapter } from '../dist/src/providers/contracts.js';
 import { ANTIGRAVITY_ADAPTER } from '../dist/src/providers/antigravity.js';
 import { createTask } from '../dist/src/task-state/service.js';
 import { createTaskController, readTaskSessions } from '../dist/src/runtime/task-controller.js';
+import { configureUsage, inspectUsage } from '../dist/src/usage/service.js';
 
 const evidence = (state = 'supported') => ({
   state,
@@ -69,6 +70,33 @@ async function fixture(t) {
   });
   return { root, task };
 }
+
+test('opt-in usage probes the installed version without counting the probe as inference', async (t) => {
+  const { root, task } = await fixture(t);
+  await configureUsage(root, { enabled: true });
+  let calls = 0;
+  const controller = createTaskController({
+    root,
+    adapters: new Map([['claude', adapter('claude')]]),
+    launch: async ({ timeoutMs, onEvent }) => {
+      calls++;
+      if (timeoutMs === 5000)
+        return { status: 'exited', exitCode: 0, stdout: '2.1.258 (Claude Code)\n' };
+      onEvent({ type: 'process-start', pid: 1234 });
+      return {
+        status: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({ type: 'result', usage: { input_tokens: 12, output_tokens: 3 } }),
+      };
+    },
+  });
+  await controller.start({ taskId: task.id, providerId: 'claude', executionAuthorized: true });
+  const usage = await inspectUsage(root);
+  assert.equal(calls, 2);
+  assert.equal(usage.records.length, 1);
+  assert.equal(usage.records[0].providerVersion, '2.1.258');
+  assert.equal(usage.summary.tokens.input, 12);
+});
 
 test('controller starts one owned session, redacts results, and never treats exit as acceptance', async (t) => {
   const { root, task } = await fixture(t);

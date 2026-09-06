@@ -31,6 +31,7 @@ import {
 import { withTaskStateLock } from '../task-state/lock.js';
 import type { Task } from '../task-state/contracts.js';
 import { recordProviderUsage } from '../usage/service.js';
+import { readUsageState } from '../usage/store.js';
 
 export const TASK_SESSION_PATH = '.latchkit/tasks/sessions-v1.json';
 const SESSION_SCHEMA_VERSION = 1;
@@ -285,7 +286,12 @@ export function createTaskController({
     // Version inspection is a bounded, model-free command only inside an
     // explicitly authorized start/resume. Re-probe on resume after upgrades.
     let providerVersion: string | null = null;
-    if (providerId === 'antigravity') {
+    const usageEnabled =
+      ['claude', 'codex'].includes(providerId) &&
+      (await readUsageState(root)
+        .then((state) => state.settings.enabled)
+        .catch(() => false));
+    if (providerId === 'antigravity' || usageEnabled) {
       const version = await launch({
         provider,
         plan: { executable: provider.command, args: ['--version'], cwd: root },
@@ -294,7 +300,14 @@ export function createTaskController({
         outputLimitBytes: 4096,
       });
       if (version.status === 'exited' && version.exitCode === 0)
-        providerVersion = parseAntigravityVersion(version.stdout);
+        providerVersion =
+          providerId === 'antigravity'
+            ? parseAntigravityVersion(version.stdout)
+            : (version.stdout
+                ?.trim()
+                .match(
+                  /^(?:(?:codex(?:-cli)?|claude)\s+)?v?(\d+\.\d+\.\d+)(?:\s+\(Claude Code\))?$/i,
+                )?.[1] ?? null);
     }
     const planResult = resumeSession
       ? adapter.operations.planResume({
@@ -384,7 +397,8 @@ export function createTaskController({
         // documented result lines and never launches a provider or reads transcripts.
         await recordProviderUsage(root, {
           provider: providerId,
-          providerVersion: null,
+          providerVersion,
+          sourceEventId: session.runId,
           taskId,
           sessionId: session.providerSessionId,
           output: processResult.stdout ?? '',
