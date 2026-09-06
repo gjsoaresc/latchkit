@@ -3,9 +3,9 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initProject } from '../src/core.js';
-import { redact, redactString } from '../src/diagnostics/redact.js';
-import { startServer } from '../src/server.js';
+import { initProject } from '../dist/src/core.js';
+import { redact, redactString } from '../dist/src/diagnostics/redact.js';
+import { startServer } from '../dist/src/server.js';
 
 test('every local API boundary rejects unauthenticated reads and mutations', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-security-'));

@@ -9,11 +9,12 @@ import { promisify } from 'node:util';
 import {
   cancelTaskWorkspace,
   cleanupTaskWorkspace,
+  createReviewWorkspace,
   createTaskWorkspace,
   inspectWorkspaceCapability,
   WorkspaceError,
-} from '../src/workspaces/git.js';
-import { createTask } from '../src/task-state/service.js';
+} from '../dist/src/workspaces/git.js';
+import { createTask } from '../dist/src/task-state/service.js';
 
 const execFileAsync = promisify(execFile);
 const mutationId = () => `event_${randomUUID()}`;
@@ -87,6 +88,96 @@ test('two task-owned worktrees are isolated and source dirty state is untouched'
   assert.equal(await fs.stat(path.join(second.path, 'task-only.txt')).catch(() => null), null);
   assert.deepEqual(await sourceSnapshot(root), before);
   assert.equal((await createTaskWorkspace(root, { taskId: first.taskId })).reconciled, true);
+});
+
+test('review worktree materializes the exact tracked and untracked source snapshot', async (t) => {
+  const root = await fixture(t);
+  await fs.writeFile(path.join(root, 'tracked.txt'), 'unstaged implementation\n');
+  await fs.writeFile(path.join(root, '.gitignore'), 'ignored.txt\nnew-ignore.txt\n');
+  await git(root, ['add', '.gitignore']);
+  await fs.writeFile(path.join(root, 'untracked.txt'), 'new implementation file\n');
+  const reviewTaskId = await taskId(root);
+  const before = await git(root, ['status', '--porcelain=v1', '--untracked-files=all']);
+  const workspace = await createReviewWorkspace(root, { taskId: reviewTaskId });
+  assert.match(workspace.snapshotDigest, /^[a-f0-9]{64}$/);
+  assert.equal(
+    await fs.readFile(path.join(workspace.path, 'tracked.txt'), 'utf8'),
+    'unstaged implementation\n',
+  );
+  assert.equal(
+    await fs.readFile(path.join(workspace.path, '.gitignore'), 'utf8'),
+    'ignored.txt\nnew-ignore.txt\n',
+  );
+  assert.equal(
+    await fs.readFile(path.join(workspace.path, 'untracked.txt'), 'utf8'),
+    'new implementation file\n',
+  );
+  assert.equal(await git(root, ['status', '--porcelain=v1', '--untracked-files=all']), before);
+});
+
+test('review snapshot removes files deleted from the source index', async (t) => {
+  const root = await fixture(t);
+  await git(root, ['rm', 'tracked.txt']);
+  const workspace = await createReviewWorkspace(root, { taskId: await taskId(root) });
+  assert.equal(await fs.lstat(path.join(workspace.path, 'tracked.txt')).catch(() => null), null);
+});
+
+test('review snapshot replaces a tracked symlink leaf without writing its referent', async (t) => {
+  const root = await fixture(t);
+  const outside = path.join(path.dirname(root), 'outside-leaf.txt');
+  const redirect = path.join(root, 'redirect.txt');
+  await fs.writeFile(outside, 'outside sentinel\n');
+  try {
+    await fs.symlink(outside, redirect, 'file');
+  } catch (error) {
+    if (error?.code === 'EPERM') return t.skip('symbolic links are unavailable');
+    throw error;
+  }
+  await git(root, ['config', 'core.symlinks', 'true']);
+  await git(root, ['add', 'redirect.txt']);
+  await git(root, ['commit', '-m', 'tracked link']);
+  await fs.rm(redirect);
+  await fs.writeFile(redirect, 'implementation file\n');
+  const workspace = await createReviewWorkspace(root, { taskId: await taskId(root) });
+  assert.equal(await fs.readFile(outside, 'utf8'), 'outside sentinel\n');
+  assert.equal(
+    await fs.readFile(path.join(workspace.path, 'redirect.txt'), 'utf8'),
+    'implementation file\n',
+  );
+  assert.equal((await fs.lstat(path.join(workspace.path, 'redirect.txt'))).isSymbolicLink(), false);
+});
+
+test('review snapshot replaces a tracked symlink directory before copying descendants', async (t) => {
+  const root = await fixture(t);
+  const outside = path.join(path.dirname(root), 'outside-directory');
+  const redirect = path.join(root, 'redirect-directory');
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, 'sentinel.txt'), 'outside sentinel\n');
+  try {
+    await fs.symlink(outside, redirect, 'dir');
+  } catch (error) {
+    if (error?.code === 'EPERM') return t.skip('symbolic links are unavailable');
+    throw error;
+  }
+  await git(root, ['config', 'core.symlinks', 'true']);
+  await git(root, ['add', 'redirect-directory']);
+  await git(root, ['commit', '-m', 'tracked directory link']);
+  await git(root, ['rm', 'redirect-directory']);
+  await fs.mkdir(redirect);
+  await fs.writeFile(path.join(redirect, 'implementation.txt'), 'implementation directory\n');
+  const workspace = await createReviewWorkspace(root, { taskId: await taskId(root) });
+  assert.equal(await fs.readFile(path.join(outside, 'sentinel.txt'), 'utf8'), 'outside sentinel\n');
+  assert.equal(
+    await fs.readFile(
+      path.join(workspace.path, 'redirect-directory', 'implementation.txt'),
+      'utf8',
+    ),
+    'implementation directory\n',
+  );
+  assert.equal(
+    (await fs.lstat(path.join(workspace.path, 'redirect-directory'))).isSymbolicLink(),
+    false,
+  );
 });
 
 test('cancellation records a recovery location and preserves staged, untracked, and ignored task work', async (t) => {

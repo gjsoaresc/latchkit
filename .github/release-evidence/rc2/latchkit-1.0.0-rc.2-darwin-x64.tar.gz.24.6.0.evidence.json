@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "archive": "latchkit-1.0.0-rc.2-darwin-x64.tar.gz",
+  "sha256": "ea78ca2f3723b3e1ce2facb7296745df27e4bb68a1249ef043b5f9382520efd1",
+  "target": "darwin-x64",
+  "node": "v24.20.0",
+  "qualificationOS": "Darwin Kernel Version 24.6.0: Tue Jul 21 20:50:07 PDT 2026; root:xnu-11417.140.69.711.44~1/RELEASE_X86_64",
+  "qualificationVersion": "15.7.9",
+  "runtime": "native",
+  "upgradeKind": "single-archive-fallback",
+  "prior": null,
+  "systemToolchains": "absent from PATH",
+  "checks": [
+    "compiled workflow policy async exit",
+    "CLI",
+    "UI/API",
+    "hooks",
+    "stable hook dispatch before/after rollback/uninstall",
+    "spaces/Unicode",
+    "installation",
+    "failed-upgrade preservation",
+    "rollback selection",
+    "uninstall retention",
+    "local archive bootstrap",
+    "single-archive reinstall fallback (not an exact two-archive upgrade)"
+  ]
+}

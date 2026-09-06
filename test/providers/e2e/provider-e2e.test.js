@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runVerification, writeEvidence } from '../../../scripts/provider-e2e.js';
-import { initProject, removeProjectSkills, syncProject } from '../../../src/core.js';
+import { initProject, removeProjectSkills, syncProject } from '../../../dist/src/core.js';
 
 test('offline evidence validates every adapter without credentials or provider execution', async () => {
   for (const providerId of ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli']) {

@@ -1,4 +1,4 @@
-import { applyCursorIdeHookExport } from '../../src/providers/cursor-ide.js';
+import { applyCursorIdeHookExport } from '../../dist/src/providers/cursor-ide.js';
 
 await applyCursorIdeHookExport(process.argv[2], {
   enabled: false,

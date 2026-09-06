@@ -19,12 +19,12 @@ import {
   resumeTask,
   reviseCriteria,
   verifyTask,
-} from '../src/task-state/service.js';
-import { readTaskState, TASK_STATE_PATH } from '../src/task-state/store.js';
+} from '../dist/src/task-state/service.js';
+import { readTaskState, TASK_STATE_PATH } from '../dist/src/task-state/store.js';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const crashHelper = path.join(repositoryRoot, 'scripts', 'test-helpers', 'crash-task-state.js');
-const cli = path.join(repositoryRoot, 'src', 'cli.js');
+const cli = path.join(repositoryRoot, 'dist', 'src', 'cli.js');
 const execFileAsync = promisify(execFile);
 const eventId = () => `event_${randomUUID()}`;
 

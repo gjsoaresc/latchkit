@@ -1,4 +1,4 @@
-import { removeProjectSkills, syncProject } from '../../src/core.js';
+import { removeProjectSkills, syncProject } from '../../dist/src/core.js';
 
 const [root, operation, boundary] = process.argv.slice(2);
 const faultBoundary = async (current) => {

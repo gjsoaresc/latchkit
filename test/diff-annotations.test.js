@@ -5,16 +5,16 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { initProject } from '../src/core.js';
-import { createTask } from '../src/task-state/service.js';
-import { createTaskWorkspace } from '../src/workspaces/git.js';
+import { initProject } from '../dist/src/core.js';
+import { createTask } from '../dist/src/task-state/service.js';
+import { createTaskWorkspace } from '../dist/src/workspaces/git.js';
 import {
   createDiffAnnotation,
   inspectDiff,
   inspectDiffFile,
   listDiffAnnotations,
   updateDiffAnnotation,
-} from '../src/reviews/diff-annotations.js';
+} from '../dist/src/reviews/diff-annotations.js';
 
 const execFile = promisify(execFileCallback);
 

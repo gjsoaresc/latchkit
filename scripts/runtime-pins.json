@@ -1,0 +1,25 @@
+{
+  "nodeVersion": "24.20.0",
+  "targets": {
+    "win32-x64": {
+      "archive": "node-v24.20.0-win-x64.zip",
+      "sha256": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+      "executable": "node.exe"
+    },
+    "linux-x64": {
+      "archive": "node-v24.20.0-linux-x64.tar.gz",
+      "sha256": "855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec",
+      "executable": "bin/node"
+    },
+    "darwin-x64": {
+      "archive": "node-v24.20.0-darwin-x64.tar.gz",
+      "sha256": "9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4",
+      "executable": "bin/node"
+    },
+    "darwin-arm64": {
+      "archive": "node-v24.20.0-darwin-arm64.tar.gz",
+      "sha256": "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8",
+      "executable": "bin/node"
+    }
+  }
+}

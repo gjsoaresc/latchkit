@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "archive": "latchkit-1.0.0-rc.2-win32-x64.zip",
+  "sha256": "d22d5b6759ae36e8662e37db514c7a90c736ebf9f3f3e12f36c8a625fbaa626a",
+  "target": "win32-x64",
+  "node": "v24.20.0",
+  "qualificationOS": "Windows 11 Pro",
+  "qualificationVersion": "10.0.26200",
+  "runtime": "native",
+  "upgradeKind": "single-archive-fallback",
+  "prior": null,
+  "systemToolchains": "absent from PATH",
+  "checks": [
+    "compiled workflow policy async exit",
+    "CLI",
+    "UI/API",
+    "hooks",
+    "stable hook dispatch before/after rollback/uninstall",
+    "spaces/Unicode",
+    "installation",
+    "failed-upgrade preservation",
+    "rollback selection",
+    "uninstall retention",
+    "local archive bootstrap",
+    "single-archive reinstall fallback (not an exact two-archive upgrade)"
+  ]
+}

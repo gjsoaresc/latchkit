@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "archive": "latchkit-1.0.0-rc.2-darwin-arm64.tar.gz",
+  "sha256": "54603f1d309d455151a1a79cc82fd843b11a3e82733e4feb9ce6a1f31acbfff9",
+  "target": "darwin-arm64",
+  "node": "v24.20.0",
+  "qualificationOS": "Darwin Kernel Version 23.6.0: Tue Jul 21 21:56:54 PDT 2026; root:xnu-10063.141.1.713.39~1/RELEASE_ARM64_VMAPPLE",
+  "qualificationVersion": "14.8.9",
+  "runtime": "native",
+  "upgradeKind": "single-archive-fallback",
+  "prior": null,
+  "systemToolchains": "absent from PATH",
+  "checks": [
+    "compiled workflow policy async exit",
+    "CLI",
+    "UI/API",
+    "hooks",
+    "stable hook dispatch before/after rollback/uninstall",
+    "spaces/Unicode",
+    "installation",
+    "failed-upgrade preservation",
+    "rollback selection",
+    "uninstall retention",
+    "local archive bootstrap",
+    "single-archive reinstall fallback (not an exact two-archive upgrade)"
+  ]
+}

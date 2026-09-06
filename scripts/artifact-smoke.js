@@ -5,6 +5,7 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -81,7 +82,7 @@ async function stopChild(child) {
   }
 }
 
-async function assertArtifact(root, node, entry, label) {
+export async function assertArtifact(root, node, entry, label) {
   const fs = await import('node:fs/promises');
   await fs.mkdir(root, { recursive: true });
   const project = path.join(root, 'project with spaces é');
@@ -177,7 +178,7 @@ async function assertInstalledPackage(installDir, node, expectedVersion) {
     throw new Error(
       `artifact: installed package version ${packageJson.version} does not match ${expectedVersion}`,
     );
-  for (const required of ['README.md', 'LICENSE', 'src', 'web', 'skills', 'schemas', 'docs']) {
+  for (const required of ['README.md', 'LICENSE', 'dist', 'docs']) {
     if (
       !(await stat(path.join(packageRoot, required))).isDirectory?.() &&
       required !== 'README.md' &&
@@ -220,11 +221,11 @@ async function assertInstalledPackage(installDir, node, expectedVersion) {
   );
   if (result.trim() !== expectedVersion)
     throw new Error('artifact: installed bin shim did not report package version');
-  if ((await readdir(path.join(packageRoot, 'skills'))).length === 0)
+  if ((await readdir(path.join(packageRoot, 'dist', 'skills'))).length === 0)
     throw new Error('artifact: bundled skills are missing');
 }
 
-async function linkCapability(root, node, entry) {
+export async function linkCapability(root, node, entry) {
   const fs = await import('node:fs/promises');
   await fs.mkdir(root, { recursive: true });
   const target = path.join(root, 'link-target');
@@ -341,7 +342,7 @@ async function main() {
     ).version;
     await assertInstalledPackage(installDir, process.execPath, expectedVersion);
     const node = process.execPath;
-    const entry = path.join(installDir, 'node_modules', 'latchkit', 'src', 'cli.js');
+    const entry = path.join(installDir, 'node_modules', 'latchkit', 'dist', 'src', 'cli.js');
     await assertArtifact(projectRoot, node, entry, 'artifact');
     if (requireLinks) await linkCapability(path.join(scratch, 'link-capability'), node, entry);
     if (mountedArg) await assertArtifact(path.resolve(mountedArg), node, entry, 'mounted-project');
@@ -365,7 +366,8 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`Artifact smoke failed: ${error.message}`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
+  main().catch((error) => {
+    console.error(`Artifact smoke failed: ${error.message}`);
+    process.exitCode = 1;
+  });

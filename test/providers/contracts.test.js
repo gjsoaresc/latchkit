@@ -9,8 +9,9 @@ import {
   negotiateCapabilities,
   validateCommandPlan,
   validateLifecycleEnvelope,
-} from '../../src/providers/contracts.js';
-import { PROVIDERS } from '../../src/providers/registry.js';
+} from '../../dist/src/providers/contracts.js';
+import { CODEX_CONTRACT } from '../../dist/src/providers/codex.js';
+import { PROVIDERS } from '../../dist/src/providers/registry.js';
 
 const evidence = (state, reason = state) => ({
   state,
@@ -67,7 +68,7 @@ test('registry preserves existing provider fields and reports only evidenced sup
     assert.equal(provider.capabilities.skills.state, 'supported');
     assert.equal(
       provider.capabilities.invocation.state,
-      ['claude', 'cursor-cli', 'antigravity'].includes(provider.id)
+      ['claude', 'codex', 'cursor-cli', 'antigravity'].includes(provider.id)
         ? 'supported'
         : provider.id === 'cursor'
           ? 'unsupported'
@@ -75,6 +76,10 @@ test('registry preserves existing provider fields and reports only evidenced sup
     );
     assert.equal(provider.verification.endToEnd, 'unverified');
   }
+  assert.equal(
+    PROVIDERS.find((provider) => provider.id === 'codex'),
+    CODEX_CONTRACT,
+  );
   assert.equal(
     PROVIDERS.find((provider) => provider.id === 'cursor-cli').capabilities.hooks.sessionStart
       .state,

@@ -2,7 +2,10 @@
 
 Start with the [roadmap](docs/roadmap.md) and open an issue for substantial changes. Small bug fixes and documentation improvements can go directly to a pull request. Before coding, inspect the current main branch, read the issue and its dependencies, and confirm that the requested change is bounded. Do not treat a skill, issue, or agent instruction as permission to merge, publish, deploy, or spend on provider sessions.
 
-Use Node.js 22 or newer. From PowerShell or a POSIX shell, run `npm ci`, `npm run check`, and `npm test`. The console is plain HTML/CSS/JavaScript served by Node; no build step is needed. `npm start` opens a local server and prints its browser URL. `npm run format` applies the deterministic formatter; `npm run lint` and `npm run check:skills` run the focused static checks. Run the API-backed console workflows with `npm run test:browser -- --project=chromium` after installing the matching Playwright browser. CI additionally runs Firefox and WebKit on Ubuntu and native Windows Chromium; unsupported local browser launchers should be reported as runner limitations.
+Use Node.js 22 or newer for source development. From PowerShell or a POSIX shell, run `npm ci`, `npm run check`, and `npm test`. The application and browser code are strict TypeScript; `tsc` emits the Node ESM application and browser assets, while standalone CommonJS hooks use `.cts`. `npm start` opens a local server and prints its browser URL. `npm run format` applies the deterministic formatter; `npm run lint` and `npm run check:skills` run focused static checks. Workflow policy, prompts, and action contracts are strict TypeScript. The BAML integration is preserved separately on `feat/experimental-baml`. The default CI path is Windows with Node.js 24.20.0 and Chromium. Run the API-backed console workflows with `npm run test:browser -- --project=chromium` after installing the matching Playwright browser.
+
+Non-Windows archive verification remains deferred experimental work. It is not
+part of an installed Latchkit application's runtime requirements.
 
 ## Issue-to-PR workflow
 
@@ -12,7 +15,7 @@ Use Node.js 22 or newer. From PowerShell or a POSIX shell, run `npm ci`, `npm ru
 4. Attach useful evidence: what changed, what passed locally, what CI covers, and which provider, credential, OS, or integration scenarios were not exercised.
 5. Report blockers truthfully and identify the specific missing authority or dependency. A blocked release or provider check does not justify bypassing permissions or claiming verification.
 
-Cross-platform behavior is part of the product. Use Node filesystem APIs, handle paths with spaces and Unicode, and test on Windows, macOS and Linux. Keep shell commands out of portable installation code. New provider integrations need cited upstream documentation and tests that distinguish exported skills from verified runtime behavior.
+Use Node filesystem APIs, handle Windows paths with spaces and Unicode, and keep shell commands out of the Windows installation path. New provider integrations need cited upstream documentation and tests that distinguish exported skills from verified runtime behavior. The current 1.0 distribution target is a user-local Windows 11 x64 GitHub Release bundle containing the compiled application and private Node.js 24.20.0 runtime. Linux, WSL, macOS, and other architectures remain deferred experimental work. Do not describe a platform as qualified until its exact bundle has passed its acceptance run.
 
 Preserve users' existing files and permission settings. Keep skills focused on their stated workflow. Explain whether a behavior is an instruction, an observable check, or an enforced gate.
 

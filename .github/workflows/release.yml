@@ -1,131 +1,115 @@
-name: Controlled release
-
+name: Controlled Windows release
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Expected v<package-version> tag; leave blank for a credential-free dry run'
+        description: 'Existing exact v<version> tag (required only for publication)'
         required: false
         type: string
       publish:
-        description: 'Publish after the release environment approves this run'
+        description: 'Request protected GitHub Release publication after qualification'
         required: false
         default: false
         type: boolean
-
+      prior_run_id:
+        description: 'Completed candidate run containing the prior Windows standalone version for upgrade qualification'
+        required: false
+        type: string
+      artifact_run_id:
+        description: 'Completed qualified Windows run to publish without rebuilding (required for publication)'
+        required: false
+        type: string
+      evidence_ref:
+        description: 'Repository ref containing additional exact Windows artifact evidence'
+        required: false
+        type: string
 permissions:
   contents: read
-
+  actions: read
 jobs:
   prepare:
-    name: Rebuild and attest release artifact
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
+    if: '!inputs.publish'
+    name: Windows bundle / Node 24
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          node-version: 22
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
+        with:
+          node-version: 24.20.0
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
-      - id: version
-        run: node -p "'version=' + require('./package.json').version" >> "$GITHUB_OUTPUT"
-      - name: Validate tag/version consistency
-        if: github.event_name == 'push' || inputs.tag != ''
-        run: node scripts/release-artifacts.js --tag "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}" --output release-artifacts
-      - name: Prepare credential-free release evidence
-        if: github.event_name != 'push' && inputs.tag == ''
-        run: npm run release:dry-run -- --output release-artifacts
-      - run: npm run smoke:artifact
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+      - run: npm run release:artifacts
+        id: bundle
+      - name: Include installation scripts
+        shell: pwsh
+        run: Copy-Item install.ps1 -Destination release-artifacts
+      - name: Qualify the exact standalone archive
+        if: inputs.prior_run_id == ''
+        run: node scripts/bundle-smoke.js --directory release-artifacts
+      - name: Download exact prior Windows version
+        if: inputs.prior_run_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: release-artifacts
+          name: standalone-win32-x64
+          path: prior-artifacts
+          run-id: ${{ inputs.prior_run_id }}
+          github-token: ${{ github.token }}
+      - name: Qualify exact upgrade and rollback
+        if: inputs.prior_run_id != ''
+        run: node scripts/bundle-smoke.js --directory release-artifacts --previous-directory prior-artifacts
+      - name: Retain exact prior bytes for publication verification
+        if: inputs.prior_run_id != ''
+        run: node -e "require('node:fs').cpSync('prior-artifacts','release-artifacts/previous',{recursive:true})"
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        if: always() && steps.bundle.outcome == 'success'
+        with:
+          name: standalone-win32-x64
           path: release-artifacts/
+          include-hidden-files: true
           if-no-files-found: error
-
-  smoke:
-    name: Exact archive / ${{ matrix.os }} / Node ${{ matrix.node }}
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-        node: [22, 24]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
-        with:
-          node-version: ${{ matrix.node }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: release-artifacts
-          path: release-artifacts
-      - name: Exercise exact archive with link protections
-        if: runner.os == 'Windows'
-        run: node scripts/artifact-smoke.js --artifact "release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz" --require-links
-      - name: Exercise exact archive
-        if: runner.os != 'Windows'
-        run: node scripts/artifact-smoke.js --artifact "release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz"
-
-  wsl-artifact-smoke:
-    name: Exact archive / WSL / Node 22 / mounted drive
-    needs: prepare
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: release-artifacts
-          path: release-artifacts
-      - name: Require an actual WSL distribution
-        shell: pwsh
-        run: |
-          wsl --status
-          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
-          if ($distros -notmatch 'Ubuntu') { wsl --install --distribution Ubuntu --no-launch }
-          $distros = ((wsl --list --quiet | Out-String) -replace "`0", '')
-          if ($distros -notmatch 'Ubuntu') { throw 'A WSL Ubuntu distribution is required.' }
-      - name: Install Node 22 in WSL when needed
-        shell: pwsh
-        run: |
-          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; if ! node --version | grep -Eq '^v22\.'; then mkdir -p ~/.local; curl -fsSL https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C ~/.local; fi; node --version; npm --version"
-      - name: Exercise exact archive in WSL and on a mounted Windows drive
-        shell: pwsh
-        run: |
-          $windowsRepo = '${{ github.workspace }}'.Replace('\', '/')
-          $repo = (wsl wslpath -a $windowsRepo).Trim()
-          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd '$repo'; node scripts/artifact-smoke.js --artifact '$repo/release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz' --require-wsl --require-links --mounted-project '$repo/.wsl-release-smoke'; rm -rf '$repo/.wsl-release-smoke'"
-
   publish:
-    name: Publish approved stable release
-    needs: [prepare, smoke, wsl-artifact-smoke]
-    if: github.event_name == 'push' && !contains(github.ref_name, '-') || github.event_name == 'workflow_dispatch' && inputs.publish
-    runs-on: ubuntu-latest
-    environment: npm-production
+    name: Publish approved Windows release
+    needs: prepare
+    if: always() && inputs.publish && inputs.tag != '' && inputs.artifact_run_id != ''
+    runs-on: windows-latest
+    environment: github-release-production
     permissions:
       contents: write
-      id-token: write
+      actions: read
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6 # v4.0.4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@0a44ba7841725637a19e28fa30b79a866c81b0a6
         with:
-          name: release-artifacts
+          node-version: 24.20.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: standalone-win32-x64
           path: release-artifacts
-      - name: Refuse a manual publish without an exact tag
-        run: node scripts/release-artifacts.js --tag "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}" --artifact "release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz" --output release-artifacts
-      - name: Publish with npm trusted publishing provenance
-        run: npm publish "release-artifacts/latchkit-${{ needs.prepare.outputs.version }}.tgz" --provenance
-      - name: Create GitHub release from verified evidence
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.evidence_ref || github.ref }}
+          path: qualification-evidence
+      - name: Collect matching external qualification records
+        run: node scripts/collect-release-evidence.js --artifacts release-artifacts --evidence qualification-evidence/.github/release-evidence
+      - name: Verify qualified bytes against the existing tag commit
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/release-artifacts.js --verify-only --tag "$env:RELEASE_TAG" --output release-artifacts
+      - name: Publish the verified artifacts without rebuilding
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "v${{ needs.prepare.outputs.version }}" release-artifacts/* --title "v${{ needs.prepare.outputs.version }}" --generate-notes
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem -LiteralPath release-artifacts -File | ForEach-Object FullName
+          gh release create "$env:RELEASE_TAG" @assets --verify-tag --title "$env:RELEASE_TAG" --generate-notes

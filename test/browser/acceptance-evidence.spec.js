@@ -4,10 +4,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { initProject } from '../../src/core.js';
-import { startServer } from '../../src/server.js';
-import { createAcceptanceVerifier } from '../../src/acceptance/service.js';
-import { createTask, resumeTask } from '../../src/task-state/service.js';
+import { initProject } from '../../dist/src/core.js';
+import { startServer } from '../../dist/src/server.js';
+import { createAcceptanceVerifier } from '../../dist/src/acceptance/service.js';
+import { createTask, resumeTask } from '../../dist/src/task-state/service.js';
 
 const execFile = promisify(execFileCallback);
 

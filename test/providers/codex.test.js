@@ -7,8 +7,11 @@ import {
   inspectCodexVersion,
   parseCodexHookConfig,
   translateCodexEvent,
-} from '../../src/providers/codex.js';
-import { validateCommandPlan, validateLifecycleEnvelope } from '../../src/providers/contracts.js';
+} from '../../dist/src/providers/codex.js';
+import {
+  validateCommandPlan,
+  validateLifecycleEnvelope,
+} from '../../dist/src/providers/contracts.js';
 
 test('Codex version inspection is bounded and honest', () => {
   assert.deepEqual(inspectCodexVersion('codex-cli 0.42.1'), {

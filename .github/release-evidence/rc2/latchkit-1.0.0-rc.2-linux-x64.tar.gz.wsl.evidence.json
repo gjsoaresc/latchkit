@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "archive": "latchkit-1.0.0-rc.2-linux-x64.tar.gz",
+  "sha256": "f4ae949e84476cc624013b023961a0b1c4f3cb937addae861ffe74da40859e8d",
+  "target": "linux-x64",
+  "node": "v24.20.0",
+  "qualificationOS": "PRETTY_NAME=\"Ubuntu 26.04 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"26.04\"\nVERSION=\"26.04 (Resolute Raccoon)\"\nVERSION_CODENAME=resolute\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=resolute\nLOGO=ubuntu-logo\n",
+  "qualificationVersion": "6.18.33.2-microsoft-standard-WSL2",
+  "runtime": "WSL",
+  "upgradeKind": "single-archive-fallback",
+  "prior": null,
+  "systemToolchains": "absent from PATH",
+  "checks": [
+    "compiled workflow policy async exit",
+    "CLI",
+    "UI/API",
+    "hooks",
+    "stable hook dispatch before/after rollback/uninstall",
+    "spaces/Unicode",
+    "installation",
+    "failed-upgrade preservation",
+    "rollback selection",
+    "uninstall retention",
+    "local archive bootstrap",
+    "single-archive reinstall fallback (not an exact two-archive upgrade)"
+  ]
+}

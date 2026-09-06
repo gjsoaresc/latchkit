@@ -6,13 +6,13 @@ import { execFile as execFileCallback } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { createAcceptanceVerifier } from '../src/acceptance/service.js';
-import { validateAcceptanceDocument } from '../src/acceptance/contracts.js';
-import { runProviderProcess } from '../src/runtime/process-runner.js';
-import { createTask, resumeTask } from '../src/task-state/service.js';
+import { createAcceptanceVerifier } from '../dist/src/acceptance/service.js';
+import { validateAcceptanceDocument } from '../dist/src/acceptance/contracts.js';
+import { runProviderProcess } from '../dist/src/runtime/process-runner.js';
+import { createTask, resumeTask } from '../dist/src/task-state/service.js';
 
 const fixtureApp = path.resolve('test/fixtures/acceptance/fixture-app.js');
-const cli = path.resolve('src/cli.js');
+const cli = path.resolve('dist/src/cli.js');
 const execFile = promisify(execFileCallback);
 const fixture = (mode = 'success', port = 0) => ({
   plan: {

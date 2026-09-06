@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { access, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { evaluateScenario, evaluateSuite, loadEvaluationSpecs } from '../src/evaluations/runner.js';
+import {
+  evaluateScenario,
+  evaluateSuite,
+  loadEvaluationSpecs,
+} from '../dist/src/evaluations/runner.js';
 
 const fixturesRoot = path.resolve('test/fixtures/skill-evaluations');
 const fixedNow = () => '2026-01-02T03:04:05.000Z';

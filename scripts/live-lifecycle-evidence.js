@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 
@@ -38,6 +38,53 @@ async function command(executable, args, options = {}) {
 
 async function git(root, args) {
   return command('git', ['-C', root, ...args]);
+}
+
+async function extract(archive, destination, scratch) {
+  await mkdir(destination, { recursive: true });
+  if (/\.zip$/i.test(archive)) {
+    if (process.platform === 'win32') {
+      const script = path.join(scratch, 'extract.ps1');
+      await writeFile(
+        script,
+        'param($Archive,$Destination)\n$ErrorActionPreference="Stop"\nExpand-Archive -LiteralPath $Archive -DestinationPath $Destination\n',
+      );
+      await command(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-File', script, archive, destination],
+        { timeoutMs: 120_000 },
+      );
+    } else {
+      await command('unzip', ['-q', archive, '-d', destination], { timeoutMs: 120_000 });
+    }
+    return;
+  }
+  if (!/\.(?:tar\.gz|tgz)$/i.test(archive))
+    throw new Error('--artifact must be a standalone .zip, .tar.gz, or .tgz bundle.');
+  await command('tar', ['-xzf', archive, '-C', destination], { timeoutMs: 120_000 });
+}
+
+async function runInner(node, script, args, timeoutMs) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(node, [script, '--inner', ...args], {
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'inherit', 'inherit'],
+      windowsHide: true,
+    });
+    const timer = setTimeout(async () => {
+      await terminateOwnedTree(child.pid).catch(() => {});
+      reject(new Error('Live lifecycle qualification exceeded its total time budget.'));
+    }, timeoutMs);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`Private-Node lifecycle qualification exited ${code}.`));
+    });
+  });
 }
 
 async function terminateOwnedTree(pid) {
@@ -160,56 +207,51 @@ async function rejectedCode(operation) {
   }
 }
 
-async function main() {
-  const { values } = parseArgs({
-    options: {
-      authorized: { type: 'boolean' },
-      provider: { type: 'string', default: 'codex' },
-      output: { type: 'string' },
-      artifact: { type: 'string' },
-      'artifact-sha256': { type: 'string' },
-    },
-  });
+async function inner(values) {
   if (values.authorized !== true) throw new Error('Live lifecycle evidence requires --authorized.');
   if (values.provider !== 'codex')
     throw new Error('This bounded lifecycle currently supports only the Codex adapter.');
+  const bundle = path.resolve(required(values.bundle, '--bundle'));
   const output = path.resolve(required(values.output, '--output'));
-  const artifact = path.resolve(required(values.artifact, '--artifact'));
-  const artifactSha256 = required(values['artifact-sha256'], '--artifact-sha256');
+  const artifactSha256 = required(values['archive-sha256'], '--archive-sha256');
   if (!/^[a-f0-9]{64}$/.test(artifactSha256))
-    throw new Error('--artifact-sha256 must be a lowercase SHA-256 digest.');
-
-  const repository = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-  const candidate = (await git(repository, ['rev-parse', 'HEAD'])).stdout.trim();
-  const status = (await git(repository, ['status', '--porcelain=v1'])).stdout.trim();
-  if (status) throw new Error('Commit the candidate before collecting live lifecycle evidence.');
-  const packageDocument = JSON.parse(await readFile(path.join(repository, 'package.json'), 'utf8'));
+    throw new Error('--archive-sha256 must be a lowercase SHA-256 digest.');
+  const app = path.join(bundle, 'app');
+  const privateNode = path.join(
+    bundle,
+    'runtime',
+    process.platform === 'win32' ? 'node.exe' : 'node',
+  );
+  const normalizePath = (value) =>
+    process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  if (normalizePath(process.execPath) !== normalizePath(privateNode))
+    throw new Error('Qualification is not running under the extracted private Node runtime.');
+  const manifest = JSON.parse(await readFile(path.join(bundle, 'bundle-manifest.json'), 'utf8'));
+  if (manifest.dirty || !/^[a-f0-9]{40}$/i.test(manifest.commit))
+    throw new Error('The extracted archive is not bound to a clean candidate commit.');
+  const packageDocument = JSON.parse(await readFile(path.join(app, 'package.json'), 'utf8'));
+  if (packageDocument.version !== manifest.version)
+    throw new Error('Bundle and application versions differ.');
+  if (manifest.target !== `${process.platform}-${process.arch}`)
+    throw new Error('Bundle target differs from the qualification host.');
+  if (process.version !== `v${manifest.nodeVersion}`)
+    throw new Error('The extracted private Node version differs from the bundle manifest.');
   const providerVersion = (await command('codex', ['--version'])).stdout.trim();
   const base = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-lifecycle-'));
-  const installed = path.join(base, 'installed');
   const root = path.join(base, 'project');
   const providerPids = [];
+  let providerProcessStarts = 0;
   const startedAt = iso();
 
   try {
-    const archiveBytes = await readFile(artifact);
-    if (sha256(archiveBytes) !== artifactSha256)
-      throw new Error('The supplied archive does not match --artifact-sha256.');
-    const npmCli = required(process.env.npm_execpath, 'npm_execpath');
-    await command(
-      process.execPath,
-      [npmCli, 'install', '--ignore-scripts', '--prefix', installed, artifact],
-      { timeoutMs: 120_000 },
-    );
-    const packageRoot = path.join(installed, 'node_modules', 'latchkit');
-    const moduleAt = (relative) => pathToFileURL(path.join(packageRoot, relative)).href;
-    const { initProject, syncProject } = await import(moduleAt('src/core.js'));
-    const { createReviewOrchestrator } = await import(moduleAt('src/reviews/orchestrator.js'));
-    const { runProviderProcess } = await import(moduleAt('src/runtime/process-runner.js'));
-    const { createTaskController } = await import(moduleAt('src/runtime/task-controller.js'));
+    const moduleAt = (relative) => pathToFileURL(path.join(app, relative)).href;
+    const { initProject, syncProject } = await import(moduleAt('dist/src/core.js'));
+    const { createReviewOrchestrator } = await import(moduleAt('dist/src/reviews/orchestrator.js'));
+    const { runProviderProcess } = await import(moduleAt('dist/src/runtime/process-runner.js'));
+    const { createTaskController } = await import(moduleAt('dist/src/runtime/task-controller.js'));
     const { completeTask, createTask, inspectTask, recordEvidence, resumeTask, verifyTask } =
-      await import(moduleAt('src/task-state/service.js'));
-    const { cleanupTaskWorkspace } = await import(moduleAt('src/workspaces/git.js'));
+      await import(moduleAt('dist/src/task-state/service.js'));
+    const { cleanupTaskWorkspace } = await import(moduleAt('dist/src/workspaces/git.js'));
 
     await mkdir(root);
     await writeFixture(root);
@@ -234,7 +276,7 @@ async function main() {
       authorization: {
         source: 'user',
         scope: 'bounded disposable Codex implementation and review',
-        reference: 'Issue #36 qualification continuation',
+        reference: `archive:${artifactSha256};commit:${manifest.commit};version:${manifest.version}`,
       },
       criteria,
     });
@@ -268,7 +310,18 @@ async function main() {
       throw new Error('Failed evidence was not rejected by task verification.');
 
     const launch = (options) =>
-      runProviderProcess({ ...options, timeoutMs: 120_000, outputLimitBytes: 1024 * 1024 });
+      runProviderProcess({
+        ...options,
+        timeoutMs: Math.min(options.timeoutMs ?? 120_000, 120_000),
+        outputLimitBytes: Math.min(options.outputLimitBytes ?? 1024 * 1024, 1024 * 1024),
+        onEvent: (event) => {
+          options.onEvent?.(event);
+          if (event.type === 'process-start') {
+            providerProcessStarts += 1;
+            providerPids.push(event.pid);
+          }
+        },
+      });
     let interruptedPid;
     let signalStarted;
     const providerStarted = new Promise((resolve) => {
@@ -283,7 +336,6 @@ async function main() {
             options.onEvent?.(event);
             if (event.type === 'process-start') {
               interruptedPid = event.pid;
-              providerPids.push(event.pid);
               signalStarted();
             }
           },
@@ -314,17 +366,7 @@ async function main() {
     if (!task.runs.some((run) => run.state === 'interrupted'))
       throw new Error('The terminated provider run was not recorded as interrupted.');
 
-    const controller = createTaskController({
-      root,
-      launch: (options) =>
-        launch({
-          ...options,
-          onEvent: (event) => {
-            options.onEvent?.(event);
-            if (event.type === 'process-start') providerPids.push(event.pid);
-          },
-        }),
-    });
+    const controller = createTaskController({ root, launch });
     const implementation = await controller.start({
       taskId: task.id,
       providerId: 'codex',
@@ -392,7 +434,12 @@ async function main() {
     const seriousFindings = (review.findings ?? []).filter((finding) =>
       ['blocker', 'high'].includes(finding.severity),
     );
-    if (assignment.state !== 'completed' || seriousFindings.length)
+    if (
+      review.state !== 'completed' ||
+      assignment.state !== 'completed' ||
+      assignment.result?.state !== 'completed' ||
+      seriousFindings.length
+    )
       throw new Error('Independent Codex review did not complete cleanly.');
     await cleanupTaskWorkspace(root, { taskId: assignment.childTaskId, authorized: true });
 
@@ -449,7 +496,7 @@ async function main() {
       authorization: {
         source: 'user',
         scope: 'exercise unsupported evidence guard',
-        reference: 'Issue #36 qualification continuation',
+        reference: `archive:${artifactSha256};commit:${manifest.commit};version:${manifest.version}`,
       },
       criteria: [{ description: 'Unavailable required gate.' }],
     });
@@ -482,6 +529,10 @@ async function main() {
       throw new Error('Unsupported required evidence did not block verification.');
 
     await new Promise((resolve) => setTimeout(resolve, 250));
+    if (providerProcessStarts !== 4)
+      throw new Error(
+        `Expected four bounded provider processes, observed ${providerProcessStarts}.`,
+      );
     const liveProviderPids = providerPids.filter(processIsLive);
     if (liveProviderPids.length) throw new Error('An owned provider process remained live.');
 
@@ -489,9 +540,12 @@ async function main() {
       schemaVersion: 1,
       kind: 'live-lifecycle-qualification',
       candidate: {
-        commit: candidate,
+        commit: manifest.commit,
         package: `latchkit@${packageDocument.version}`,
         archiveSha256: artifactSha256,
+        version: manifest.version,
+        target: manifest.target,
+        nodeVersion: manifest.nodeVersion,
       },
       testedAt: iso(),
       startedAt,
@@ -505,15 +559,18 @@ async function main() {
         id: 'codex',
         version: providerVersion,
         authenticatedSessionObserved: true,
+        modelOverride: null,
+        settingsPreserved: true,
       },
       bounds: {
         processTimeoutMs: 120_000,
         outputLimitBytes: 1024 * 1024,
         maximumProviderProcesses: 4,
+        observedProviderProcesses: providerProcessStarts,
         retries: 0,
       },
       results: {
-        exactArchiveInstalledOutsideCheckout: true,
+        exactArchiveExtractedOutsideCheckout: true,
         installedSkills: 'passed',
         initialVerification: 'failed-as-required',
         failedEvidenceRejection,
@@ -555,11 +612,68 @@ async function main() {
     await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
     console.log(JSON.stringify(evidence, null, 2));
   } finally {
+    await Promise.all(
+      providerPids.filter(processIsLive).map((pid) => terminateOwnedTree(pid).catch(() => {})),
+    );
     await rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
-main().catch((error) => {
+async function outer(values) {
+  if (values.authorized !== true) throw new Error('Live lifecycle evidence requires --authorized.');
+  if (values.provider !== 'codex')
+    throw new Error('This bounded lifecycle currently supports only the Codex adapter.');
+  const artifact = path.resolve(required(values.artifact, '--artifact'));
+  const artifactSha256 = required(values['artifact-sha256'], '--artifact-sha256');
+  if (!/^[a-f0-9]{64}$/.test(artifactSha256))
+    throw new Error('--artifact-sha256 must be a lowercase SHA-256 digest.');
+  if (sha256(await readFile(artifact)) !== artifactSha256)
+    throw new Error('The supplied archive does not match --artifact-sha256.');
+  const output = path.resolve(required(values.output, '--output'));
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-live-lifecycle-outer-'));
+  try {
+    const bundle = path.join(scratch, 'extracted-bundle');
+    await extract(artifact, bundle, scratch);
+    const privateNode = path.join(
+      bundle,
+      'runtime',
+      process.platform === 'win32' ? 'node.exe' : 'node',
+    );
+    await runInner(
+      privateNode,
+      path.resolve(process.argv[1]),
+      [
+        '--authorized',
+        '--bundle',
+        bundle,
+        '--archive-sha256',
+        artifactSha256,
+        '--output',
+        output,
+        '--provider',
+        'codex',
+      ],
+      600_000,
+    );
+  } finally {
+    await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+const { values } = parseArgs({
+  options: {
+    authorized: { type: 'boolean' },
+    provider: { type: 'string', default: 'codex' },
+    output: { type: 'string' },
+    artifact: { type: 'string' },
+    'artifact-sha256': { type: 'string' },
+    inner: { type: 'boolean' },
+    bundle: { type: 'string' },
+    'archive-sha256': { type: 'string' },
+  },
+});
+
+(values.inner ? inner(values) : outer(values)).catch((error) => {
   console.error(`Live lifecycle evidence: ${error.code ?? error.name}: ${error.message}`);
   process.exitCode = 1;
 });

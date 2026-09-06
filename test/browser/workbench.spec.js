@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initProject } from '../../src/core.js';
-import { startServer } from '../../src/server.js';
-import { createTask } from '../../src/task-state/service.js';
+import { initProject } from '../../dist/src/core.js';
+import { startServer } from '../../dist/src/server.js';
+import { createTask } from '../../dist/src/task-state/service.js';
 
 test('workbench renders persisted task state and supports keyboard-safe local memory deletion', async ({
   page,
