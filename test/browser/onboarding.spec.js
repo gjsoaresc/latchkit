@@ -9,7 +9,9 @@ import { startServer } from '../../dist/src/server.js';
 test('the onboarding console drives project, agents, workspace, verification, usage, preview, and completion', async ({
   page,
 }) => {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-console-')));
+  const root = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), 'latchkit-onboarding-console-')),
+  );
   // Matches what `latchkit ui` itself does before serving the console
   // (`initProject(root)` in src/cli.ts's `ui` branch): the project already
   // exists by the time a browser ever reaches this page.
