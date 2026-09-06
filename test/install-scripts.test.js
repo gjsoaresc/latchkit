@@ -107,7 +107,7 @@ async function findPosixShell() {
 const posixShell = await findPosixShell();
 const skipPosix = posixShell
   ? false
-  : 'requires a POSIX sh (Git for Windows was not found at the conventional path)';
+  : 'requires a POSIX sh and the complete fixture toolchain (Git for Windows at the conventional path is absent or incomplete)';
 
 async function writeFakeUname(directory, { s, m }) {
   await mkdir(directory, { recursive: true });
@@ -118,6 +118,26 @@ async function writeFakeUname(directory, { s, m }) {
   );
   await chmod(script, 0o755);
   return directory;
+}
+
+async function writeFailingRm(directory) {
+  const script = path.join(directory, 'rm');
+  await writeFile(
+    script,
+    [
+      '#!/bin/sh',
+      'state=${LATCHKIT_TEST_RM_STATE:?missing cleanup state}',
+      'failures=${LATCHKIT_TEST_RM_FAILURES:-0}',
+      'count=0',
+      '[ -f "$state" ] && count=$(cat "$state")',
+      'count=$((count + 1))',
+      'printf "%s" "$count" > "$state"',
+      '[ "$count" -le "$failures" ] && exit 1',
+      'exec /usr/bin/rm "$@"',
+      '',
+    ].join('\n'),
+  );
+  await chmod(script, 0o755);
 }
 
 async function inventory(directory, prefix = '') {
@@ -591,6 +611,109 @@ test(
       !versions.includes(`${secondVersion}-${target}`),
       'a checksum-mismatched version must never be staged',
     );
+  },
+);
+
+test(
+  'install.sh retries owned temporary cleanup without changing a successful install result',
+  { skip: skipPosix },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-install-sh-cleanup-success-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const fakebin = await writeFakeUname(path.join(scratch, 'fakebin'), {
+      s: 'Darwin',
+      m: 'x86_64',
+    });
+    await writeFailingRm(fakebin);
+    const version = '9.9.9-fixture';
+    const target = 'darwin-x64';
+    const bundle = await stubPosixBundle(scratch, version, target);
+    const archive = path.join(scratch, 'bundle.tar.gz');
+    await tarGzBundle(bundle, archive);
+    await writeChecksumSidecar(archive);
+    const cleanupState = path.join(scratch, 'cleanup-state');
+
+    const result = await run(
+      posixShell,
+      [
+        path.join(repository, 'install.sh'),
+        '--version',
+        version,
+        '--root',
+        path.join(scratch, 'root'),
+        '--artifact',
+        archive,
+        '--checksum',
+        `${archive}.sha256`,
+      ],
+      {
+        timeout: 60_000,
+        env: {
+          ...posixEnvironment(fakebin),
+          LATCHKIT_TEST_RM_STATE: toMsysPath(cleanupState),
+          LATCHKIT_TEST_RM_FAILURES: '2',
+        },
+      },
+    );
+
+    assert.match(result.stdout, /Use .*bin\/latchkit or add its bin directory to PATH/);
+    assert.equal(await readFile(cleanupState, 'utf8'), '3');
+  },
+);
+
+test(
+  'install.sh warns about permanent owned temporary cleanup failure without hiding the installer failure',
+  { skip: skipPosix },
+  async (t) => {
+    const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-install-sh-cleanup-failure-'));
+    t.after(() => rm(scratch, { recursive: true, force: true }));
+    const fakebin = await writeFakeUname(path.join(scratch, 'fakebin'), {
+      s: 'Darwin',
+      m: 'x86_64',
+    });
+    await writeFailingRm(fakebin);
+    const version = '9.9.9-fixture';
+    const target = 'darwin-x64';
+    const bundle = await stubPosixBundle(scratch, version, target);
+    const archive = path.join(scratch, 'bundle.tar.gz');
+    await tarGzBundle(bundle, archive);
+    await writeChecksumSidecar(archive, { correct: false });
+    const cleanupState = path.join(scratch, 'cleanup-state');
+
+    await assert.rejects(
+      run(
+        posixShell,
+        [
+          path.join(repository, 'install.sh'),
+          '--version',
+          version,
+          '--root',
+          path.join(scratch, 'root'),
+          '--artifact',
+          archive,
+          '--checksum',
+          `${archive}.sha256`,
+        ],
+        {
+          timeout: 60_000,
+          env: {
+            ...posixEnvironment(fakebin),
+            LATCHKIT_TEST_RM_STATE: toMsysPath(cleanupState),
+            LATCHKIT_TEST_RM_FAILURES: '3',
+          },
+        },
+      ),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(String(error.stderr ?? error.message), /Archive SHA-256 verification failed/);
+        assert.match(
+          String(error.stderr ?? error.message),
+          /could not remove installer temporary directory/,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(cleanupState, 'utf8'), '3');
   },
 );
 
