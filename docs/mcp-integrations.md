@@ -46,6 +46,8 @@ The input may be one definition or an array, bounded to 64 definitions and 64 Ki
 
 Claude Code's project `.mcp.json` serializer is supported through the console and CLI flow. A separate Codex project serializer is qualified for Codex CLI `0.153.2` and its documented `.codex/config.toml` `mcp_servers` schema: stdio and streamable HTTP entries, plus native `enabled_tools` narrowing. It is deliberately exact-version gated; an unknown, older, or upgraded Codex CLI must be requalified before an existing activation can be reused. Legacy SSE and HTTP credential references remain refused. The Codex serializer is a transaction-backed integration primitive pending the same preview/API wiring as the Claude flow; it does not claim a live provider activation.
 
+The current managed preview/apply operation accepts either a complete Claude set or a complete Codex set. A mixed Claude-and-Codex definition set is refused until one registered transaction can atomically update both provider files; it is never presented as a combined activation.
+
 Managed server subentries are recorded in provider-specific state files; unrelated entries and unknown configuration remain user-owned. Later edits to unrelated entries do not block removal. A changed owned entry, duplicate identity, unowned collision, malformed configuration, or unsafe managed path blocks mutation. Global configuration and provider permission settings are never written.
 
 Provider configuration and ownership state share the registered-resource transaction journal and protected snapshots. A provider file created by Latchkit is removed when it becomes empty; pre-existing files and unrelated content are preserved. After an interrupted mutation:

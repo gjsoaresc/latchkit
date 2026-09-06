@@ -50,7 +50,6 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.headers.get('cache-control'), 'no-store');
 });
 
-<<<<<<< HEAD
 test('review cancellation uses a separate request and is not queued behind a long review', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-review-api-'));
   t.after(() => rm(root, { recursive: true, force: true }));
