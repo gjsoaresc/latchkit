@@ -5,10 +5,13 @@ import {
   evaluateSuite,
   loadEvaluationSpecs,
   renderEvaluationMarkdown,
-} from '../src/evaluations/runner.js';
-import { CLAUDE_ADAPTER } from '../src/providers/claude.js';
-import { codexAdapter } from '../src/providers/codex.js';
-import { runProviderProcess, HOST_LOCAL_EXECUTION_PROFILE } from '../src/runtime/process-runner.js';
+} from '../dist/src/evaluations/runner.js';
+import { CLAUDE_ADAPTER } from '../dist/src/providers/claude.js';
+import { codexAdapter } from '../dist/src/providers/codex.js';
+import {
+  runProviderProcess,
+  HOST_LOCAL_EXECUTION_PROFILE,
+} from '../dist/src/runtime/process-runner.js';
 
 const root = path.resolve('test/fixtures/skill-evaluations');
 const { values } = parseArgs({

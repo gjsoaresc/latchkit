@@ -203,13 +203,13 @@ async function main() {
     );
     const packageRoot = path.join(installed, 'node_modules', 'latchkit');
     const moduleAt = (relative) => pathToFileURL(path.join(packageRoot, relative)).href;
-    const { initProject, syncProject } = await import(moduleAt('src/core.js'));
-    const { createReviewOrchestrator } = await import(moduleAt('src/reviews/orchestrator.js'));
-    const { runProviderProcess } = await import(moduleAt('src/runtime/process-runner.js'));
-    const { createTaskController } = await import(moduleAt('src/runtime/task-controller.js'));
+    const { initProject, syncProject } = await import(moduleAt('dist/src/core.js'));
+    const { createReviewOrchestrator } = await import(moduleAt('dist/src/reviews/orchestrator.js'));
+    const { runProviderProcess } = await import(moduleAt('dist/src/runtime/process-runner.js'));
+    const { createTaskController } = await import(moduleAt('dist/src/runtime/task-controller.js'));
     const { completeTask, createTask, inspectTask, recordEvidence, resumeTask, verifyTask } =
-      await import(moduleAt('src/task-state/service.js'));
-    const { cleanupTaskWorkspace } = await import(moduleAt('src/workspaces/git.js'));
+      await import(moduleAt('dist/src/task-state/service.js'));
+    const { cleanupTaskWorkspace } = await import(moduleAt('dist/src/workspaces/git.js'));
 
     await mkdir(root);
     await writeFixture(root);

@@ -16,8 +16,8 @@ import {
   saveConfig,
   syncProject,
   validateConfig,
-} from '../src/core.js';
-import { executeMigration } from '../src/config/migrations.js';
+} from '../dist/src/core.js';
+import { executeMigration } from '../dist/src/config/migrations.js';
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
@@ -226,7 +226,7 @@ test(
 test('competing CLI migration processes never produce a mixed configuration', async (t) => {
   const root = await temporaryProject(t);
   await installFixture(root, 'config-v1.json');
-  const cli = path.join(repositoryRoot, 'src', 'cli.js');
+  const cli = path.join(repositoryRoot, 'dist', 'src', 'cli.js');
   const command = () => execFileAsync(process.execPath, [cli, 'migrate', '--project', root]);
   const results = await Promise.allSettled([command(), command()]);
   assert.ok(results.some((result) => result.status === 'fulfilled'));
@@ -242,7 +242,7 @@ test('competing CLI migration processes never produce a mixed configuration', as
 test('CLI preview and apply use the same migration contract', async (t) => {
   const root = await temporaryProject(t);
   const original = await installFixture(root, 'config-v1.json');
-  const cli = path.join(repositoryRoot, 'src', 'cli.js');
+  const cli = path.join(repositoryRoot, 'dist', 'src', 'cli.js');
   const configResult = await execFileAsync(process.execPath, [cli, 'config', '--project', root]);
   assert.deepEqual(JSON.parse(configResult.stdout), JSON.parse(original));
   const previewResult = await execFileAsync(process.execPath, [

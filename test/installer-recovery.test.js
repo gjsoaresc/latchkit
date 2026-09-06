@@ -14,18 +14,19 @@ import {
   recoverProject,
   saveConfig,
   syncProject,
-} from '../src/core.js';
+} from '../dist/src/core.js';
 import {
   applyRegisteredTransaction,
   createResourceRegistry,
   inspectTransaction,
   recoverTransaction,
-} from '../src/installer/transactions.js';
+} from '../dist/src/installer/transactions.js';
 import {
+  acquireProjectLock,
   inspectProjectLock,
   removeProvenStaleLock,
   withProjectLock,
-} from '../src/installer/lock.js';
+} from '../dist/src/installer/lock.js';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const crashHelper = path.join(repositoryRoot, 'scripts', 'test-helpers', 'crash-sync.js');
@@ -35,7 +36,7 @@ const resourceCrashHelper = path.join(
   'test-helpers',
   'crash-resource.js',
 );
-const cli = path.join(repositoryRoot, 'src', 'cli.js');
+const cli = path.join(repositoryRoot, 'dist', 'src', 'cli.js');
 const execFileAsync = promisify(execFile);
 
 async function temporaryProject(t) {
@@ -58,11 +59,15 @@ async function crashAt(root, operation, boundary) {
   const child = fork(crashHelper, [root, operation, boundary], {
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr = (stderr + chunk).slice(-4000);
+  });
   await new Promise((resolve, reject) => {
     child.once('message', resolve);
     child.once('error', reject);
     child.once('exit', (code) =>
-      reject(new Error(`Child exited before fault boundary (${code}).`)),
+      reject(new Error(`Child exited before fault boundary (${code}): ${stderr}`)),
     );
   });
   return child;
@@ -191,6 +196,61 @@ test('PID reuse cannot make an unrelated process appear to own a stale lock', as
   const recovered = await recoverProject(root);
   assert.equal(recovered.cleanedLock, true);
   assert.equal((await inspectRecovery(root)).lock.state, 'none');
+});
+
+test('a connected lock endpoint that times out remains ambiguous and protected', async (t) => {
+  const root = await temporaryProject(t);
+  await fs.mkdir(path.join(root, '.latchkit'));
+  const endpointSockets = new Set();
+  const endpoint = net.createServer((socket) => {
+    endpointSockets.add(socket);
+    socket.once('close', () => endpointSockets.delete(socket));
+  });
+  await new Promise((resolve, reject) => {
+    endpoint.once('error', reject);
+    endpoint.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        endpoint.close(resolve);
+        for (const socket of endpointSockets) socket.destroy();
+      }),
+  );
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const metadata = {
+    schemaVersion: 1,
+    lockId: randomUUID(),
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    hostname: os.hostname(),
+    port: endpoint.address().port,
+    publicKey: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
+  };
+  const lockFile = path.join(root, '.latchkit', 'lock');
+  await fs.writeFile(lockFile, `${JSON.stringify(metadata)}\n`);
+  const inspection = await inspectProjectLock(root);
+  assert.equal(inspection.state, 'unknown');
+  await assert.rejects(removeProvenStaleLock(root, inspection), /proven stale/);
+  assert.equal(await exists(lockFile), true);
+});
+
+test('project lock server closes after setup errors and accepted idle clients', async (t) => {
+  const malformedRoot = await temporaryProject(t);
+  await fs.writeFile(path.join(malformedRoot, '.latchkit'), 'not a directory');
+  await assert.rejects(acquireProjectLock(malformedRoot), /Expected directory/);
+
+  const root = await temporaryProject(t);
+  const lock = await acquireProjectLock(root);
+  const idle = net.createConnection({ host: '127.0.0.1', port: lock.metadata.port });
+  await new Promise((resolve, reject) => {
+    idle.once('connect', resolve);
+    idle.once('error', reject);
+  });
+  const idleClosed = new Promise((resolve) => idle.once('close', resolve));
+  await lock.release();
+  await idleClosed;
+  assert.equal(idle.destroyed, true);
 });
 
 test('a junction introduced after interruption is refused during recovery', async (t) => {

@@ -6,9 +6,9 @@
 
 Open-source skills and a local configuration console for the coding tools you already use.
 
-[![Cross-platform CI](https://github.com/gjsoaresc/latchkit/actions/workflows/ci.yml/badge.svg)](https://github.com/gjsoaresc/latchkit/actions/workflows/ci.yml)
+[![Cross-platform CI](https://github.com/willahealm/latchkit/actions/workflows/ci.yml/badge.svg)](https://github.com/willahealm/latchkit/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-17806D.svg)](LICENSE)
-[![Status: Alpha](https://img.shields.io/badge/status-alpha-E3A14B.svg)](docs/roadmap.md)
+[![Status: 1.0 candidate](https://img.shields.io/badge/status-1.0%20candidate-E3A14B.svg)](docs/roadmap.md)
 
 **Claude Code · Codex · Antigravity CLI · Cursor · Cursor CLI**
 
@@ -18,15 +18,16 @@ Open-source skills and a local configuration console for the coding tools you al
 
 Latchkit is an open-source toolkit for shared coding-agent workflows. This repository is its reference implementation: portable skills, a Node.js CLI, and a local browser console for project configuration. It runs locally, works with your existing coding tools, and keeps its configuration in your project.
 
-**The current alpha supports skill installation, durable task state, local project memory, capability-aware gates, and acceptance verification.** Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
+**The current 1.0 candidate supports skill installation, durable task state, local project memory, capability-aware gates, acceptance verification, and the typed workflow foundation.** Provider enforcement remains capability-dependent; unrestricted browser/device control and hosted session orchestration remain outside this release.
 
 ## Install and try it
 
-Install [Node.js 22 or newer](https://nodejs.org/) and Git, then install the released package:
+For development, install [Node.js 22 or newer](https://nodejs.org/) and Git, then install the repository tooling:
 
 ```sh
-npm install --global latchkit
-latchkit --version
+npm install
+npm run build
+node dist/src/cli.js --version
 ```
 
 Then run these commands from your project directory:
@@ -42,23 +43,23 @@ Open the local URL printed by `latchkit ui`. The console can select providers an
 
 See the [clean-machine quickstart](docs/getting-started.md) for package, native OS, and WSL paths.
 
-No Bash installer, Homebrew, Python, symlinks, or WSL is required by Latchkit. Run Node inside WSL when you want a WSL environment. Install and authenticate your chosen coding tool separately.
+For development, no Bash installer, Homebrew, Python, symlinks, or WSL is required. Run Node inside WSL when you want a WSL environment and install/authenticate your chosen coding tool separately. Standalone GitHub Release installers use PowerShell or POSIX scripts, install into user-local versioned directories without elevation or symlinks, and include their own Node runtime. They print the full launcher path; add that directory to `PATH` yourself if desired.
 
 ## What works today
 
-| Capability               | Alpha behavior                                                                                            |
-| ------------------------ | --------------------------------------------------------------------------------------------------------- |
-| Portable workflows       | Seven original skills: requirements, spec, build, fix, review, handoff, setup                             |
-| Project configuration    | Provider and skill selection in `.latchkit/config.json`                                                   |
-| Project instructions     | Offline manifest discovery and scoped, reviewable provider exports                                        |
-| Local console            | Real configuration, executable discovery, install preview and sync                                        |
-| Managed installation     | Hash-based ownership checks; conflicts block changes                                                      |
-| Safe removal             | Removes unchanged owned files/sections; keeps user text and config                                        |
-| Host diagnostics         | Detects native vs WSL and executables on PATH                                                             |
-| Resumable workflow state | Versioned local tasks, atomic checkpoints, evidence binding, and stale-writer protection                  |
-| Acceptance verification  | Bounded CLI, HTTP, and optional Playwright checks with revision-bound sanitized artifacts                 |
-| Local project memory     | Explicit, inspectable decisions and discoveries with bounded, capability-aware recovery                   |
-| Cross-platform checks    | Release-gating Node 22/24 installed-artifact smoke on native Windows, Linux, and macOS, plus WSL evidence |
+| Capability               | 1.0 candidate behavior                                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Portable workflows       | Seven original skills: requirements, spec, build, fix, review, handoff, setup                                                         |
+| Project configuration    | Provider and skill selection in `.latchkit/config.json`                                                                               |
+| Project instructions     | Offline manifest discovery and scoped, reviewable provider exports                                                                    |
+| Local console            | Real configuration, executable discovery, install preview and sync                                                                    |
+| Managed installation     | Hash-based ownership checks; conflicts block changes                                                                                  |
+| Safe removal             | Removes unchanged owned files/sections; keeps user text and config                                                                    |
+| Host diagnostics         | Detects native vs WSL and executables on PATH                                                                                         |
+| Resumable workflow state | Versioned local tasks, atomic checkpoints, evidence binding, and stale-writer protection                                              |
+| Acceptance verification  | Bounded CLI, HTTP, and optional Playwright checks with revision-bound sanitized artifacts                                             |
+| Local project memory     | Explicit, inspectable decisions and discoveries with bounded, capability-aware recovery                                               |
+| Cross-platform checks    | Candidate checks for emitted application code and standalone artifact qualification; platform evidence is recorded per exact artifact |
 
 `doctor` checks executable availability, not authentication or end-to-end agent behavior. CI validates the installed distributable, runtime/filesystem behavior, and bundled assets; real provider sessions remain outside this release gate. Contributors can run `npm run smoke:artifact` locally. See the [Claude adapter notes](docs/providers/claude.md) for hook activation and capability limitations.
 
@@ -118,8 +119,7 @@ npm test
 npm pack --dry-run
 ```
 
-See [release and recovery procedures](docs/releases.md) for installable npm
-artifacts, dry-run evidence, controlled publication, upgrades, and rollback.
+See [release and recovery procedures](docs/releases.md) for the GitHub Release bundles, PowerShell/POSIX installation scripts, dry-run evidence, upgrades, rollback, and recovery. End users will not need Node.js, npm, or the BAML compiler for a qualified standalone bundle; npm remains available for development.
 
 For task-oriented operations, see [support and troubleshooting](docs/support.md)
 and [upgrade, migration, rollback, and removal](docs/migration.md).

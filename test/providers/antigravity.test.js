@@ -4,7 +4,7 @@ import {
   ANTIGRAVITY_ADAPTER,
   planAntigravityInvocation,
   planAntigravityResume,
-} from '../../src/providers/antigravity.js';
+} from '../../dist/src/providers/antigravity.js';
 
 test('Antigravity exposes the documented bounded print-mode contract', () => {
   assert.equal(ANTIGRAVITY_ADAPTER.contract.id, 'antigravity');

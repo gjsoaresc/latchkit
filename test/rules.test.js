@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initProject, planSync, removeProjectSkills, syncProject } from '../src/core.js';
+import { initProject, planSync, removeProjectSkills, syncProject } from '../dist/src/core.js';
 import {
   buildProjectRuleExports,
   createProjectInstructionModel,
@@ -12,7 +12,7 @@ import {
   findManagedSection,
   renderScopeInstructions,
   SECTION_START,
-} from '../src/rules/index.js';
+} from '../dist/src/rules/index.js';
 
 const fixtureRoot = path.resolve(fileURLToPath(new URL('fixtures/rules/', import.meta.url)));
 

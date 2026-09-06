@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test';
 import { readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initProject } from '../../src/core.js';
-import { startServer } from '../../src/server.js';
+import { initProject } from '../../dist/src/core.js';
+import { startServer } from '../../dist/src/server.js';
 
 let root;
 let server;

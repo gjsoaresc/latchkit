@@ -21,7 +21,7 @@ import {
   planCursorIdeHookExport,
   recoverCursorIdeIntegration,
   translateCursorIdeLifecycleOutput,
-} from '../../src/providers/cursor-ide.js';
+} from '../../dist/src/providers/cursor-ide.js';
 
 const fixtures = path.resolve(
   fileURLToPath(new URL('../fixtures/providers/cursor-ide/', import.meta.url)),

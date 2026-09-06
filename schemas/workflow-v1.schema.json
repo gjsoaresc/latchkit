@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gjsoaresc/latchkit/schemas/workflow-v1.schema.json",
+  "title": "Latchkit durable workflow state v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflows"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "workflows": { "type": "array", "items": { "$ref": "#/$defs/workflow" } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirtyFingerprint"],
+      "properties": {
+        "revision": { "type": ["string", "null"] },
+        "dirtyFingerprint": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "artifact", "digest", "summary", "createdAt"],
+      "properties": {
+        "phase": { "$ref": "#/$defs/phase" },
+        "artifact": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "digest": { "$ref": "#/$defs/sha256" },
+        "summary": { "type": "string" },
+        "createdAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "phase": {
+      "enum": ["requirements", "plan", "implementation", "verification", "review", "handoff"]
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actionId",
+        "kind",
+        "phase",
+        "inputDigest",
+        "ownerId",
+        "ownerPid",
+        "source",
+        "repair",
+        "startedAt"
+      ],
+      "properties": {
+        "actionId": { "type": "string", "pattern": "^action_[0-9a-fA-F-]{36}$" },
+        "kind": { "enum": ["invoke", "verify", "review", "complete"] },
+        "phase": { "$ref": "#/$defs/phase" },
+        "inputDigest": { "$ref": "#/$defs/sha256" },
+        "ownerId": { "type": "string", "pattern": "^owner_[0-9a-fA-F-]{36}$" },
+        "ownerPid": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "repair": { "type": "boolean" },
+        "startedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "completedAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actionId",
+        "kind",
+        "phase",
+        "inputDigest",
+        "ownerId",
+        "ownerPid",
+        "source",
+        "repair",
+        "startedAt",
+        "status",
+        "summary",
+        "resultDigest",
+        "sourceAfter",
+        "finishedAt"
+      ],
+      "properties": {
+        "actionId": { "type": "string", "pattern": "^action_[0-9a-fA-F-]{36}$" },
+        "kind": { "enum": ["invoke", "verify", "review", "complete"] },
+        "phase": { "$ref": "#/$defs/phase" },
+        "inputDigest": { "$ref": "#/$defs/sha256" },
+        "ownerId": { "type": "string", "pattern": "^owner_[0-9a-fA-F-]{36}$" },
+        "ownerPid": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "repair": { "type": "boolean" },
+        "startedAt": { "$ref": "#/$defs/timestamp" },
+        "status": { "enum": ["passed", "failed", "needs-input", "error", "abandoned"] },
+        "summary": { "type": "string" },
+        "resultDigest": { "$ref": "#/$defs/sha256" },
+        "sourceAfter": { "$ref": "#/$defs/source" },
+        "finishedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "workflowId",
+        "taskId",
+        "taskOwnerId",
+        "revision",
+        "status",
+        "phase",
+        "providerId",
+        "reviewProviderId",
+        "executionAuthorized",
+        "policyVersion",
+        "policyDigest",
+        "promptDigest",
+        "initialPrompt",
+        "inputs",
+        "proposedChecks",
+        "requirements",
+        "plan",
+        "approval",
+        "repairAttempts",
+        "retryOfActionId",
+        "artifacts",
+        "pendingAction",
+        "completedActions",
+        "mutations",
+        "lastOutcome",
+        "source",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "workflowId": { "type": "string", "pattern": "^workflow_[0-9a-fA-F-]{36}$" },
+        "taskId": { "type": "string", "pattern": "^task_[0-9a-fA-F-]{36}$" },
+        "taskOwnerId": { "type": "string", "pattern": "^owner_[0-9a-fA-F-]{36}$" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "status": {
+          "enum": [
+            "running",
+            "awaiting-input",
+            "awaiting-approval",
+            "blocked",
+            "interrupted",
+            "cancelled",
+            "completed",
+            "verified"
+          ]
+        },
+        "phase": { "$ref": "#/$defs/phase" },
+        "providerId": { "type": "string", "minLength": 1 },
+        "reviewProviderId": { "type": "string", "minLength": 1 },
+        "executionAuthorized": { "type": "boolean" },
+        "policyVersion": { "type": "string", "minLength": 1 },
+        "policyDigest": { "$ref": "#/$defs/sha256" },
+        "promptDigest": { "$ref": "#/$defs/sha256" },
+        "initialPrompt": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "inputs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "proposedChecks": {},
+        "requirements": { "oneOf": [{ "$ref": "#/$defs/artifact" }, { "type": "null" }] },
+        "plan": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "phase",
+                "artifact",
+                "digest",
+                "summary",
+                "createdAt",
+                "checks",
+                "checksDigest"
+              ],
+              "properties": {
+                "phase": { "const": "plan" },
+                "artifact": { "type": "string", "minLength": 1, "maxLength": 65536 },
+                "digest": { "$ref": "#/$defs/sha256" },
+                "summary": { "type": "string" },
+                "createdAt": { "$ref": "#/$defs/timestamp" },
+                "checks": {},
+                "checksDigest": { "$ref": "#/$defs/sha256" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "approval": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "planDigest",
+                "requirementsDigest",
+                "checksDigest",
+                "criteriaDigest",
+                "scope",
+                "reference",
+                "source",
+                "approvedAt"
+              ],
+              "properties": {
+                "planDigest": { "$ref": "#/$defs/sha256" },
+                "requirementsDigest": { "$ref": "#/$defs/sha256" },
+                "checksDigest": { "$ref": "#/$defs/sha256" },
+                "criteriaDigest": { "$ref": "#/$defs/sha256" },
+                "scope": { "type": "string", "minLength": 1 },
+                "reference": { "type": "string", "minLength": 1 },
+                "source": { "$ref": "#/$defs/source" },
+                "approvedAt": { "$ref": "#/$defs/timestamp" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "repairAttempts": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "retryOfActionId": {
+          "oneOf": [
+            { "type": "string", "pattern": "^action_[0-9a-fA-F-]{36}$" },
+            { "type": "null" }
+          ]
+        },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+        "pendingAction": { "oneOf": [{ "$ref": "#/$defs/action" }, { "type": "null" }] },
+        "completedActions": { "type": "array", "items": { "$ref": "#/$defs/completedAction" } },
+        "mutations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "digest", "revision"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^event_[0-9a-fA-F-]{36}$" },
+              "digest": { "$ref": "#/$defs/sha256" },
+              "revision": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "lastOutcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "summary"],
+          "properties": {
+            "status": { "enum": ["none", "passed", "failed", "needs-input", "error"] },
+            "summary": { "type": "string" }
+          }
+        },
+        "source": { "$ref": "#/$defs/source" },
+        "createdAt": { "$ref": "#/$defs/timestamp" },
+        "updatedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

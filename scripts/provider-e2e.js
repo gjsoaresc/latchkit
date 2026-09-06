@@ -10,13 +10,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { redact } from '../src/diagnostics/redact.js';
-import { CLAUDE_ADAPTER } from '../src/providers/claude.js';
-import { codexAdapter } from '../src/providers/codex.js';
-import { cursorCliAdapter } from '../src/providers/cursor-cli.js';
-import { cursorIdeAdapter } from '../src/providers/cursor-ide.js';
-import { ANTIGRAVITY_ADAPTER } from '../src/providers/antigravity.js';
-import { HOST_LOCAL_EXECUTION_PROFILE, runProviderProcess } from '../src/runtime/process-runner.js';
+import { redact } from '../dist/src/diagnostics/redact.js';
+import { CLAUDE_ADAPTER } from '../dist/src/providers/claude.js';
+import { codexAdapter } from '../dist/src/providers/codex.js';
+import { cursorCliAdapter } from '../dist/src/providers/cursor-cli.js';
+import { cursorIdeAdapter } from '../dist/src/providers/cursor-ide.js';
+import { ANTIGRAVITY_ADAPTER } from '../dist/src/providers/antigravity.js';
+import {
+  HOST_LOCAL_EXECUTION_PROFILE,
+  runProviderProcess,
+} from '../dist/src/runtime/process-runner.js';
 
 export const EVIDENCE_SCHEMA_VERSION = 1;
 export const PROVIDER_IDS = Object.freeze([

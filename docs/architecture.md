@@ -1,27 +1,27 @@
 # Architecture
 
-Latchkit is an original open-source toolkit that adds shared engineering skills and project configuration to existing coding agents. The initial implementation is a CLI and local configuration interface. The provider still owns authentication, model execution, tool permissions, and the conversation.
+Latchkit is an original open-source toolkit that adds shared engineering skills, project configuration, and durable delivery workflows to existing coding agents. The application is strict TypeScript: `tsc` emits the Node ESM application and browser assets, and `.cts` sources emit standalone CommonJS hook handlers. The provider still owns authentication, model execution, tool permissions, and the conversation.
 
 ## Current components
 
-| Component             | Responsibility                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| Node.js CLI           | Project initialization, provider discovery, configuration, and skill synchronization. |
-| Project configuration | `.latchkit/config.json` records the selected providers and selected skill IDs.        |
-| Canonical skills      | `skills/latchkit-*/SKILL.md` contains original portable instructions.                 |
-| Provider destinations | Project-local copies in supported discovery roots.                                    |
-| Provider contracts    | Versioned capability evidence and non-executing adapter plans.                        |
-| Project rules         | Bounded manifest discovery, canonical instruction data, and provider-native exports.  |
-| Local UI              | A browser interface for viewing providers and editing project configuration.          |
-| Workflow notes        | Agents following the skills write task evidence under `.latchkit/notes/`.             |
-| Acceptance verifier   | Bounded CLI, HTTP, and optional browser assertions linked to task criteria.           |
-| Project memory        | Explicit local records and bounded, capability-aware context recovery.                |
+| Component             | Responsibility                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- |
+| TypeScript/Node CLI   | Project initialization, provider discovery, configuration, workflow orchestration, and skill synchronization. |
+| Project configuration | `.latchkit/config.json` records the selected providers and selected skill IDs.                                |
+| Canonical skills      | `skills/latchkit-*/SKILL.md` contains original portable instructions.                                         |
+| Provider destinations | Project-local copies in supported discovery roots.                                                            |
+| Provider contracts    | Versioned capability evidence, adapter plans, lifecycle translation, and bounded execution.                   |
+| Project rules         | Bounded manifest discovery, canonical instruction data, and provider-native exports.                          |
+| Local UI              | A browser interface for viewing providers and editing project configuration.                                  |
+| Workflow state        | Versioned additive checkpoints, journals, approvals, repair budgets, and evidence under `.latchkit/`.         |
+| Acceptance verifier   | Bounded CLI, HTTP, and optional browser assertions linked to task criteria.                                   |
+| Project memory        | Explicit local records and bounded, capability-aware context recovery.                                        |
 
-The core targets Node.js 22 or newer and has no runtime package dependencies. Node's filesystem, path, HTTP, and process facilities provide a common implementation for Windows, Linux, and macOS. WSL runs the Linux path; it is optional for native Windows use.
+Development targets Node.js 22 or newer. Qualified standalone releases bundle private Node.js 24.20.0 with the compiled application and its complete production dependency closure. Node's filesystem, path, HTTP, and process facilities provide a common implementation for Windows, Linux, and macOS. WSL runs the Linux path; it is optional for native Windows use.
 
 The frontend is served locally. It is a configuration surface, not an embedded terminal, hosted account service, or provider session viewer. Authentication and model selection remain in each provider's own tools.
 
-Project configuration and the ownership manifest are independently versioned contracts. Configuration reads never migrate files implicitly; supported schemas, provider extension boundaries, validation behavior, and explicit backup-backed migration are documented in [configuration contracts](configuration.md). Source-pack metadata and workflow state use separate future contracts rather than adding unrelated state to project configuration.
+Project configuration, the ownership manifest, and workflow checkpoints are independently versioned contracts. Configuration reads never migrate files implicitly; supported schemas, provider extension boundaries, validation behavior, and explicit backup-backed migration are documented in [configuration contracts](configuration.md). Workflow state is additive and records operation IDs, revisions, approval digests, phase, repair count, policy/prompt versions, and pending actions alongside existing task state.
 
 ## Skill synchronization
 
@@ -41,15 +41,21 @@ Selecting a provider controls where Latchkit installs files. It does not isolate
 
 ## Provider contracts and lifecycle bridge
 
-`src/providers/registry.js` owns the provider registry; `src/providers/contracts.js` validates versioned, serializable provider metadata, with published JSON schemas in `schemas/`. The legacy `PROVIDERS` exports remain available through `src/catalog.js` and `src/core.js` for existing CLI and UI consumers. A contract records capabilities and verification independently: installed, authenticated, configured, and end-to-end verified are separate facts. Capabilities include portable skills, invocation, individual hooks, blocking/advisory decisions, compaction, resume, cancellation, and usage. Every entry carries state, reason, version range, and evidence URL, so consumers need no vendor-specific field names.
+`src/providers/registry.ts` owns the provider registry; `src/providers/contracts.ts` validates versioned, serializable provider metadata, with published JSON schemas in `schemas/`. The legacy `PROVIDERS` exports remain available through `src/catalog.ts` and `src/core.ts` for existing CLI and UI consumers. A contract records capabilities and verification independently: installed, authenticated, configured, and end-to-end verified are separate facts. Capabilities include portable skills, invocation, individual hooks, blocking/advisory decisions, compaction, resume, cancellation, and usage. Every entry carries state, reason, version range, and evidence URL, so consumers need no vendor-specific field names.
 
-An adapter, when one is implemented, must supply operations for inspection, installation planning, skill/rule export planning, invocation and resume planning, lifecycle input/output translation, and optional usage planning. Command plans contain an executable and argument array only; constructing or validating a plan never executes it. Provider contracts do not change approval policy, grant trust, read credentials, or manage account login.
+Each adapter supplies operations for inspection, installation planning, skill/rule export planning, invocation and resume planning, lifecycle input/output translation, and optional usage planning. Command plans contain an executable and argument array only; constructing or validating a plan never executes it. Authorized session execution is a separate bounded step. Provider contracts do not change approval policy, grant trust, read credentials, or manage account login.
 
-`src/runtime/process-runner.js` is the bounded execution primitive for a future adapter. It accepts only a validated command plan and a provider contract with invocation evidence, and requires the caller to name the `host-local-authorized` execution profile. That profile is explicit evidence of local authorization; it does not inherit or emulate a provider's sandbox, terminal, approval policy, or credentials. Unavailable profiles and unknown invocation capability refuse before spawning. Native commands use Node argument vectors; Windows `.cmd`/`.bat` shims are launched only through a fixed `cmd.exe /d /v:off /s /c` strategy with each token escaped. The runner bounds decoded UTF-8 stdout/stderr, closes stdin, reports spawn/exit/timeout/cancellation outcomes, and terminates only its owned process tree.
+`src/runtime/process-runner.ts` is the bounded execution primitive for adapters. It accepts only a validated command plan and a provider contract with invocation evidence, and requires the caller to name the `host-local-authorized` execution profile. That profile is explicit evidence of local authorization; it does not inherit or emulate a provider's sandbox, terminal, approval policy, or credentials. Unavailable profiles and unknown invocation capability refuse before spawning. Native commands use Node argument vectors; Windows `.cmd`/`.bat` shims are launched only through a fixed `cmd.exe /d /v:off /s /c` strategy with each token escaped. The runner enforces decoded UTF-8 stdout/stderr caps, closes stdin, reports spawn/exit/timeout/cancellation outcomes, and terminates only its owned process tree.
 
 Lifecycle adapters translate to a normalized envelope with a schema version; provider version and runtime; project, task, and session correlation; event ID; timestamp; event kind; bounded object payload; and declared decision modes. `turn-completed`, `session-terminated`, `interrupted`, and `verified-task-completed` are distinct events. The last is emitted only after a task owner has independently verified completion; it is not inferred from a turn ending.
 
-The current bridge is an in-process, injectable dispatcher rather than a running hook service. Its future adapter entrypoint is: provider input → validated envelope → task lookup and authorization → handler → provider response translation. The future quality-gates component owns a concrete handler and any hook command/service transport; provider end-to-end work owns proving the joined path. With no adapter or service, hooks do not run when the console is closed (or open). The dispatcher deduplicates event IDs, reports a timestamp older than an accepted event in the same provider/project/task/session stream as out-of-order, returns explicit missing-task and unauthorized results, and makes handler failure and timeout advisory. Malformed envelopes are rejected before lookup; no one of these outcomes silently passes a gate.
+The lifecycle bridge is an in-process, injectable dispatcher used by the packaged provider hook handlers and adapter paths; it is not a background daemon. Its entrypoint is: provider input → validated envelope → task lookup and authorization → handler → provider response translation. Hook commands bind to the immutable installation version that produced them, while direct provider sessions run only under explicit host-local authorization. The dispatcher deduplicates event IDs, reports a timestamp older than an accepted event in the same provider/project/task/session stream as out-of-order, returns explicit missing-task and unauthorized results, and makes handler failure and timeout advisory. Malformed envelopes are rejected before lookup; no one of these outcomes silently passes a gate.
+
+## Delivery workflow and BAML boundary
+
+The workflow controller owns the durable sequence `requirements → plan approval → implementation → verification → independent review → handoff`. BAML 0.17.0 owns workflow policy, phase prompts, and typed next-action selection through the generated TypeScript SDK; the same generated runtime is included in the standalone bundle. The host validates every action, binds approval to the requirements, exact plan, acceptance checks, policy, and prompt digests, and executes effects through existing asynchronous services. Direct provider sessions and workflow actions use the same task ownership and explicit host-local authorization. Provider CLIs retain authentication, model execution, and permission boundaries; this layer does not add direct model API credentials.
+
+An implementation may be followed by at most three persisted repair attempts. Authentication failures, malformed provider responses, unavailable capabilities, unresolved requirements, and ambiguous interrupted actions pause the workflow for evidence or explicit authorization. Actions are journaled before effects and reconciled afterward. Cancellation fences pending actions and rejects late results. Direct sessions and workflows share task ownership, so neither path can silently take over an active task.
 
 ## Runtime boundary
 
@@ -96,6 +102,12 @@ Project memory is a separate, inspectable snapshot at `.latchkit/memory/state-v1
 `src/evaluations/` provides an offline-first, versioned behavioral harness. It copies original fixtures into an isolated temporary workspace, grades independently declared observable outcomes, redacts retained output, and removes the workspace after each run. The specification and result schema do not make a model's prose an oracle: required execution and task evidence must be present, and forbidden side effects fail plan-only scenarios. The fixture executor in ordinary CI validates harness behavior only. Optional Claude/Codex comparisons use published adapter plans with explicit host-local authorization and bounded runs; they do not authenticate, alter provider policy, or establish a passing result when a provider is unavailable.
 
 Future enforcement belongs in separate provider adapters with executable integration tests. One provider's hook names, payloads, and approval behavior cannot be assumed valid in another. The [roadmap](roadmap.md) tracks those components separately from portable skill distribution.
+
+The current 1.0 work is a candidate under development. Open issues #19, #24, #25, and #32
+(MCP management, team packs, scheduling, and usage accounting) remain post-1.0 scope. Antigravity
+resume and lifecycle support remains limited to the documented print-mode invocation; its
+non-interactive resume and stable hook contract are unknown (issue #76). Issue #86 is a separate
+optional enhanced specs/tools/workers umbrella and remains outside this release scope.
 
 The Cursor IDE adapter is the first editor-specific boundary. Its opt-in project hooks use native
 Cursor event names and a packaged, bounded Node handler; they do not create an editor session or a

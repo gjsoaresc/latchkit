@@ -11,8 +11,8 @@ import {
   planResume,
   translateLifecycleInput,
   translateLifecycleOutput,
-} from '../../src/providers/cursor-cli.js';
-import { PROVIDERS } from '../../src/providers/registry.js';
+} from '../../dist/src/providers/cursor-cli.js';
+import { PROVIDERS } from '../../dist/src/providers/registry.js';
 
 const fixture = fileURLToPath(
   new URL('../fixtures/providers/cursor-cli/stream-json.ndjson', import.meta.url),

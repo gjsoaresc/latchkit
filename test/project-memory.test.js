@@ -12,8 +12,8 @@ import {
   recoverProjectContext,
   searchProjectMemory,
   updateProjectMemory,
-} from '../src/project-memory/service.js';
-import { PROJECT_MEMORY_PATH } from '../src/project-memory/store.js';
+} from '../dist/src/project-memory/service.js';
+import { PROJECT_MEMORY_PATH } from '../dist/src/project-memory/store.js';
 
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'latchkit-memory-'));

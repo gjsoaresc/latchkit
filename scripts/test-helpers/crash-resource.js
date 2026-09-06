@@ -1,8 +1,8 @@
-import { withProjectLock } from '../../src/installer/lock.js';
+import { withProjectLock } from '../../dist/src/installer/lock.js';
 import {
   applyRegisteredTransaction,
   createResourceRegistry,
-} from '../../src/installer/transactions.js';
+} from '../../dist/src/installer/transactions.js';
 
 const [root, boundary] = process.argv.slice(2);
 const registry = createResourceRegistry([

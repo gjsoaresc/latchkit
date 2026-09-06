@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initProject } from '../src/core.js';
-import { exportSupportBundle, previewSupportBundle } from '../src/diagnostics/bundle.js';
-import { operationalError } from '../src/diagnostics/errors.js';
+import { initProject } from '../dist/src/core.js';
+import { exportSupportBundle, previewSupportBundle } from '../dist/src/diagnostics/bundle.js';
+import { operationalError } from '../dist/src/diagnostics/errors.js';
 import {
   appendEvent,
   clearDiagnostics,
   readEvents,
   MAX_LOG_BYTES,
   MAX_LOG_EVENTS,
-} from '../src/diagnostics/logger.js';
-import { redact, redactPath } from '../src/diagnostics/redact.js';
+} from '../dist/src/diagnostics/logger.js';
+import { redact, redactPath } from '../dist/src/diagnostics/redact.js';
 
 async function project(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'latchkit-diagnostics-'));
@@ -77,7 +77,7 @@ test('support bundle preview and export use an allowlist and deletion is indepen
   await clearDiagnostics(root);
   assert.deepEqual(await readEvents(root), []);
   assert.equal(
-    (await import('../src/core.js'))
+    (await import('../dist/src/core.js'))
       .readConfig(root)
       .then((config) => config.schemaVersion) instanceof Promise,
     true,

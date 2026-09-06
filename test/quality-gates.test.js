@@ -4,9 +4,9 @@ import * as fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createLifecycleDispatcher } from '../src/providers/contracts.js';
-import { createTask, resumeTask } from '../src/task-state/service.js';
-import { executeQualityGates, selectQualityGates } from '../src/quality-gates/service.js';
+import { createLifecycleDispatcher } from '../dist/src/providers/contracts.js';
+import { createTask, resumeTask } from '../dist/src/task-state/service.js';
+import { executeQualityGates, selectQualityGates } from '../dist/src/quality-gates/service.js';
 
 const provider = (blocking = 'supported') => ({
   schemaVersion: 1,

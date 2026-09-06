@@ -6,10 +6,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { initProject, readConfig } from '../src/core.js';
-import { startServer } from '../src/server.js';
-import { createTask, resumeTask } from '../src/task-state/service.js';
-import { createTaskWorkspace } from '../src/workspaces/git.js';
+import { initProject, readConfig } from '../dist/src/core.js';
+import { startServer } from '../dist/src/server.js';
+import { createTask, resumeTask } from '../dist/src/task-state/service.js';
+import { createTaskWorkspace } from '../dist/src/workspaces/git.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -47,6 +47,31 @@ test('console binds to loopback and all API data requires a session token', asyn
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
+});
+
+test('workflow endpoints require authentication, execution authorization, and current revisions', async (t) => {
+  const { origin, headers } = await fixture(t);
+  assert.equal((await fetch(`${origin}/api/workflows`)).status, 401);
+  const listed = await fetch(`${origin}/api/workflows`, { headers });
+  assert.deepEqual((await listed.json()).workflows, []);
+  const unauthorized = await fetch(`${origin}/api/workflows/run`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      providerId: 'codex',
+      prompt: 'Do not execute',
+      executionAuthorized: false,
+    }),
+  });
+  assert.equal(unauthorized.status, 400);
+  for (const action of ['approve', 'resume', 'cancel']) {
+    const missingRevision = await fetch(`${origin}/api/workflows/${action}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ taskId: 'task_missing' }),
+    });
+    assert.equal(missingRevision.status, 428);
+  }
 });
 
 test('authenticated API exposes a task-owned diff and revision-bound annotations', async (t) => {
@@ -242,7 +267,7 @@ test('configuration writes require the state revision and expose it as an ETag',
 test('sync rejects a preview made stale by an external CLI sync without applying it again', async (t) => {
   const { root, origin, headers } = await fixture(t);
   const preview = await (await fetch(`${origin}/api/plan`, { headers })).json();
-  await execFile(process.execPath, ['src/cli.js', 'sync', '--project', root], {
+  await execFile(process.execPath, ['dist/src/cli.js', 'sync', '--project', root], {
     cwd: process.cwd(),
   });
   const response = await fetch(`${origin}/api/sync`, {

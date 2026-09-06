@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { initProject, planSync, saveConfig, syncProject } from '../src/core.js';
+import { initProject, planSync, saveConfig, syncProject } from '../dist/src/core.js';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 

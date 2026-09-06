@@ -12,7 +12,7 @@ import {
   serializeNodeHookCommand,
   translateClaudeLifecycleInput,
   translateClaudeLifecycleOutput,
-} from '../../src/providers/claude.js';
+} from '../../dist/src/providers/claude.js';
 
 const fixture = (name) =>
   readFile(path.join('test', 'fixtures', 'providers', 'claude', name), 'utf8');

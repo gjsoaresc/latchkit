@@ -1,10 +1,10 @@
 # Compatibility
 
-Provider documentation checked September 6, 2026. These references establish supported formats and upstream platform claims. They do not prove that every Latchkit/provider/OS combination has passed a real-agent session. The editor-specific [Cursor IDE adapter](providers/cursor-ide.md) documents its narrower evidence and manual smoke test.
+Provider documentation checked September 6, 2026. These references establish supported formats and upstream platform claims. They do not prove that every Latchkit/provider/OS combination has passed a real-agent session. The 1.0 implementation is a candidate under development; exact standalone artifact qualification remains pending. The editor-specific [Cursor IDE adapter](providers/cursor-ide.md) documents its narrower evidence and manual smoke test.
 
 ## What the starter integrates
 
-Latchkit installs project-local `SKILL.md` files and stores provider/skill selections in `.latchkit/config.json`. It does not launch model sessions, install provider hooks, rewrite provider permissions, manage provider credentials, or automate Cursor's interface.
+Latchkit installs project-local `SKILL.md` files and stores provider/skill selections in `.latchkit/config.json`. It also provides bounded provider adapters, explicitly authorized direct sessions where the provider contract supports them, and packaged hook handlers for the documented hook surfaces. Provider authentication, model execution, permissions, and the Cursor interface remain provider-owned.
 
 | Provider        | Latchkit skill destination       | Official discovery evidence                                                                                                                                                                               |
 | --------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -16,7 +16,7 @@ Latchkit installs project-local `SKILL.md` files and stores provider/skill selec
 
 Antigravity CLI adapter notes
 
-Antigravity's official repository and codelab document `agy -p <prompt>` print mode and JSON/stream-JSON output flags. The adapter plans only that bounded invocation. Authentication uses the system keyring or Google Sign-In, and workspace trust/permission controls remain provider-owned. No project hook/settings mutation is attempted. Resume is intentionally unsupported because the official non-interactive resume argument and session identity contract are not documented; the interactive `/resume` picker is not automated.
+Antigravity's official repository and codelab document `agy -p <prompt>` print mode and JSON/stream-JSON output flags. The adapter plans only that bounded invocation. Authentication uses the system keyring or Google Sign-In, and workspace trust/permission controls remain provider-owned. No project hook/settings mutation is attempted. Resume is intentionally unsupported because the official non-interactive resume argument and session identity contract are not documented; the interactive `/resume` picker is not automated. This limited lifecycle capability remains documented for 1.0 (issue #76); it is not evidence of resumable workflow support.
 
 Latchkit writes the shared destination once when multiple selected providers use it. It does not also create `.cursor/skills` copies. Provider selection determines export destinations, not visibility permissions: compatible tools may discover installed skills even when they are not selected. Cursor may discover duplicate names when Claude and shared-root copies coexist. Inspect the provider's skill listing when resolving duplicates.
 
@@ -24,7 +24,7 @@ Pack previews report this possible cross-root discovery duplication before mutat
 
 ## Capability evidence matrix
 
-`src/providers/` exposes versioned, normalized provider metadata. As of the verification date above, every listed provider has evidence only for portable skill export. Detection on `PATH` means only that the executable was found; it does not establish login, project configuration, invocation, hook semantics, resumption, cancellation, compaction, usage, or an end-to-end session.
+`src/providers/` exposes versioned, normalized provider metadata. Portable skill export is available across the listed providers; adapter and session evidence is capability-specific and is recorded separately below. Detection on `PATH` means only that the executable was found; it does not establish login, project configuration, hook semantics, resumption, cancellation, compaction, usage, or an end-to-end session.
 
 | Capability                                          | Claude Code                                                                                                           | Codex                                                                                   | Antigravity CLI                                             | Cursor IDE / CLI                                                                                                    |
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -47,11 +47,11 @@ The process runner is an adapter primitive, not evidence that a listed provider 
 | Cursor IDE      | Windows 10+.                                                                                                                 | Linux packages/AppImage and macOS 12+. | [Quickstart](https://prod.cursor.com/docs/get-started/quickstart)                                                  |
 | Cursor CLI      | Upstream documents Windows support through WSL, not a native Windows installer.                                              | Linux and macOS installers.            | [Installation](https://docs.cursor.com/en/cli/installation)                                                        |
 
-Latchkit's own runtime minimum is Node.js 22. Each selected provider retains its own installation requirements. On WSL, install and run Node and the chosen CLI inside the distribution; a working native Windows executable does not demonstrate a working WSL installation.
+Latchkit's development runtime minimum is Node.js 22. The native support floor for standalone qualification is Windows 11 x64, Ubuntu 22.04/24.04 with glibc (including WSL), and macOS 14+ x64/arm64; qualified bundles carry private Node.js 24.20.0. These floors and targets do not claim that every candidate artifact has passed. Each selected provider retains its own installation requirements. On WSL, install and run Node and the chosen CLI inside the distribution; a working native Windows executable does not demonstrate a working WSL installation.
 
-## Project instruction exports and future hooks
+## Project instruction exports and lifecycle hooks
 
-Latchkit now exports deterministic project instructions through documented file discovery surfaces. This is filesystem serialization, not a concrete provider adapter or an end-to-end provider verification. Hooks remain future adapter work; matching hook names do not establish matching event semantics.
+Latchkit exports deterministic project instructions through documented file discovery surfaces and can install bounded handlers for provider hook surfaces with documented contracts. A generated hook is a provider-specific adapter boundary, not proof of an end-to-end provider session; matching hook names do not establish matching event semantics.
 
 | Provider        | Latchkit instruction export                                                                                                                                                                                                       | Hook surface                                                                                                                                                                                                 |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -67,13 +67,13 @@ IDE launcher nor `cursor-agent` substitutes for an editor Agent session.
 
 ## Verification policy
 
-The native CLI and local UI target Windows, Linux and macOS. The [cross-platform workflow](../.github/workflows/ci.yml) is the release gate: every Node 22/24 native OS cell runs `check`, the unit suite, `npm pack --dry-run`, and `npm run smoke:artifact` against a clean install of the produced tarball. The smoke records the runtime, artifact SHA-256, and verifies init, preview, sync, repeat sync, conflict handling, removal, CRLF and read-only user files, the configuration API, shutdown, and bundled UI/skill assets.
+The native CLI and local UI target Windows, Linux and macOS. The [cross-platform workflow](../.github/workflows/ci.yml) remains the candidate gate for typechecking, tests, emitted assets, and platform behavior. The 1.0 release gate will qualify the exact GitHub Release bundles, including their private Node runtime, generated BAML SDK, native dependencies, hooks, UI, upgrade, rollback, uninstall, spaces, Unicode, and WSL mounted-drive paths. Existing RC1 evidence remains historical evidence for the prior application and does not qualify this architecture change.
 
 Windows jobs require real junction and file-symlink creation. If a runner lacks those privileges, the required smoke fails with an explicit capability error; an unexplained skip is not release evidence. The smoke also exercises paths containing spaces and Unicode and a long-lived temporary installation outside the repository. Filesystem-specific guarantees remain bounded by the durability and link limitations documented in [architecture](architecture.md) and [recovery](recovery.md).
 
 WSL is a separate required workflow job, not inferred from an Ubuntu runner. It runs Linux Node inside an Ubuntu distribution, once in the WSL filesystem and once from a mounted Windows checkout, and records the WSL runtime plus the same artifact checksum/smoke result. Native Windows executable discovery must not be treated as WSL evidence. A missing distribution, Linux Node runtime, failed mounted-drive run, or failed smoke blocks the release gate.
 
-These checks verify Latchkit's distributable and filesystem/runtime behavior. They do not authenticate provider binaries or prove a real agent session; provider discovery and invocation still require separate credentialed evidence.
+These checks verify Latchkit's distributable and filesystem/runtime behavior. They do not authenticate provider binaries or prove a real agent session; provider discovery and invocation still require separate credentialed evidence. Issues #19, #24, #25, and #32 remain outside the 1.0 scope. Issue #86 is a separate umbrella for optional enhanced specs, tools, and workers and is not absorbed into this release.
 
 The maintained browser console suite runs API-backed Chromium, Firefox, and WebKit jobs on Ubuntu, plus a native Windows Chromium job. Local Firefox/WebKit availability depends on the runner; a browser launch failure is reported as a runner limitation rather than converted into a passing skip. Browser artifacts are disabled by default so screenshots and traces cannot capture session tokens or local project paths. CI explicitly captures and retains only the credential-free acceptance fixture screenshot; browser checks dynamically load Playwright and report missing packages or browser binaries as unsupported.
 

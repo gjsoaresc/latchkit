@@ -1,4 +1,4 @@
-import { checkpointTask } from '../../src/task-state/service.js';
+import { checkpointTask } from '../../dist/src/task-state/service.js';
 
 const [root, taskId, runId, expectedRevision, mutationId, requestedBoundary] =
   process.argv.slice(2);

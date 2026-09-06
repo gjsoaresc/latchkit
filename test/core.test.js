@@ -11,7 +11,7 @@ import {
   syncProject,
   removeProjectSkills,
   doctor,
-} from '../src/core.js';
+} from '../dist/src/core.js';
 
 const providerIds = ['claude', 'codex', 'antigravity', 'cursor', 'cursor-cli'];
 const skillIds = ['spec', 'fix', 'review', 'handoff'];

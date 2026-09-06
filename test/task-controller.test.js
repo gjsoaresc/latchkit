@@ -4,9 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createProviderAdapter } from '../src/providers/contracts.js';
-import { createTask } from '../src/task-state/service.js';
-import { createTaskController, readTaskSessions } from '../src/runtime/task-controller.js';
+import { createProviderAdapter } from '../dist/src/providers/contracts.js';
+import { createTask } from '../dist/src/task-state/service.js';
+import { createTaskController, readTaskSessions } from '../dist/src/runtime/task-controller.js';
 
 const evidence = (state = 'supported') => ({
   state,

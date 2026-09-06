@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { initProject, planSync } from '../src/core.js';
-import { loadBundledPack } from '../src/packs/index.js';
+import { initProject, planSync } from '../dist/src/core.js';
+import { loadBundledPack } from '../dist/src/packs/index.js';
 import { findSkillFiles, validateSkillTree } from '../scripts/validate-skills.js';
 
 const ids = ['requirements', 'spec', 'build', 'fix', 'review', 'handoff', 'setup'];

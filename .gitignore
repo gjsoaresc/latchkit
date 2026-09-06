@@ -1,7 +1,10 @@
 node_modules/
+dist/
 .latchkit/
 .agents/
 .claude/
+.baml/
+.latchkit-typecheck.log
 *.tgz
 release-artifacts/
 release-artifacts-*/

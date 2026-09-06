@@ -1,0 +1,10 @@
+[package]
+name = "latchkit"
+
+[generator.typescript]
+output_type = "typescript/node"
+naming_convention = "preserve-case"
+output_dir = "src"
+
+# scripts/baml.js enforces this exact toolchain using BAML_VERSION.
+# The 0.2.4 Windows wrapper does not implement `toolchain pin`.

@@ -1,0 +1,331 @@
+#!/usr/bin/env node
+import assert from 'node:assert/strict';
+import { execFile, spawn } from 'node:child_process';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { assertArtifact } from './artifact-smoke.js';
+import { verifyReleaseArtifacts } from './release-artifacts.js';
+
+const run = promisify(execFile);
+const args = process.argv.slice(2);
+const option = (name) => {
+  const index = args.indexOf(name);
+  return index < 0 ? undefined : args[index + 1];
+};
+
+async function extract(archive, destination, scratch) {
+  await mkdir(destination, { recursive: true });
+  if (archive.endsWith('.zip')) {
+    const script = path.join(scratch, 'extract.ps1');
+    await writeFile(
+      script,
+      'param($Archive,$Destination)\n$ErrorActionPreference="Stop"\nExpand-Archive -LiteralPath $Archive -DestinationPath $Destination\n',
+    );
+    await run(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-File', script, archive, destination],
+      { windowsHide: true, timeout: 120_000 },
+    );
+  } else await run('tar', ['-xzf', archive, '-C', destination], { timeout: 120_000 });
+}
+
+async function hook(node, file, hookArgs = []) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(node, [file, ...hookArgs], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Packaged hook did not exit.'));
+    }, 10_000);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`Packaged hook failed: ${stderr}`));
+      else {
+        try {
+          JSON.parse(stdout);
+          resolve();
+        } catch {
+          reject(new Error('Packaged hook returned invalid JSON.'));
+        }
+      }
+    });
+    child.stdin.end('{"session_id":"bundle-smoke","hook_event_name":"Stop"}\n');
+  });
+}
+
+async function stableHook(command, hookArgs = []) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, hookArgs, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('Stable hook did not exit.'));
+    }, 10_000);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`Stable hook failed: ${stderr}`));
+      else if (!stdout.includes('"eventName":"Stop"'))
+        reject(new Error('Stable hook did not preserve handler arguments or stdin.'));
+      else resolve();
+    });
+    child.stdin.end('{"session_id":"bundle-smoke","hook_event_name":"Stop"}\n');
+  });
+}
+
+async function main() {
+  const directory = path.resolve(option('--directory') ?? 'release-artifacts');
+  const manifests = await verifyReleaseArtifacts(directory);
+  const manifest = manifests.find((item) => item.target === `${process.platform}-${process.arch}`);
+  if (!manifest) throw new Error('No archive for this native host.');
+  if (
+    args.includes('--require-wsl') &&
+    !(
+      process.platform === 'linux' &&
+      (process.env.WSL_DISTRO_NAME || /microsoft/i.test(os.release()))
+    )
+  )
+    throw new Error('This cell must run in actual WSL.');
+  const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-native-smoke-'));
+  const originalEnv = { ...process.env };
+  try {
+    const bundle = path.join(scratch, 'extracted bundle é');
+    await extract(path.join(directory, manifest.archive), bundle, scratch);
+    const executable = path.join(
+      bundle,
+      'runtime',
+      process.platform === 'win32' ? 'node.exe' : 'node',
+    );
+    const app = path.join(bundle, 'app');
+    const entry = path.join(app, 'dist/src/cli.js');
+    const manager = path.join(app, 'dist/src/installation/manager.js');
+    const tools = path.join(scratch, 'system tools');
+    await mkdir(tools);
+    if (process.platform !== 'win32')
+      for (const tool of ['dirname', 'cat', 'uname']) {
+        const location = (
+          await run('/bin/sh', ['-c', 'command -v "$1"', 'sh', tool])
+        ).stdout.trim();
+        await cp(location, path.join(tools, tool));
+      }
+    process.env.PATH =
+      process.platform === 'win32'
+        ? `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0`
+        : tools;
+    for (const name of [
+      'NODE_PATH',
+      'NODE_OPTIONS',
+      'NAPI_RS_NATIVE_LIBRARY_PATH',
+      'NAPI_RS_FORCE_WASI',
+      'BAML_VERSION',
+      'LATCHKIT_BAML_BIN',
+    ])
+      delete process.env[name];
+    process.env.NAPI_RS_ENFORCE_VERSION_CHECK = '1';
+    process.env.HOME = path.join(scratch, 'isolated home');
+    process.env.USERPROFILE = process.env.HOME;
+    await mkdir(process.env.HOME);
+    for (const command of ['node', 'npm', 'baml'])
+      await assert.rejects(run(command, ['--version'], { windowsHide: true, timeout: 5000 }));
+    const nodeVersion = (
+      await run(executable, ['--version'], { windowsHide: true, timeout: 10_000 })
+    ).stdout.trim();
+    const qualificationOS =
+      process.platform === 'linux' ? await readFile('/etc/os-release', 'utf8') : os.version();
+    const version = await run(executable, [entry, '--version'], {
+      windowsHide: true,
+      timeout: 30_000,
+    });
+    assert.equal(version.stdout.trim(), manifest.version);
+    await run(
+      executable,
+      [
+        '--input-type=module',
+        '-e',
+        "import {policy_version_async} from './dist/src/baml_sdk/index.js'; if(await policy_version_async() !== 'latchkit-workflow-v1') process.exitCode=1;",
+      ],
+      { cwd: app, windowsHide: true, timeout: 30_000 },
+    );
+    await assertArtifact(path.join(scratch, 'project'), executable, entry, 'standalone');
+    if (option('--mounted-project'))
+      await assertArtifact(
+        path.resolve(option('--mounted-project')),
+        executable,
+        entry,
+        'WSL mounted drive',
+      );
+    for (const [file, hookArgs] of [
+      ['codex-handler.js', []],
+      ['claude-hook.js', ['--event', 'Stop']],
+      ['cursor-ide-hook.cjs', []],
+    ])
+      await hook(executable, path.join(app, 'dist/src/providers', file), hookArgs);
+    const installRoot = path.join(scratch, 'installed versions é');
+    const manage = async (request) =>
+      JSON.parse(
+        (
+          await run(
+            executable,
+            [
+              '--input-type=module',
+              '-e',
+              "import {pathToFileURL} from 'node:url'; const m=await import(pathToFileURL(process.argv[1])); console.log(JSON.stringify(await m.runInstallationManager(JSON.parse(process.argv[2]))));",
+              manager,
+              JSON.stringify({ root: installRoot, ...request }),
+            ],
+            { windowsHide: true, timeout: 120_000 },
+          )
+        ).stdout,
+      );
+    await manage({ command: 'install', bundle });
+    const active = await readFile(path.join(installRoot, 'current'), 'utf8');
+    const hookLauncher =
+      process.platform === 'win32'
+        ? path.join(installRoot, 'bin', 'latchkit-hook.ps1')
+        : path.join(installRoot, 'bin', 'latchkit-hook');
+    const stableHookArgs =
+      process.platform === 'win32'
+        ? [
+            '-NoProfile',
+            '-NonInteractive',
+            '-File',
+            hookLauncher,
+            '--version',
+            active.trim(),
+            '--handler',
+            'claude',
+            '--event',
+            'Stop',
+          ]
+        : ['--version', active.trim(), '--handler', 'claude', '--event', 'Stop'];
+    await stableHook(
+      process.platform === 'win32'
+        ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
+        : hookLauncher,
+      stableHookArgs,
+    );
+    await manage({ command: 'install', bundle });
+    assert.equal(await readFile(path.join(installRoot, 'current'), 'utf8'), active);
+    const launcher =
+      process.platform === 'win32'
+        ? path.join(installRoot, 'bin/latchkit.ps1')
+        : path.join(installRoot, 'bin/latchkit');
+    const launched =
+      process.platform === 'win32'
+        ? await run(
+            path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+            ['-NoProfile', '-NonInteractive', '-File', launcher, '--version'],
+            { windowsHide: true, timeout: 30_000 },
+          )
+        : await run(launcher, ['--version'], { timeout: 30_000 });
+    assert.equal(launched.stdout.trim(), manifest.version);
+    const corrupt = path.join(scratch, 'corrupt bundle');
+    await cp(bundle, corrupt, { recursive: true });
+    await writeFile(path.join(corrupt, 'app/dist/src/cli.js'), 'throw new Error("corrupt");\n');
+    await assert.rejects(manage({ command: 'upgrade', bundle: corrupt }));
+    assert.equal(await readFile(path.join(installRoot, 'current'), 'utf8'), active);
+    await manage({ command: 'rollback', version: manifest.version });
+    await stableHook(
+      process.platform === 'win32'
+        ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
+        : hookLauncher,
+      stableHookArgs,
+    );
+    await manage({ command: 'uninstall' });
+    await stableHook(
+      process.platform === 'win32'
+        ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
+        : hookLauncher,
+      stableHookArgs,
+    );
+    assert(
+      (await readdir(path.join(installRoot, 'versions'))).length > 0,
+      'Compatibility versions must survive uninstall until references are detached.',
+    );
+    if (process.platform === 'win32') {
+      const bootstrapRoot = path.join(scratch, 'bootstrap root é %');
+      const bootstrap = path.join(directory, 'install.ps1');
+      await run(
+        path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-File',
+          bootstrap,
+          '-Root',
+          bootstrapRoot,
+          '-Artifact',
+          path.join(directory, manifest.archive),
+          '-Checksum',
+          path.join(directory, `${manifest.archive}.sha256`),
+        ],
+        { windowsHide: true, timeout: 120_000 },
+      );
+      assert.equal(
+        (await readFile(path.join(bootstrapRoot, 'current'), 'utf8')).trim(),
+        `${manifest.version}-${manifest.target}`,
+      );
+    }
+    const evidence = {
+      schemaVersion: 1,
+      status: 'passed',
+      archive: manifest.archive,
+      sha256: manifest.sha256,
+      target: manifest.target,
+      node: nodeVersion,
+      qualificationOS,
+      runtime: args.includes('--require-wsl') ? 'WSL' : 'native',
+      systemToolchains: 'absent from PATH',
+      checks: [
+        'BAML async exit',
+        'CLI',
+        'UI/API',
+        'hooks',
+        'stable hook dispatch before/after rollback/uninstall',
+        'spaces/Unicode',
+        'installation',
+        'failed-upgrade preservation',
+        'rollback selection',
+        'uninstall retention',
+        'local archive bootstrap',
+      ],
+    };
+    await writeFile(
+      path.join(
+        directory,
+        `${manifest.archive}.${args.includes('--require-wsl') ? 'wsl' : os.release()}.evidence.json`,
+      ),
+      `${JSON.stringify(evidence, null, 2)}\n`,
+    );
+    console.log(JSON.stringify(evidence, null, 2));
+  } finally {
+    process.env = originalEnv;
+    if (!scratch.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`))
+      throw new Error('Unexpected smoke directory.');
+    await rm(scratch, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  }
+}
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

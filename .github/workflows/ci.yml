@@ -18,8 +18,15 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci --ignore-scripts
+      - name: Install pinned BAML (Windows)
+        if: runner.os == 'Windows'
+        run: ./scripts/setup-baml.ps1
+      - name: Install pinned BAML (POSIX)
+        if: runner.os != 'Windows'
+        run: sh scripts/setup-baml.sh
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+      - run: npm run build
       - run: npm run format:check
       - run: npm run lint
       - run: npm run check:skills
@@ -55,7 +62,7 @@ jobs:
         run: |
           $windowsRepo = '${{ github.workspace }}'.Replace('\', '/')
           $repo = (wsl wslpath -a $windowsRepo).Trim()
-          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd '$repo'; npm ci --ignore-scripts; node scripts/artifact-smoke.js --require-wsl --require-links --mounted-project '$repo/.wsl-mounted-smoke'; rm -rf '$repo/.wsl-mounted-smoke'"
+          wsl -d Ubuntu -- bash -lc "set -eu; export PATH=~/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; cd '$repo'; npm ci --ignore-scripts; npm run build; node scripts/artifact-smoke.js --require-wsl --require-links --mounted-project '$repo/.wsl-mounted-smoke'"
 
   browser:
     name: Browser console / ${{ matrix.browser }}
@@ -82,6 +89,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
+      - run: npm run build
       - name: Install browser dependencies (Linux)
         if: runner.os == 'Linux'
         run: npx playwright install-deps ${{ matrix.install }}

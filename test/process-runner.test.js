@@ -7,7 +7,7 @@ import {
   HOST_LOCAL_EXECUTION_PROFILE,
   redactLaunchMetadata,
   runProviderProcess,
-} from '../src/runtime/process-runner.js';
+} from '../dist/src/runtime/process-runner.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/processes/runner-fixture.js', import.meta.url));
 const provider = (state = 'supported') => ({
@@ -88,6 +88,18 @@ test('preserves split UTF-8 output and bounds simultaneous output', async () => 
     outputLimitBytes: 2_000,
   });
   assert.equal(flood.status, 'output-limit');
+  assert.equal(Buffer.byteLength(flood.stdout) + Buffer.byteLength(flood.stderr), 2_000);
+  assert.ok(flood.outputBytes > 2_000);
+
+  const splitAtLimit = await runProviderProcess({
+    ...authorized,
+    provider: provider(),
+    plan: plan('split'),
+    outputLimitBytes: 3,
+  });
+  assert.equal(splitAtLimit.status, 'output-limit');
+  assert.equal(splitAtLimit.stdout.includes('\uFFFD'), false);
+  assert.ok(Buffer.byteLength(splitAtLimit.stdout) + Buffer.byteLength(splitAtLimit.stderr) <= 3);
 });
 
 test('reports nonzero exit, timeout, cancellation, and closes stdin', async () => {

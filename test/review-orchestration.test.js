@@ -3,12 +3,22 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createReviewOrchestrator, validateReviewResult } from '../src/reviews/orchestrator.js';
+import {
+  createReviewOrchestrator,
+  validateReviewResult,
+} from '../dist/src/reviews/orchestrator.js';
 
-const adapter = () => ({
-  contract: { id: 'fixture', capabilities: { invocation: { state: 'supported' } } },
+const adapter = (providerId = 'codex') => ({
+  contract: { id: providerId, capabilities: { invocation: { state: 'supported' } } },
   operations: {
-    planInvocation: ({ cwd }) => ({ executable: process.execPath, args: ['--version'], cwd }),
+    planInvocation: ({ cwd }) => ({
+      executable: process.execPath,
+      args:
+        providerId === 'claude'
+          ? ['--version', '--permission-mode', 'plan']
+          : ['--version', '--sandbox', 'read-only'],
+      cwd,
+    }),
   },
 });
 
@@ -24,9 +34,9 @@ test('review results are strict, independent, and deduplicated', async (t) => {
   let peak = 0;
   const orchestrator = createReviewOrchestrator({
     root,
-    reviewerAdapters: new Map([['fixture', adapter()]]),
+    reviewerAdapters: new Map([['codex', adapter()]]),
     source: async () => ({ revision: 'abc', dirtyFingerprint: 'dirty-1' }),
-    workspace: async () => ({ capability: 'unavailable' }),
+    workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
     launch: async () => {
       active += 1;
       peak = Math.max(peak, active);
@@ -34,6 +44,7 @@ test('review results are strict, independent, and deduplicated', async (t) => {
       active -= 1;
       return {
         status: 'exited',
+        exitCode: 0,
         stdout: JSON.stringify({
           schemaVersion: 1,
           state: 'completed',
@@ -46,12 +57,13 @@ test('review results are strict, independent, and deduplicated', async (t) => {
   const result = await orchestrator.run({
     taskId: 'task_parent',
     reviewers: [
-      { providerId: 'fixture', prompt: 'inspect' },
-      { providerId: 'fixture', prompt: 'inspect' },
-      { providerId: 'fixture', prompt: 'inspect' },
+      { providerId: 'codex', prompt: 'inspect' },
+      { providerId: 'codex', prompt: 'inspect' },
+      { providerId: 'codex', prompt: 'inspect' },
     ],
     limits: { concurrency: 2, maxReviewers: 3 },
     executionAuthorized: true,
+    sandbox: 'read-only',
   });
   assert.ok(peak <= 2);
   assert.equal(result.independent, true);
@@ -91,14 +103,15 @@ test('real Codex JSONL and Claude JSON envelopes yield strict review results', a
   ]) {
     const result = await createReviewOrchestrator({
       root,
-      reviewerAdapters: new Map([[providerId, adapter()]]),
+      reviewerAdapters: new Map([[providerId, adapter(providerId)]]),
       source: async () => ({ revision: 'abc', dirtyFingerprint: 'dirty-1' }),
-      workspace: async () => ({ capability: 'unavailable' }),
-      launch: async () => ({ status: 'exited', stdout, stderr: '' }),
+      workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+      launch: async () => ({ status: 'exited', exitCode: 0, stdout, stderr: '' }),
     }).run({
       taskId: `task-${providerId}`,
       reviewers: [{ providerId }],
       executionAuthorized: true,
+      sandbox: 'read-only',
     });
     assert.equal(result.reviewers[0].state, 'completed');
     assert.deepEqual(result.reviewers[0].result, reviewResult);
@@ -109,15 +122,15 @@ test('malformed, unavailable, nested, and unauthorized reviews remain explicit',
   const root = await fixture(t);
   const base = {
     root,
-    workspace: async () => ({ capability: 'unavailable' }),
-    reviewerAdapters: new Map([['fixture', adapter()]]),
-    launch: async () => ({ status: 'exited', stdout: 'nope' }),
+    workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+    reviewerAdapters: new Map([['codex', adapter()]]),
+    launch: async () => ({ status: 'exited', exitCode: 0, stdout: 'nope' }),
   };
   await assert.rejects(
     () =>
       createReviewOrchestrator(base).run({
         taskId: 'task_parent',
-        reviewers: [{ providerId: 'fixture' }],
+        reviewers: [{ providerId: 'codex' }],
         executionAuthorized: false,
       }),
     { code: 'REVIEW_AUTHORIZATION_REQUIRED' },
@@ -126,16 +139,18 @@ test('malformed, unavailable, nested, and unauthorized reviews remain explicit',
     () =>
       createReviewOrchestrator(base).run({
         taskId: 'task_parent',
-        reviewers: [{ providerId: 'fixture' }],
+        reviewers: [{ providerId: 'codex' }],
         executionAuthorized: true,
+        sandbox: 'read-only',
         depth: 1,
       }),
     { code: 'REVIEW_NESTING_LIMIT' },
   );
   const result = await createReviewOrchestrator(base).run({
     taskId: 'task_parent',
-    reviewers: [{ providerId: 'fixture' }],
+    reviewers: [{ providerId: 'codex' }],
     executionAuthorized: true,
+    sandbox: 'read-only',
   });
   assert.equal(result.reviewers[0].state, 'failed');
   assert.equal(result.reviewers[0].error.code, 'REVIEW_RESULT_MALFORMED');
@@ -160,8 +175,8 @@ test('parent cancellation aborts owned reviewers and records partial results', a
   });
   const orchestrator = createReviewOrchestrator({
     root,
-    workspace: async () => ({ capability: 'unavailable' }),
-    reviewerAdapters: new Map([['fixture', adapter()]]),
+    workspace: async () => ({ path: root, snapshotDigest: 'fixture' }),
+    reviewerAdapters: new Map([['codex', adapter()]]),
     launch: ({ signal }) =>
       new Promise((resolve) => {
         launched();
@@ -173,8 +188,9 @@ test('parent cancellation aborts owned reviewers and records partial results', a
   });
   const run = orchestrator.run({
     taskId: 'task_parent',
-    reviewers: [{ providerId: 'fixture' }],
+    reviewers: [{ providerId: 'codex' }],
     executionAuthorized: true,
+    sandbox: 'read-only',
   });
   // Launch occurs only after the review record is durably saved. Waiting for
   // that boundary avoids a scheduler-dependent polling deadline on loaded CI.

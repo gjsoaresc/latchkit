@@ -1,46 +1,52 @@
 {
   "name": "latchkit",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "description": "Your agents. One workflow. Open-source skills and local configuration for coding agents.",
   "type": "module",
   "license": "MIT",
   "author": "Guilherme Jacob",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gjsoaresc/latchkit.git"
+    "url": "https://github.com/willahealm/latchkit.git"
   },
-  "bugs": "https://github.com/gjsoaresc/latchkit/issues",
-  "homepage": "https://github.com/gjsoaresc/latchkit#readme",
+  "bugs": "https://github.com/willahealm/latchkit/issues",
+  "homepage": "https://github.com/willahealm/latchkit#readme",
   "bin": {
-    "latchkit": "src/cli.js"
+    "latchkit": "dist/src/cli.js"
   },
   "engines": {
     "node": ">=22"
   },
   "files": [
-    "src/",
-    "web/",
-    "skills/",
-    "schemas/",
+    "dist/",
     "docs/",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "start": "node src/cli.js ui",
-    "test": "node --test test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
-    "test:browser": "playwright test",
-    "format": "prettier --write src web scripts test package.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
-    "format:check": "prettier --check src web scripts test package.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
+    "start": "npm run build && node dist/src/cli.js ui",
+    "build": "node scripts/build.js",
+    "build:clean": "node scripts/build.js --clean",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "baml:check": "node scripts/baml.js check",
+    "baml:test": "node scripts/baml.js test",
+    "baml:generate": "node scripts/baml.js generate",
+    "baml:check-generated": "node scripts/baml.js check-generated",
+    "test": "npm run build && node --test test/*.test.js test/providers/*.test.js test/providers/e2e/*.test.js",
+    "test:browser": "npm run build && playwright test",
+    "format": "prettier --write src web scripts test package.json tsconfig.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
+    "format:check": "prettier --check src web scripts test package.json tsconfig.json .github/workflows/*.yml .prettierrc.json eslint.config.js *.md skills/**/*.md",
     "lint": "eslint src web scripts test",
     "check:skills": "node scripts/validate-skills.js",
     "evaluate:skills": "node scripts/skill-evaluations.js",
-    "check": "npm run format:check && npm run lint && node scripts/check.js",
+    "check": "npm run format:check && npm run lint && npm run baml:check && npm run baml:test && npm run baml:check-generated && npm run typecheck && node scripts/check.js",
     "verify:providers": "node scripts/provider-e2e.js",
     "verify:lifecycle": "node scripts/live-lifecycle-evidence.js",
     "smoke:artifact": "node scripts/artifact-smoke.js",
-    "release:artifacts": "node scripts/release-artifacts.js",
-    "release:dry-run": "node scripts/release-artifacts.js --dry-run"
+    "release:artifacts": "npm run build && node scripts/release-artifacts.js",
+    "release:dry-run": "npm run build && node scripts/release-artifacts.js --dry-run",
+    "smoke:bundle": "node scripts/bundle-smoke.js",
+    "benchmark:baseline": "node scripts/benchmarks.js"
   },
   "keywords": [
     "agent-skills",
@@ -54,8 +60,14 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
+    "@types/node": "22.20.1",
     "eslint": "^10.10.0",
     "globals": "^17.12.0",
-    "prettier": "^3.9.6"
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.69.0"
+  },
+  "dependencies": {
+    "@boundaryml/baml-bridge": "0.17.0"
   }
 }
