@@ -16,8 +16,13 @@ try {
   if (Test-Path -LiteralPath $Artifact -PathType Leaf) { Copy-Item -LiteralPath $Artifact -Destination $archive } else { Invoke-WebRequest -Uri $Artifact -OutFile $archive }
   if (Test-Path -LiteralPath $Checksum -PathType Leaf) { Copy-Item -LiteralPath $Checksum -Destination $checksumFile } else { Invoke-WebRequest -Uri $Checksum -OutFile $checksumFile }
   $expected=(Get-Content -LiteralPath $checksumFile -Raw).Trim().Split()[0]
-  if ($expected -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw 'Archive SHA-256 verification failed.' }
-  $bundle=Join-Path $temporary 'bundle'; Expand-Archive -LiteralPath $archive -DestinationPath $bundle
+  # .NET hashing and extraction keep the bootstrap independent of PowerShell module autoload, which
+  # Windows PowerShell 5.1 cannot perform when it inherits a PowerShell 7 PSModulePath (for example
+  # when launched from pwsh or a CI runner); Get-FileHash and Expand-Archive live in script modules.
+  $sha=[System.Security.Cryptography.SHA256]::Create(); $stream=[IO.File]::OpenRead($archive)
+  try { $actual=([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-','').ToLowerInvariant() } finally { $stream.Dispose(); $sha.Dispose() }
+  if ($expected -notmatch '^[a-fA-F0-9]{64}$' -or $actual -ne $expected.ToLowerInvariant()) { throw 'Archive SHA-256 verification failed.' }
+  $bundle=Join-Path $temporary 'bundle'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $bundle)
   $node=Join-Path $bundle 'runtime/node.exe'; $entry=Join-Path $bundle 'app/dist/src/installation/entry.js'
   if (!(Test-Path -LiteralPath $node -PathType Leaf) -or !(Test-Path -LiteralPath $entry -PathType Leaf)) { throw 'Archive has an unsupported bundle layout.' }
   $arguments=@($entry,'install','--root',$Root,'--bundle',$bundle,'--target',$target); if ($Version -ne 'latest') { $arguments+=@('--version',$Version) }

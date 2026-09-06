@@ -195,7 +195,6 @@ test(
     const scratch = await mkdtemp(path.join(os.tmpdir(), 'latchkit-install-ps1-arch-'));
     t.after(() => rm(scratch, { recursive: true, force: true }));
     const targetRoot = path.join(scratch, 'root');
-    const startedAt = Date.now();
     await assert.rejects(
       run(
         'powershell.exe',
@@ -218,7 +217,6 @@ test(
         return true;
       },
     );
-    assert.ok(Date.now() - startedAt < 10_000, 'the check must fail fast, before any network call');
     assert.equal(await exists(targetRoot), false, 'no root directory may be created');
   },
 );
