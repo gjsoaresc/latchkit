@@ -1,37 +1,39 @@
 # Getting started
 
-This guide uses the released package and a disposable project. Latchkit is a local CLI and browser configuration console; it does not create a provider account, choose a model, or change provider permissions.
+This guide uses the Windows standalone candidate and a project on your machine. Latchkit is a local CLI and browser configuration console. Coding tools retain their own authentication and permissions.
 
 ## Requirements
 
-- Node.js 22 or newer (`node --version`).
+- Windows 11 x64 for the standalone candidate. The bundle includes private Node.js 24.20.0; Node.js and npm are not end-user prerequisites.
 - Git for Git projects and optional isolated-workspace commands.
 - One separately installed and authenticated provider: [Claude Code](providers/claude.md), [Codex](codex.md), [Antigravity CLI](https://antigravity.google/docs/cli/overview), [Cursor IDE](providers/cursor-ide.md), or [Cursor CLI](cursor-cli.md).
 
-Latchkit itself has no runtime package dependencies. Native Windows, Linux, and macOS are supported runtime targets. WSL is optional: install Node.js and the provider inside the WSL distribution when using WSL. A native Windows executable is not evidence that the WSL executable is installed.
+Source development requires Node.js 22 or newer and npm. Windows is the current release qualification target; Linux, macOS, WSL, and other architectures are deferred. An installed provider executable does not establish authentication or a verified session.
 
 ## Install from a release
 
-For a published stable release, install globally or invoke without a global installation:
+GitHub Releases is the planned distribution route. No stable release is published yet. To try a locally built candidate from this repository:
 
-```sh
-npm install --global latchkit
-latchkit --version
-# or: npx latchkit --version
+```powershell
+npm ci
+npm run release:artifacts
+./install.ps1 -Version 1.0.0 -Root "$env:USERPROFILE/.local/share/latchkit" -Artifact "$PWD/release-artifacts/latchkit-1.0.0-win32-x64.zip" -Checksum "$PWD/release-artifacts/latchkit-1.0.0-win32-x64.zip.sha256"
+$latchkit = "$env:USERPROFILE/.local/share/latchkit/bin/latchkit.ps1"
+& $latchkit --version
 ```
 
-The repository currently describes the alpha distribution; if the package is not available on the configured registry, use the [release archive procedure](releases.md) or the source checkout instructions in the [README](../README.md).
+The installer verifies the archive and installs a versioned user-local runtime without changing your PATH. Keep using the printed launcher path, or add its directory to PATH yourself. The explicit user-home root above also avoids AppData filesystem virtualization in packaged Windows hosts. The [release guide](releases.md) covers exact-version downloads after publication, upgrades, rollback, and qualification. Preparing or installing a candidate does not publish or qualify it.
 
 ## Initialize and sync a project
 
-Run these commands from PowerShell, a POSIX shell, or a shell inside WSL. Use an existing project path; Latchkit does not create a provider session.
+From PowerShell, use the launcher variable above and an existing project path. Quote comma-separated selections so PowerShell passes them as one argument. Initialization and synchronization do not launch a provider session.
 
-```sh
-latchkit init --project "path/to/project" --providers codex --skills requirements,spec,build,fix,review,handoff,setup
-latchkit doctor --project "path/to/project"
-latchkit config --project "path/to/project"
-latchkit sync --project "path/to/project" --dry-run
-latchkit sync --project "path/to/project"
+```powershell
+& $latchkit init --project "C:/path/to/project" --providers 'claude,codex' --skills 'requirements,spec,build,fix,review,handoff,setup'
+& $latchkit doctor --project "C:/path/to/project"
+& $latchkit config --project "C:/path/to/project"
+& $latchkit sync --project "C:/path/to/project" --dry-run
+& $latchkit sync --project "C:/path/to/project"
 ```
 
 The preview is the review boundary: it lists file actions, generated content, provenance, declared command arguments, and discovery warnings. Sync writes only registered, unchanged-or-owned resources. An edited managed file, a conflict, or a link/junction stops the operation; there is no force-overwrite flag.
@@ -40,8 +42,8 @@ Restart or reload the selected provider so it discovers the new skills. Exported
 
 ## Open the local console
 
-```sh
-latchkit ui --project "path/to/project"
+```powershell
+& $latchkit ui --project "C:/path/to/project"
 ```
 
 Open the printed loopback URL. The console edits project configuration, previews installation, and applies synchronization. It is not a hosted account service or terminal. Stop it with Ctrl+C.
@@ -50,12 +52,12 @@ Open the printed loopback URL. The console edits project configuration, previews
 
 The following is a credential-free check of Latchkit's filesystem behavior. It does not verify a live provider session:
 
-```sh
-node --version
-latchkit init --project "path/to/project" --providers codex --skills spec
-latchkit sync --project "path/to/project" --dry-run
-latchkit sync --project "path/to/project"
-latchkit remove --project "path/to/project"
+```powershell
+& $latchkit --version
+& $latchkit init --project "C:/path/to/disposable-project" --providers codex --skills spec
+& $latchkit sync --project "C:/path/to/disposable-project" --dry-run
+& $latchkit sync --project "C:/path/to/disposable-project"
+& $latchkit remove --project "C:/path/to/disposable-project"
 ```
 
 Confirm that the generated skill is removed while `.latchkit/config.json`, custom files, and notes remain. Cross-platform release smoke additionally checks the packaged artifact, repeat sync, conflicts, CRLF files, read-only user files, the API, and shutdown; it does not authenticate providers. See the [provider evidence matrix](verification/provider-e2e.md).
