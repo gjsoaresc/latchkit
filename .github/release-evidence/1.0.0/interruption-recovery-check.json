@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "kind": "interruption-recovery-check",
+  "observedAt": "2026-09-06T22:55:00.000Z",
+  "candidate": {
+    "version": "1.0.0",
+    "commit": "08dd962e25e34343e657b3ca9a36fc0efdd30e07",
+    "target": "win32-x64",
+    "archiveSha256": "a15711c188593b5b4df2e742a76debcb472f34c38e5c29ea8f3ae26f1b24f17b"
+  },
+  "purpose": "Manual black-box process-tree-kill interruption of install.ps1 against the exact candidate archive, on native Windows 11, targeting an isolated install root outside any repository or real Latchkit installation.",
+  "attempts": [
+    {
+      "target": "latchkit sync (7 skills, 2 providers, ~22 files) against an isolated project",
+      "method": "Start-Process the launcher, wait 1-15ms, taskkill /T /F the launched process",
+      "outcome": "The sync (private Node startup plus file writes) completed before the kill reached the process; no interruption was captured at this operation size. latchkit recover --dry-run / latchkit recover ran cleanly afterward (state: none) both times.",
+      "conclusion": "inconclusive for this specific operation; too fast to interrupt externally on this host"
+    },
+    {
+      "target": "install.ps1 fresh install (full bundle stage: private Node runtime, compiled app, node_modules, docs) into a new isolated root",
+      "method": "Start-Process install.ps1, wait 1500ms of an observed ~4.8s full run, taskkill /T /F the process tree (confirmed 3 processes terminated)",
+      "outcome": "The target root was left with no 'current' activation pointer, an empty versions/ list, and only an abandoned dot-prefixed '*.staging' directory alongside it. self inspect --install-root reported active: null, versions: [], matching a clean, non-broken pre-installation state -- not a partially activated one.",
+      "conclusion": "captured; confirmed atomic stage-then-activate behavior under a genuine external kill"
+    }
+  ],
+  "recovery": {
+    "action": "re-ran install.ps1 with the same arguments against the same interrupted root",
+    "result": "completed normally: active became 1.0.0-win32-x64, launcher reported version 1.0.0"
+  },
+  "status": "passed",
+  "limitations": [
+    "Only the installation-manager's staging path was exercised for a genuine mid-operation kill; project-level sync/remove interruption was attempted but completed too quickly on this host to catch externally.",
+    "Deterministic (non-timing-based) interruption/recovery fault-injection for project mutations, task-state persistence, and worktree cancellation is covered by the source regression suite (node --test), which passed in full during this qualification's npm test run -- see 'atomic termination recovery keeps the last checkpoint...', 'interrupted persistence never partially commits a record...', and 'cancellation records a recovery location and preserves staged, untracked, and ignored task work' in that run's output."
+  ]
+}
