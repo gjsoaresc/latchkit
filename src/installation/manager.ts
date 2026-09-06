@@ -562,7 +562,7 @@ export async function createStableHookLaunchers(
 async function promoteStagedVersion(root: string, staged: string, destination: string) {
   // A just-exited private Node process or a Windows scanner can briefly retain
   // a handle in the staged directory. Retry only these bounded sharing failures.
-  const delays = [50, 100, 200, 400, 400, 400];
+  const delays = [50, 100, 200, 400, 800, 1000, 1000, 1000, 1000, 1000];
   for (let attempt = 0; ; attempt += 1) {
     await rejectSymlinksWithin(root, staged);
     await rejectSymlinksWithin(root, destination);
