@@ -20,15 +20,21 @@ import { DEFAULT_WORKSPACE_SETTINGS } from './config/contracts.js';
 import {
   importMarkdownTask,
   inspectTask,
+  inspectTaskRecord,
+  listTaskRecords,
   listTasks,
   migrateLegacyPlan,
   migrateTaskState,
+  recordTaskRecord,
   registerEnhancedWorkflow,
   resolveCollisionSafePlanPath,
   resumeTask,
+  reviseTaskRecord,
   setVerificationMode,
+  transitionTaskRecord,
   verifyTask,
 } from './task-state/service.js';
+import type { RecordKind, RecordLinkInput, RecordProvenanceKind } from './task-state/service.js';
 import {
   addSpecDecisionNotes,
   approveSpecDecision,
@@ -119,6 +125,24 @@ function requiredOption(value: string | undefined, name: string): string {
   return value;
 }
 
+/** Reads an optional `--file` JSON object with a `links` array, shared by `task record-add` and
+ * `task record-revise`. Returns `undefined` when no file was given so callers can omit the field
+ * entirely rather than sending an explicit empty list. */
+async function readLinksFile(filePath: string | undefined): Promise<unknown> {
+  if (!filePath) return undefined;
+  const bytes = await readFile(path.resolve(filePath));
+  if (bytes.byteLength > 32 * 1024) throw new Error('Record link file exceeds 32 KiB.');
+  let document: unknown;
+  try {
+    document = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new Error('Record link file must be valid JSON.');
+  }
+  if (!document || typeof document !== 'object' || Array.isArray(document))
+    throw new Error('Record link file must be an object with a links array.');
+  return (document as { links?: unknown }).links;
+}
+
 let cliValues: { project?: string } = {};
 
 const usage = `Latchkit — Your agents. One workflow.
@@ -136,7 +160,9 @@ Usage: latchkit <command> [options]
   diagnostics Preview/export or clear local redacted diagnostics
   task       Start, inspect, import, resume, or cancel durable workflow state,
              or present/approve/note/defer/inspect the end-of-execution result
-             decision (approve the result, request changes, or review later)
+             decision (approve the result, request changes, or review later),
+             or record/revise/transition/list/inspect a decision/assumption/
+             observation/question knowledge record with explicit provenance
   spec       Register/inspect/migrate/verify an enhanced spec, preview a plan-path or
              migrate-plan a durable plan, or present/approve/note/pause/build the
              end-of-spec decision (approve and build, add notes, or keep for later)
@@ -184,9 +210,22 @@ Options:
   --id <id>           memory: stable memory identifier; also projects remove: registered project ID
   --text <text>       memory: concise memory text or search query; also spec decision-notes
                        and task result-approve/-notes: notes or acceptance text
-  --kind <kind>       memory add: decision, discovery, constraint, resolved-defect
+  --kind <kind>       memory add: decision, discovery, constraint, resolved-defect;
+                       also task record-add/-list: decision, assumption, observation, question
   --file <path>       memory import or acceptance verify: versioned JSON file; also task
-                       result-present: optional {artifactRefs, completedCriteria} JSON
+                       result-present: optional {artifactRefs, completedCriteria} JSON; also
+                       task record-add/-revise: optional {links: [...]} JSON
+  --record <id>       task record-revise/-transition/-inspect: stable record identifier
+  --record-revision <n> task record-revise/-transition: optimistic record revision
+  --provenance <kind> task record-add: direct-user, agent-inferred, imported, execution-observed
+  --reference <text>  task record-add: provenance reference; also schedule create: authorization
+                       reference
+  --status <status>   task record-transition: target kind-appropriate status; also task
+                       record-list: optional status filter
+  --supersedes <id>   task record-add: prior same-kind record this one explicitly supersedes
+  --authorization-id <id> task record-add/-transition: existing task authorization to reference
+  --limit <n>         task record-list: page size (default 50, max 200)
+  --cursor <id>       task record-list: resume listing after this record ID
   --summary <text>    spec decision-present and task result-present: concise summary
   --budget <n>        memory recover: maximum context characters
   --retention-days <n> usage enable/retain: bounded local retention (1-365 days)
@@ -198,7 +237,10 @@ Options:
   --side <side>       diff annotation: left or right
   --body <text>       diff annotation text
   --expected-revision <id>  diff annotate: revision returned by inspect
-  --evidence-id <id>  diff resolve: current task evidence ID
+  --evidence-id <id>  diff resolve: current task evidence ID; also task record-transition:
+                       current passing evidence required to mark an observation verified
+  --reason <text>     task cancel: cancellation reason; also task record-revise (optional)
+                       and task record-transition (required): reason for the change
   --review-provider <id> workflow: explicit independent reviewer (default: selected provider)
   --result-ref <text>  task result-present: link/path to the reviewable diff or result
   --result-digest <sha256> task result-present/-approve/-notes: exact reviewed-snapshot digest
@@ -208,8 +250,10 @@ Options:
   --plan-digest <sha256> workflow approve: exact plan digest from inspect
   --requirements-digest <sha256> workflow approve: exact requirements digest
   --checks-digest <sha256> workflow approve: exact acceptance-check digest
-  --authorization-scope <text> workflow approve: permitted changes
-  --authorization-reference <text> workflow approve: direct approval reference
+  --authorization-scope <text> workflow approve: permitted changes; also task record-add/
+                       -transition: grant a new authorization instead of --authorization-id
+  --authorization-reference <text> workflow approve: direct approval reference; also task
+                       record-add/-transition: reference for a newly granted authorization
   --resolution <decision> workflow resume: observed, abandon, or retry an interrupted action
   --action-id <id>    workflow resume: interrupted action being resolved
   --file <path>       workflow run: versioned acceptance checks
@@ -313,6 +357,14 @@ try {
       'tool-root': { type: 'string' },
       python: { type: 'string' },
       uv: { type: 'string' },
+      record: { type: 'string' },
+      'record-revision': { type: 'string' },
+      provenance: { type: 'string' },
+      status: { type: 'string' },
+      supersedes: { type: 'string' },
+      'authorization-id': { type: 'string' },
+      limit: { type: 'string' },
+      cursor: { type: 'string' },
     },
   });
   cliValues = values;
@@ -402,6 +454,17 @@ try {
         'remaining-gaps',
         'change-scope',
         'text',
+        'kind',
+        'record',
+        'record-revision',
+        'provenance',
+        'reference',
+        'status',
+        'supersedes',
+        'authorization-id',
+        'evidence-id',
+        'limit',
+        'cursor',
       ],
       spec: [
         'project',
@@ -725,6 +788,11 @@ try {
         'result-notes',
         'result-defer',
         'result-inspect',
+        'record-add',
+        'record-revise',
+        'record-transition',
+        'record-list',
+        'record-inspect',
       ];
       if (extra.length !== 1 || !taskActions.includes(extra[0] ?? '')) {
         throw new Error(`Usage: latchkit task <${taskActions.join('|')}> [options].`);
@@ -892,6 +960,116 @@ try {
             }),
           );
         } else print(await deferResultDecision(root, common));
+      } else if (action === 'record-add') {
+        if (expectedRevision === undefined)
+          throw new Error('task record-add requires --expected-revision.');
+        const links = await readLinksFile(values.file);
+        const hasNewAuthorization =
+          values['authorization-scope'] !== undefined ||
+          values['authorization-reference'] !== undefined;
+        print(
+          await recordTaskRecord(root, {
+            taskId: requiredOption(values.task, 'task'),
+            expectedRevision,
+            kind: requiredOption(values.kind, 'kind') as RecordKind,
+            text: requiredOption(values.text, 'text'),
+            provenance: {
+              kind: requiredOption(values.provenance, 'provenance') as RecordProvenanceKind,
+              reference: requiredOption(values.reference, 'reference'),
+            },
+            ...(links !== undefined ? { links: links as RecordLinkInput[] } : {}),
+            ...(values.supersedes ? { supersedes: values.supersedes } : {}),
+            ...(values['authorization-id'] ? { authorizationId: values['authorization-id'] } : {}),
+            ...(hasNewAuthorization
+              ? {
+                  authorization: {
+                    source: 'user',
+                    scope: requiredOption(values['authorization-scope'], 'authorization-scope'),
+                    reference: requiredOption(
+                      values['authorization-reference'],
+                      'authorization-reference',
+                    ),
+                    provenanceKind: 'explicit-cli' as const,
+                  },
+                }
+              : {}),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (action === 'record-revise') {
+        if (expectedRevision === undefined)
+          throw new Error('task record-revise requires --expected-revision.');
+        const recordRevision = Number(requiredOption(values['record-revision'], 'record-revision'));
+        if (!Number.isInteger(recordRevision) || recordRevision < 1)
+          throw new Error('--record-revision must be a positive integer.');
+        const links = await readLinksFile(values.file);
+        print(
+          await reviseTaskRecord(root, {
+            taskId: requiredOption(values.task, 'task'),
+            expectedRevision,
+            recordId: requiredOption(values.record, 'record'),
+            recordRevision,
+            ...(values.text !== undefined ? { text: values.text } : {}),
+            ...(links !== undefined ? { links: links as RecordLinkInput[] } : {}),
+            ...(values.reason !== undefined ? { reason: values.reason } : {}),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (action === 'record-transition') {
+        if (expectedRevision === undefined)
+          throw new Error('task record-transition requires --expected-revision.');
+        const recordRevision = Number(requiredOption(values['record-revision'], 'record-revision'));
+        if (!Number.isInteger(recordRevision) || recordRevision < 1)
+          throw new Error('--record-revision must be a positive integer.');
+        const hasNewAuthorization =
+          values['authorization-scope'] !== undefined ||
+          values['authorization-reference'] !== undefined;
+        print(
+          await transitionTaskRecord(root, {
+            taskId: requiredOption(values.task, 'task'),
+            expectedRevision,
+            recordId: requiredOption(values.record, 'record'),
+            recordRevision,
+            status: requiredOption(values.status, 'status'),
+            reason: requiredOption(values.reason, 'reason'),
+            ...(values['authorization-id'] ? { authorizationId: values['authorization-id'] } : {}),
+            ...(hasNewAuthorization
+              ? {
+                  authorization: {
+                    source: 'user',
+                    scope: requiredOption(values['authorization-scope'], 'authorization-scope'),
+                    reference: requiredOption(
+                      values['authorization-reference'],
+                      'authorization-reference',
+                    ),
+                    provenanceKind: 'explicit-cli' as const,
+                  },
+                }
+              : {}),
+            ...(values['evidence-id'] ? { evidenceId: values['evidence-id'] } : {}),
+            ...(values['mutation-id'] ? { mutationId: values['mutation-id'] } : {}),
+          }),
+        );
+      } else if (action === 'record-list') {
+        const limit = values.limit === undefined ? undefined : Number(values.limit);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1))
+          throw new Error('--limit must be a positive integer.');
+        print(
+          await listTaskRecords(root, {
+            taskId: requiredOption(values.task, 'task'),
+            ...(values.kind ? { kind: values.kind as RecordKind } : {}),
+            ...(values.status ? { status: values.status } : {}),
+            ...(limit !== undefined ? { limit } : {}),
+            ...(values.cursor ? { cursor: values.cursor } : {}),
+          }),
+        );
+      } else if (action === 'record-inspect') {
+        print(
+          await inspectTaskRecord(root, {
+            taskId: requiredOption(values.task, 'task'),
+            recordId: requiredOption(values.record, 'record'),
+          }),
+        );
       } else {
         const hasAuthorization =
           values['authorization-scope'] !== undefined ||

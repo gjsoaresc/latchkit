@@ -1,8 +1,10 @@
 # Task-state persistence
 
-Latchkit stores workflow state separately from configuration and installer recovery in `.latchkit/tasks/state-v1.json`. The stable filename may contain either the published [v1 schema](../schemas/task-state-v1.schema.json) or [v2 schema](../schemas/task-state-v2.schema.json); reads validate both and never migrate either. New stores use v2. The atomic-file and concurrency rationale is recorded in [ADR 0001](adr/0001-local-task-state.md).
+Latchkit stores workflow state separately from configuration and installer recovery in `.latchkit/tasks/state-v1.json`. The stable filename may contain any of the published [v1](../schemas/task-state-v1.schema.json), [v2](../schemas/task-state-v2.schema.json), [v3](../schemas/task-state-v3.schema.json), or [v4](../schemas/task-state-v4.schema.json) schemas; reads validate whichever version is present and never migrate implicitly. New stores use the current version. The atomic-file and concurrency rationale is recorded in [ADR 0001](adr/0001-local-task-state.md).
 
 Version 2 adds nullable, versioned [enhanced-workflow metadata](../schemas/enhanced-workflow-v1.schema.json) to every task. A null value preserves ordinary task behavior. Explicit registration records PRD and technical-plan hashes plus declared criterion/check mappings in the same locked task revision. It never interprets Markdown as an executable contract.
+
+Version 3 adds a persisted `verificationMode` (`fast` or `standard`) to every task; `latchkit task mode` and `setVerificationMode` change it explicitly, and resume never silently changes an existing task's mode. Version 4 adds the `records` array described in [Task records](#task-records) below.
 
 Durable specifications and technical plans default to a collision-safe, readable filename under `docs/plans/`. Registration and import continue to accept the legacy `.latchkit/notes/` location so existing artifacts remain valid; nothing migrates implicitly. `docs/plans/` is an ordinary tracked project path, unlike `.latchkit/notes/`, which the source fingerprint used for evidence currency explicitly excludes: editing a plan under `docs/plans/` therefore changes the working-tree source snapshot and can invalidate evidence bound to the prior snapshot under the existing revision/source-matching policy, while a `.latchkit/notes/` edit alone does not. Re-registering an enhanced workflow after either kind of edit still increments `enhancedWorkflow.revision` and recomputes the artifact hash.
 
@@ -17,6 +19,39 @@ Evidence is current only when its criterion revision and source snapshot match t
 An enrolled enhanced task must have at least one required criterion, and every required criterion must map to at least one declared check. Final verification requires current passing `enhanced-check:<check-id>` evidence for every mapping; one passing check cannot conceal a missing or failed sibling. Ordinary tasks, including tasks with no required criteria, retain the v1 verification behavior.
 
 `src/task-state/service.js` is the service boundary. In addition to the ordinary task operations, it exports `registerEnhancedWorkflow` and `migrateTaskState`. Mutations require an expected task revision except initial creation/import and explicit store migration. `resumeTask` reconciles the source tree and the recorded process; a missing process becomes interrupted and never completed. Integrations may inject a stronger platform process probe, but may not translate missing or unknown into success.
+
+## Task records
+
+Task-state schema version 4 adds a bounded `records` array to every task: discriminated `decision`, `assumption`, `observation`, and `question` records with a stable `record_<uuid>` ID, a per-record revision, kind-appropriate `status`, bounded `text` (4 KiB), declared `provenance`, up to 32 declared `links`, and a bounded `history` (40 entries) of every prior revision, status, text, reason, and (when applicable) the authorization that made the change. This is additive: an existing task with no records behaves exactly as before, and `records` defaults to `[]` on creation and on the explicit v3→v4 migration step of `migrateTaskState`. `src/task-state/records.ts` holds the pure shape (kinds, statuses, transition table, dependency-cycle detection, link reconciliation); `src/task-state/contracts.ts` validates every record on every read and write; `src/task-state/service.ts` implements the five operations below on top of the same `mutate()`/lock/idempotency machinery as every other task mutation — there is no second store or second lock.
+
+**Provenance** distinguishes `direct-user` (typed or dictated by the person), `agent-inferred` (an agent's inference from code or conversation), `imported` (text copied from another source), and `execution-observed` (something a command or check actually produced). Provenance is descriptive only: it never implies acceptance. Every new record — regardless of its provenance, including `direct-user` — starts in its kind's initial, non-authoritative status: `decision` starts `proposed`, `assumption` starts `tentative`, `observation` starts `unverified`, `question` starts `open`. Reaching an accepted state is always a separate, explicit transition.
+
+**Status transitions** are a fixed table per kind, not arbitrary strings:
+
+| Kind | Statuses | Terminal |
+| --- | --- | --- |
+| `decision` | `proposed → accepted → {retracted, superseded}`; `proposed → {retracted, superseded}` | `retracted`, `superseded` |
+| `assumption` | `tentative → {confirmed, contradicted, retracted, superseded}`; `confirmed → {contradicted, retracted, superseded}`; `contradicted → {retracted, superseded}` | `retracted`, `superseded` |
+| `observation` | `unverified ⇄ {verified, stale}`; any → `{retracted, superseded}` | `retracted`, `superseded` |
+| `question` | `open → {answered, withdrawn, superseded}`; `answered → {withdrawn, superseded}` | `withdrawn`, `superseded` |
+
+`decision.accepted`, `assumption.confirmed`, and `question.answered` are each kind's single **authoritative** status. Moving into or out of that status (acceptance, or reversing a prior acceptance) is an authority-bearing action: the caller must reference the task's existing direct-user authorization by ID (`authorizationId`) or grant a new one in the same call (`authorization`, following the same `source: 'user'` shape used everywhere else in this contract) — never both silently assumed. No parser, model response, memory import, source match, or new observation can reach that path; only an explicit `transitionTaskRecord` call (or a `recordTaskRecord` call that supersedes an already-accepted record) can. This is why acceptance is never implied by kind or provenance alone, and why a universal approval gate is unnecessary: a transition that stays within non-authoritative statuses (marking an assumption `contradicted`, a question `withdrawn`, an observation `stale`) needs no authorization at all. `observation` has no authoritative status; moving one to `verified` instead requires a linked `evidenceId` naming current, `passed` task evidence (`TASK_RECORD_EVIDENCE_REQUIRED` otherwise) — a label, exit code, or narrative is never sufficient.
+
+**Links** are a bounded, typed set (`record`, `criterion`, `evidence`, `memory`, or `source`), each carrying enough to detect staleness later: a `record` link pins a `recordId`/`recordRevision`, a `criterion` link pins `criterionId`/`criterionRevision`, an `evidence` link pins the immutable `evidenceId`, a `memory` link pins a project-memory `memoryId`/`memoryRevision` (see [project memory](../src/project-memory/service.ts); inspecting it never changes that memory's own authority or lifecycle), and a `source` link records a repository-relative path with either the SHA-256 digest observed at declaration time or an explicit `null` (declared unavailable, via `digestUnavailable: true`) — never a fabricated digest for a file that does not exist. Every link target must already exist and be at or before its current revision at declaration time (`TASK_RECORD_LINK_INVALID` otherwise); `record`-type links (and `supersedes`) form a dependency graph that is checked for cycles before every mutation (`TASK_RECORD_CYCLE`). Because every ID lookup is scoped to the current task's own `criteria`/`evidence`/`records` arrays, a link copied from a different task or project simply does not resolve.
+
+**Supersession** replaces a record without rewriting history: `recordTaskRecord` with `supersedes: <recordId>` creates a new same-kind record and, in the same mutation, marks the prior record `superseded` with `supersededBy` set to the new record's ID. Superseding a record that is currently in its kind's authoritative status requires the same authorization as any other authority-bearing transition (replacing an accepted decision is itself a new user choice); superseding a non-authoritative record does not. A record already `retracted` or `superseded` cannot be revised, transitioned, or superseded again. An authoritatively accepted record cannot be revised in place (`reviseTaskRecord` rejects it with `TASK_RECORD_TRANSITION_INVALID`) — acceptance can only be changed by an explicit reversal or supersession, never a silent text edit.
+
+**Restart and recovery** return the same IDs, statuses, and provenance: `records` is ordinary task state, so `resumeTask`/`inspectTask` reconcile it exactly like criteria and evidence. `inspectTaskRecord` additionally recomputes every declared link's freshness on read — `current`, `stale` (revision/digest moved on), `missing` (target no longer exists), or `unknown` (an explicitly declared-unavailable source digest) — without ever rewriting the stored record; a changed or deleted source is exposed, not silently repaired or treated as semantic proof of anything. Text that arrives as an `imported` or `agent-inferred` record is inert data: recording or listing it never executes it, and nothing in its content (an embedded "APPROVED", a fake authorization ID, or instructions to run a command) can move a record's status or grant authority — only an explicit, separately authorized `transitionTaskRecord`/`recordTaskRecord` call can.
+
+Operations, all through `src/task-state/service.ts` and reusing the existing expected-task-revision and `mutationId` idempotency semantics:
+
+- `recordTaskRecord(root, { taskId, expectedRevision, kind, text, provenance, links?, supersedes?, authorizationId?, authorization? })` — create.
+- `reviseTaskRecord(root, { taskId, expectedRevision, recordId, recordRevision, text?, links?, reason? })` — revise text and/or links of a non-terminal, non-authoritative record.
+- `transitionTaskRecord(root, { taskId, expectedRevision, recordId, recordRevision, status, reason, authorizationId?, authorization?, evidenceId? })` — resolve, adopt, contradict, or otherwise move a record along its kind's transition table.
+- `listTaskRecords(root, { taskId, kind?, status?, limit?, cursor? })` — read-only, paginated (`limit` 1–200, default 50; `cursor` is the last-seen record ID).
+- `inspectTaskRecord(root, { taskId, recordId })` — read-only, includes link reconciliation.
+
+The CLI exposes the same five operations under `latchkit task record-*` (see [CLI boundary](#cli-boundary)). `text`, `provenance.reference`, and transition `reason` are each bounded (4 KiB / 1 KiB / 2 KiB); `links` is bounded to 32 entries per record, `history` to 40 entries per record, and a task to 500 records total — each limit produces an explicit `TASK_RECORD_LIMIT_EXCEEDED`/`TASK_RECORD_TEXT_TOO_LARGE` rather than silent truncation, and `listTaskRecords` paginates rather than returning an unbounded array.
 
 ## Provider session controller
 
@@ -47,6 +82,20 @@ latchkit task result-notes --project "path/to/project" --task task_<uuid> --expe
   [--authorization-scope "src/** and test/**" --authorization-reference "maintainer approval"]
 latchkit task result-defer --project "path/to/project" --task task_<uuid> --expected-revision 2
 latchkit task result-inspect --project "path/to/project" --task task_<uuid>
+latchkit task record-add --project "path/to/project" --task task_<uuid> --expected-revision 3 \
+  --kind decision --text "Use SQLite for local state" \
+  --provenance direct-user --reference "user message 2026-09-06" \
+  [--file links.json] [--supersedes record_<uuid>] [--mutation-id event_<uuid>]
+latchkit task record-revise --project "path/to/project" --task task_<uuid> --expected-revision 4 \
+  --record record_<uuid> --record-revision 1 [--text "<revised text>"] [--file links.json] \
+  [--reason "clarify wording"]
+latchkit task record-transition --project "path/to/project" --task task_<uuid> --expected-revision 5 \
+  --record record_<uuid> --record-revision 1 --status accepted --reason "user confirmed in chat" \
+  [--authorization-id authorization_<uuid> | --authorization-scope "src/**" --authorization-reference "maintainer approval"] \
+  [--evidence-id evidence_<uuid>]
+latchkit task record-list --project "path/to/project" --task task_<uuid> \
+  [--kind decision|assumption|observation|question] [--status <status>] [--limit 50] [--cursor record_<uuid>]
+latchkit task record-inspect --project "path/to/project" --task task_<uuid> --record record_<uuid>
 latchkit spec migrate --project "path/to/project" --dry-run
 latchkit spec migrate --project "path/to/project"
 latchkit spec register --project "path/to/project" --task task_<uuid> --expected-revision 3 --file enhanced.json
